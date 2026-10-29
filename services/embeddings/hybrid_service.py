@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import threading
+import turn_outcomes
 import time
 import urllib.error
 from collections import OrderedDict
@@ -497,6 +498,25 @@ def _index_decision(parsed, end_offset):
     return body["decision"]
 
 
+def _complete_lines(path, start):
+    """Complete JSON lines from a byte offset, so a line still being written is left for the next run."""
+    lines = []
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        for raw in handle:
+            if not raw.endswith(b"\n"):
+                break
+            lines.append(raw.decode("utf-8", errors="replace"))
+    return lines
+
+
+def record_turn_outcomes(path, start):
+    """Send finished-turn outcomes to Thompson. Thompson outages delay recording; they do not fail ingest."""
+    retried, retry_failed = turn_outcomes.retry_pending()
+    accepted, pending = turn_outcomes.record_pending(turn_outcomes.outcomes_from_lines(_complete_lines(path, start)))
+    return {"accepted": accepted, "pending": pending, "retried": retried, "retry_failed": retry_failed}
+
+
 def ingest_session(transcript_path, start=0, known_first_ts=None):
     """Orchestrate one session's ingestion through the owning services. Idempotent by content ID."""
     real = _validate_transcript(transcript_path)
@@ -508,9 +528,14 @@ def ingest_session(transcript_path, start=0, known_first_ts=None):
     graph = _ingest_graph(parsed)
     vectors = _ingest_vectors(parsed)
     lexical = _ingest_lexical(parsed)
+    try:
+        outcomes = record_turn_outcomes(real, start)
+    except Exception as exc:  # outcome recording is secondary; the transcript is already indexed
+        outcomes = {"error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "session_id": parsed["session_id"], "project": parsed["project"],
             "graph": graph, "vector": vectors,
-            "lexical": lexical, "end_offset": parsed["end_offset"], "first_ts": parsed["first_ts"]}
+            "lexical": lexical, "outcomes": outcomes,
+            "end_offset": parsed["end_offset"], "first_ts": parsed["first_ts"]}
 
 
 _SEARCH_CACHE = OrderedDict()   # (normalized query, top_k) -> (stored_at, result)
