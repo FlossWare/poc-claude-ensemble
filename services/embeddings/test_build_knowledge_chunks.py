@@ -180,7 +180,6 @@ class IngestTests(KnowledgeIngestTestCase):
         url = "https://rfc.example/revised"
         self.add_document("v1", "rfc", url, body_for(PARAGRAPHS), fetched_at="2026-07-11T10:00:00")
         bk.run(["rfc"])
-        before = self.vector_count()
         revised = body_for(PARAGRAPHS[:3] + ["A new paragraph describing a revised rule for padding."])
         self.add_document("v2", "rfc", url, revised, fetched_at="2026-08-01T10:00:00")
         summary = bk.run(["rfc"])
