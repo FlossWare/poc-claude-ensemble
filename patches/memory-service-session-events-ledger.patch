@@ -1,0 +1,37 @@
+--- /home/sfloess/.FlossWare/backups/legacy-move-20261029-142754/releases/0.4/memory-service/memory_service.py	2026-10-29 13:10:41.472244435 -0400
++++ /home/sfloess/.FlossWare/poc-claude-ensemble/core/memory-service/memory_service.py	2026-10-29 14:42:30.896923475 -0400
+@@ -67,6 +67,12 @@
+ 
+ 
+ MEMORY_DIR = memory_dir()
++# Stores that are source-of-truth ledgers live under the shared ledger root, not the memory directory.
++LEDGER_ROOT = Path(os.path.expanduser(os.environ.get("ENSEMBLE_LEDGER_ROOT", "~/.FlossWare/ledger")))
++LEDGER_STORES = {
++    "session_events": (LEDGER_ROOT / "session-events" / "session-events.jsonl",
++                       {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}),
++}
+ SOCKET_PATH = socket_path(
+     "ENSEMBLE_MEMORY_SOCKET", str(runtime_dir() / "memory.sock")
+ )
+@@ -105,6 +111,8 @@
+     def _memory_path(self, name: str, suffix: str) -> Path:
+         """Build a validated memory path."""
+         validate_memory_name(name)
++        if name in LEDGER_STORES:
++            return LEDGER_STORES[name][0]
+         path = self.memory_dir / f"{name}{suffix}"
+         resolved_root = self.memory_dir.resolve()
+         resolved_path = path.resolve()
+@@ -177,7 +185,12 @@
+         payload_sha256 = hashlib.sha256(
+             json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+         ).hexdigest()
++        # Ledger envelope is added after the hash, so retries of an event hash the same way
++        # whether it was stored before or after the envelope existed.
++        envelope = LEDGER_STORES[name][1] if name in LEDGER_STORES else {}
++        record = {**envelope, **record}
+         path = self._memory_path(name, ".jsonl")
++        path.parent.mkdir(parents=True, exist_ok=True)
+ 
+         with self.lock:
+             if path.exists():
