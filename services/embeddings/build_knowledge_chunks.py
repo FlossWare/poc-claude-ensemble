@@ -19,7 +19,7 @@ import json
 import os
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
@@ -54,26 +54,55 @@ def post(url, payload):
 
 
 def revision_sequence(fetched_at):
-    """A later fetch of the same URL gets a larger sequence, so Knowledge and Index accept it as newer."""
-    try:
-        return max(1, int(datetime.fromisoformat(fetched_at).timestamp()))
-    except (TypeError, ValueError):
-        return 1
+    """Microseconds since the epoch, so a later fetch of the same URL is a larger sequence.
+
+    Naive timestamps are read as UTC, so the result does not depend on the local timezone.
+    A missing or invalid timestamp is an error: it must not become a sequence of 1.
+    """
+    if not isinstance(fetched_at, str) or not fetched_at:
+        raise ValueError("fetched_at is required to order revisions")
+    parsed = datetime.fromisoformat(fetched_at)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1_000_000)
+
+
+def ledger_rows():
+    """Yield parsed ledger rows. A malformed line is logged and skipped, not fatal."""
+    with open(LEDGER, encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                log(f"skipped malformed ledger line {number}")
+                continue
+            if isinstance(row, dict):
+                yield row
+            else:
+                log(f"skipped non-object ledger line {number}")
 
 
 def documents(sources):
     """Yield every ledger document of the selected sources whose raw record can be read."""
     wanted = set(sources)
-    with open(LEDGER, encoding="utf-8") as handle:
-        rows = [json.loads(line) for line in handle if line.strip()]
-    for row in rows:
+    for row in ledger_rows():
         if row.get("source") not in wanted:
+            continue
+        try:
+            revision_sequence(row.get("fetched_at"))
+        except ValueError:
+            log(f"skipped {row.get('url')}: fetched_at missing or invalid")
             continue
         try:
             with open(os.path.join(RAW, row["record"]), encoding="utf-8") as handle:
                 record = json.load(handle)
         except (OSError, ValueError, KeyError):
             log(f"skipped unreadable record for {row.get('url')}")
+            continue
+        if not isinstance(record, dict):
+            log(f"skipped non-object record for {row.get('url')}")
             continue
         content = record.get("content") or ""
         if not content.strip():
@@ -118,6 +147,8 @@ def existing(ids):
 def flush(batch):
     texts = [text for _, text, _ in batch]
     embedded = post(f"{EMBEDDING_URL}/embeddings", {"texts": texts, "mode": "document"})
+    if len(embedded["embeddings"]) != len(texts):
+        raise RuntimeError(f"embedding service returned {len(embedded['embeddings'])} vectors for {len(texts)} texts")
     post(f"{VECTOR_URL}/collections/{COLLECTION}/upsert", {
         "ids": [vid for vid, _, _ in batch], "embeddings": embedded["embeddings"],
         "documents": texts, "metadatas": [meta for _, _, meta in batch]})
@@ -146,23 +177,27 @@ def run(sources, limit=None):
     started = time.time()
     documents_seen = documents_accepted = chunks_stored = 0
     pending = []
-    for doc in documents(sources):
-        if limit is not None and documents_seen >= limit:
-            break
-        documents_seen += 1
-        if not store_knowledge(doc):
-            log(f"refused by Index: {doc['url']}")
-            continue
-        documents_accepted += 1
-        ingest(doc, pending)
-        while len(pending) >= EMBED_BATCH:
-            batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
-            chunks_stored += flush(batch)
-        if documents_seen % 50 == 0:
-            log(f"progress: {documents_seen} documents read, {chunks_stored} chunks stored, "
-                f"{time.time() - started:.0f}s")
-    if pending:
-        chunks_stored += flush(pending)
+    try:
+        for doc in documents(sources):
+            if limit is not None and documents_seen >= limit:
+                break
+            documents_seen += 1
+            if not store_knowledge(doc):
+                log(f"refused by Index: {doc['url']}")
+                continue
+            documents_accepted += 1
+            ingest(doc, pending)
+            while len(pending) >= EMBED_BATCH:
+                batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
+                chunks_stored += flush(batch)
+            if documents_seen % 50 == 0:
+                log(f"progress: {documents_seen} documents read, {chunks_stored} chunks stored, "
+                    f"{time.time() - started:.0f}s")
+    finally:
+        # Chunks of accepted revisions are kept even when the run stops early, so they are not redone.
+        if pending:
+            chunks_stored += flush(pending)
+            pending = []
     summary = {"documents": documents_seen, "accepted": documents_accepted, "chunks_stored": chunks_stored,
                "seconds": round(time.time() - started)}
     log(f"done: {json.dumps(summary)}")

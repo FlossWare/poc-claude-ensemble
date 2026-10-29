@@ -193,7 +193,7 @@ class IngestTests(KnowledgeIngestTestCase):
     def test_index_refusal_means_no_chunks_are_written(self):
         url = "https://rfc.example/refused"
         self.add_document("refused", "rfc", url, body_for(PARAGRAPHS), fetched_at="2026-07-11T10:00:00")
-        ix.record_revision(url, 9_999_999_999, "newer-elsewhere", PROFILES)
+        ix.record_revision(url, 9 * 10**18, "newer-elsewhere", PROFILES)
         summary = bk.run(["rfc"])
         self.assertEqual((summary["documents"], summary["accepted"], summary["chunks_stored"]), (1, 0, 0))
         self.assertEqual(self.vector_count(), 0)
@@ -213,12 +213,55 @@ class IngestTests(KnowledgeIngestTestCase):
 
 
 class RevisionSequenceTests(unittest.TestCase):
-    def test_sequence_follows_fetch_time_and_falls_back_to_one(self):
-        later = bk.revision_sequence("2026-08-01T10:00:00")
-        earlier = bk.revision_sequence("2026-07-01T10:00:00")
-        self.assertGreater(later, earlier)
-        self.assertEqual(bk.revision_sequence(None), 1)
-        self.assertEqual(bk.revision_sequence("not a date"), 1)
+    def test_later_fetch_is_a_larger_sequence(self):
+        self.assertGreater(bk.revision_sequence("2026-08-01T10:00:00"), bk.revision_sequence("2026-07-01T10:00:00"))
+
+    def test_sub_second_fetches_are_distinct(self):
+        self.assertGreater(bk.revision_sequence("2026-07-11T19:35:07.200000"),
+                           bk.revision_sequence("2026-07-11T19:35:07.100000"))
+
+    def test_naive_timestamp_does_not_depend_on_local_timezone(self):
+        self.assertEqual(bk.revision_sequence("2026-07-11T19:35:07"),
+                         bk.revision_sequence("2026-07-11T19:35:07+00:00"))
+
+    def test_missing_or_invalid_timestamp_is_an_error(self):
+        for value in (None, "", "not a date"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    bk.revision_sequence(value)
+
+
+class LedgerRobustnessTests(KnowledgeIngestTestCase):
+    def test_malformed_ledger_line_is_skipped_not_fatal(self):
+        self.add_document("ok", "rfc", "https://rfc.example/ok", body_for(PARAGRAPHS))
+        with open(self.ledger, "a", encoding="utf-8") as handle:
+            handle.write("{not json\n[1, 2]\n")
+        self.assertEqual(bk.run(["rfc"])["accepted"], 1)
+
+    def test_document_without_fetched_at_is_skipped(self):
+        os.makedirs(os.path.join(self.raw, "rfc"), exist_ok=True)
+        with open(os.path.join(self.raw, "rfc", "nofetch.json"), "w", encoding="utf-8") as handle:
+            json.dump({"title": "t", "content": body_for(PARAGRAPHS)}, handle)
+        with open(self.ledger, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"url": "https://rfc.example/nofetch", "source": "rfc",
+                                     "record": "rfc/nofetch.json"}) + "\n")
+        summary = bk.run(["rfc"])
+        self.assertEqual((summary["documents"], summary["accepted"]), (0, 0))
+
+    def test_embedding_count_mismatch_is_refused_before_upsert(self):
+        batch = [("id1", "text one", {"kind": "knowledge_chunk"}), ("id2", "text two", {"kind": "knowledge_chunk"})]
+        real_post = bk.post
+        def short_post(url, payload):
+            if url.endswith("/embeddings"):
+                return {"ok": True, "embeddings": [[0.0] * 768]}
+            return real_post(url, payload)
+        bk.post = short_post
+        try:
+            with self.assertRaises(RuntimeError):
+                bk.flush(batch)
+        finally:
+            bk.post = real_post
+        self.assertEqual(self.vector_count(), 0)
 
 
 def urllib_quote(value):
