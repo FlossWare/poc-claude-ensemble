@@ -20,6 +20,7 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Intent (`services/intent`) | 8779 | Query intent with evidence |
 | Ranking (`services/ranking`) | 8780 | Explainable reciprocal rank fusion |
 | Knowledge (`services/knowledge`) | 8781 | Sourced records; revisions checked against Index |
+| Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
 
 ## Running the tests
 
