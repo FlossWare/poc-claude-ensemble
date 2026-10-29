@@ -98,9 +98,9 @@ class SignalTests(unittest.TestCase):
     def signals(self, *lines):
         return [(o["uuid"], o["success"], o["signal"]) for o in to.outcomes_from_lines(lines)]
 
-    def test_correction_in_the_next_message_is_a_failure(self):
+    def test_correction_is_recorded_but_does_not_count_against_the_model(self):
         self.assertEqual(self.signals(assistant("c1", "claude-opus-5"), human("That's wrong, the file is elsewhere")),
-                         [("c1", False, "correction")])
+                         [("c1", True, "correction")])
 
     def test_neutral_next_message_is_a_success(self):
         self.assertEqual(self.signals(assistant("n1", "claude-opus-5"), human("thanks, now add a test")),
@@ -119,7 +119,7 @@ class SignalTests(unittest.TestCase):
 
     def test_a_later_correction_does_not_change_an_earlier_turn(self):
         lines = [assistant("e1", "claude-opus-5"), human("thanks"), assistant("e2", "claude-opus-5"), human("no, that's wrong")]
-        self.assertEqual(self.signals(*lines), [("e1", True, "none"), ("e2", False, "correction")])
+        self.assertEqual(self.signals(*lines), [("e1", True, "none"), ("e2", True, "correction")])
 
 
 def response_record(uuid, msg_id, model="claude-opus-5", stop="end_turn", inp=10, out=5):
@@ -238,6 +238,29 @@ class IngestIntegrationTests(unittest.TestCase):
         result = self.hs.record_turn_outcomes(self.path, offset)
         self.assertEqual(result["accepted"], 1)
         self.assertEqual([r["model"] for r in self.fake.received], ["sonnet"])
+
+
+class RebuildTests(unittest.TestCase):
+    def test_rebuild_records_each_turn_once_across_files(self):
+        import rebuild_outcomes as ro
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "proj"))
+        with open(os.path.join(root, "proj", "a.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(response_record("r1", "msg_1") + "\n" + human("thanks") + "\n")
+        with open(os.path.join(root, "proj", "b.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(response_record("r2", "msg_1") + "\n" + response_record("r3", "msg_2") + "\n")
+        saved = (to.LEDGER, to.THOMPSON_URL)
+        to.LEDGER = os.path.join(tempfile.mkdtemp(), "o.jsonl")
+        fake = FakeThompson(accept=True)
+        to.THOMPSON_URL = fake.url
+        try:
+            totals = ro.rebuild(root)
+            self.assertEqual(totals["files"], 2)
+            self.assertEqual(totals["accepted"], 2)  # msg_1 once, msg_2 once
+            self.assertEqual(len(fake.received), 2)
+        finally:
+            fake.close()
+            to.LEDGER, to.THOMPSON_URL = saved
 
 
 if __name__ == "__main__":

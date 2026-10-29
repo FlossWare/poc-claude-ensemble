@@ -115,7 +115,9 @@ def _finish(outcome, later_signal):
     else:
         signal = "none"
     result = {k: v for k, v in outcome.items() if k not in ("tool_error", "interrupted", "next_message")}
-    result["success"] = signal not in ("tool_error", "interrupted", "correction")
+    # Only objective failures count against a model. A correction is recorded in `signal` for later
+    # evaluation, because keyword detection of user pushback is not accurate enough to score models.
+    result["success"] = signal not in ("tool_error", "interrupted")
     result["signal"] = signal
     return result
 
