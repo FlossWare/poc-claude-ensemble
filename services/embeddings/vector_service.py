@@ -11,6 +11,7 @@ Endpoints
   POST /collections/{name}/existing          {"ids": [...]} -> ids already stored
   POST /collections/{name}/upsert            {"ids", "embeddings", "documents", "metadatas"}
   POST /collections/{name}/query             {"embedding": [...], "top_k": n} -> exact nearest
+  POST /collections/{name}/delete-superseded {"url", "keep_sha256"} -> removes other revisions of a source
 """
 
 import json
@@ -147,6 +148,9 @@ class VectorHandler(BaseHTTPRequestHandler):
                 if action == "metadata":
                     self._metadata(name, body)
                     return
+                if action == "delete-superseded":
+                    self._delete_superseded(name, body)
+                    return
                 if action == "query":
                     self._query(name, body)
                     return
@@ -202,6 +206,22 @@ class VectorHandler(BaseHTTPRequestHandler):
                         if row is not None:
                             entry["metadatas"][row] = dict(metadata)
         self._send(200, {"ok": True, "updated": len(keep)})
+
+    def _delete_superseded(self, name, body):
+        """Remove vectors of other revisions of one source. Used when a document's content changes."""
+        url, keep = body.get("url"), body.get("keep_sha256")
+        if not isinstance(url, str) or not url or len(url) > 2048:
+            raise ValueError("url must be a non-empty string of at most 2048 characters")
+        if not isinstance(keep, str) or len(keep) != 64 or any(c not in "0123456789abcdef" for c in keep):
+            raise ValueError("keep_sha256 must be a lowercase hex SHA-256")
+        with _lock:
+            col = collection(name)
+            stale = col.get(where={"$and": [{"url": {"$eq": url}}, {"content_sha256": {"$ne": keep}}]},
+                            include=[])["ids"]
+            if stale:
+                col.delete(ids=stale)
+                _cache.pop(name, None)   # the in-memory matrix is rebuilt from the store on next use
+        self._send(200, {"ok": True, "deleted": len(stale)})
 
     def _query(self, name, body):
         vector = body.get("embedding")

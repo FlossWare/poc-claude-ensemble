@@ -155,9 +155,16 @@ def flush(batch):
     return len(batch)
 
 
+def delete_superseded(url, content_sha):
+    """Remove vectors of older revisions of this document, so retrieval never returns stale text."""
+    return post(f"{VECTOR_URL}/collections/{COLLECTION}/delete-superseded",
+                {"url": url, "keep_sha256": content_sha})["deleted"]
+
+
 def ingest(doc, pending):
     """Chunk one stored document and queue chunks that are not yet vectors. Returns chunks queued."""
     content_sha = hashlib.sha256(doc["content"].encode("utf-8")).hexdigest()
+    delete_superseded(doc["url"], content_sha)
     chunks = chunk(doc)
     ids = [vector_id(c["chunk_id"], content_sha) for c in chunks]
     present = existing(ids) if ids else set()
