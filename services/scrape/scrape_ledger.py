@@ -7,7 +7,6 @@ Built from the scraped JSON records. Rebuilds are idempotent: an existing URL is
 import hashlib
 import json
 import os
-import sys
 import time
 
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
