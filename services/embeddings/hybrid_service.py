@@ -106,7 +106,7 @@ def fuse(ranked_lists):
     return [dict(records[k], score=round(scores[k], 6)) for k in order]
 
 
-PROMPT_LEDGER = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/shared/data/prompts/prompts.jsonl")
+PROMPT_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_PROMPT_LEDGER", "~/.FlossWare/ledger/prompts/prompts.jsonl"))
 MAX_PROMPT_BODY_BYTES = 262_144
 MAX_PROMPT_CHARS = 65_536
 _LEDGER_LOCK = threading.Lock()   # the duplicate check and the append must be one step
@@ -128,8 +128,9 @@ def store_prompt(session_id, prompt, timestamp, cwd):
             with open(PROMPT_LEDGER, encoding="utf-8") as handle:
                 already = any(json.loads(line).get("event_id") == event_id for line in handle if line.strip())
         if not already:
-            record = {"event_id": event_id, "session_id": session_id, "timestamp": timestamp,
-                      "cwd": cwd, "prompt": prompt}
+            record = {"schema_version": 1, "producer": "claude-code", "kind": "prompt",
+                  "event_id": event_id, "session_id": session_id, "timestamp": timestamp,
+                  "cwd": cwd, "prompt": prompt}
             fd = os.open(PROMPT_LEDGER, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -488,11 +489,12 @@ def _plug_in_chunking(parsed):
 
 def _index_decision(parsed, end_offset):
     """Ask Index whether this revision of the transcript may publish. Writers stop unless it may."""
-    return _ingest_call("index", f"{INDEX_SERVICE_URL}/revisions", {
+    body = _ingest_call("index", f"{INDEX_SERVICE_URL}/revisions", {
         "source_id": parsed["file"], "revision_sequence": max(1, end_offset),
         "revision_id": f"offset-{end_offset}",
         "profiles": {"chunking": "message-v1@1", "tokenization": "lexical-v1@1",
                      "embedding": "nomic-embed-text-v1.5@fp32", "vector": "transcript_text@1"}})
+    return body["decision"]
 
 
 def ingest_session(transcript_path, start=0, known_first_ts=None):

@@ -18,7 +18,7 @@ from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SERVICES = os.path.dirname(_HERE)
-for _name in ("ranking", "intent", "extraction"):
+for _name in ("ranking", "intent", "extraction", "index"):
     sys.path.insert(0, os.path.join(_SERVICES, _name))
 
 import hybrid_service as hs  # noqa: E402
@@ -261,6 +261,43 @@ class PromptLedgerTests(unittest.TestCase):
                 t.join(timeout=30)
         self.assertEqual(len(self.rows()), 1)
         self.assertEqual(sorted(r["status"] for r in results).count("stored"), 1)
+
+
+class IndexDecisionTests(unittest.TestCase):
+    """The orchestrator must read the decision string from Index's real response, not the whole body."""
+
+    @classmethod
+    def setUpClass(cls):
+        import index_service as ix
+        cls._saved_db = ix.DB_PATH
+        ix.DB_PATH = os.path.join(tempfile.mkdtemp(), "index.sqlite3")
+        cls.server = ix.create_server("127.0.0.1", 0)
+        port = serve(cls.server)
+        cls.saved_url = hs.INDEX_SERVICE_URL
+        hs.INDEX_SERVICE_URL = f"http://127.0.0.1:{port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        import index_service as ix
+        cls.server.shutdown()
+        cls.server.server_close()
+        hs.INDEX_SERVICE_URL = cls.saved_url
+        ix.DB_PATH = cls._saved_db
+
+    def test_first_revision_is_accepted_as_a_string(self):
+        parsed = {"file": "/projects/regression/s.jsonl"}
+        self.assertEqual(hs._index_decision(parsed, 100), "accepted")
+
+    def test_same_revision_again_is_duplicate(self):
+        parsed = {"file": "/projects/regression/dup.jsonl"}
+        hs._index_decision(parsed, 50)
+        self.assertEqual(hs._index_decision(parsed, 50), "duplicate")
+
+    def test_accepted_revision_is_not_reported_as_skipped(self):
+        parsed = {"file": "/projects/regression/accepted-skip.jsonl", "messages": []}
+        decision = hs._index_decision(parsed, 10)
+        self.assertIn(decision, ("accepted", "duplicate"))
+        self.assertIsInstance(decision, str)
 
 
 class IngestStateTests(unittest.TestCase):

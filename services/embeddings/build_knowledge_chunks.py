@@ -23,7 +23,7 @@ from datetime import datetime
 
 HOME = os.path.expanduser("~")
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
-LEDGER = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/shared/data/scrape/ledger.jsonl")
+LEDGER = os.path.join(HOME, ".FlossWare/ledger/scrape/fetches.jsonl")
 LOG = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/state/logs/embed-knowledge-chunks.log")
 EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
 VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
