@@ -1,38 +1,81 @@
 #!/usr/bin/env python3
 """Loopback REST lexical retrieval service backed by the SQLite FTS5 transcript index.
 
-Ranking is BM25 over Porter-stemmed tokens. Query terms are OR-combined.
+Text is analyzed by the Tokenization service (lexical-v1) on the way in and on the way out,
+so an index term and a query term always come from the same analyzer. Each analyzed term
+is stored in messages.analyzed and indexed by FTS5 with Porter stemming. Query terms are
+OR-combined and ranked by BM25.
 
-The service is the only writer to the transcript database through REST. build_index.py
-remains the bulk builder. POST /documents adds sessions and messages incrementally and
-never rewrites rows that already exist, so the richer rows from the bulk build (tool
-results, tool inputs, thinking) are never disturbed.
+The service is the only writer to the transcript database through REST. POST /documents adds
+sessions and messages incrementally and never rewrites rows that already exist. A document
+whose analysis fails is not written at all. Rows without an analyzed column are invisible
+to search until the migration in migrate_lexical_tokenization.py has filled them.
 
 Endpoints
   GET  /health
   POST /search     {"query": "...", "top_k": n} -> ranked candidates with source info
   POST /documents  {"session": {...}, "messages": [...]} -> incremental, idempotent insert
+
+Depends on the Tokenization service (ENSEMBLE_TOKENIZATION_URL). When it is unavailable,
+search and document writes return 503 rather than an unanalyzed result.
 """
 
 import hashlib
 import json
 import os
-import re
 import sqlite3
 import threading
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8772
 DB_PATH = os.environ.get("ENSEMBLE_LEXICAL_DB", os.path.expanduser(
-    "~/.FlossWare/claude-ensemble/shared/data/transcripts/transcripts.db"))
+    "~/.FlossWare/poc-claude-ensemble/shared/data/transcripts/transcripts.db"))
 MAX_BODY_BYTES = 65_536
 MAX_DOCUMENT_BODY_BYTES = 8 * 1_048_576
 MAX_QUERY_CHARS = 2_000
 MAX_TOP_K = 500
 MAX_MESSAGES_PER_DOCUMENT = 500
 MAX_MESSAGE_CHARS = 200_000
+TOKENIZATION_URL = os.environ.get("ENSEMBLE_TOKENIZATION_URL", "http://127.0.0.1:8776")
+TOKENIZE_PROFILE = "lexical-v1"
+TOKENIZE_TIMEOUT = 10
+# The FTS tokenizer keeps the Tokenization service's compound identifiers (paths, dotted names,
+# dashed names, UUIDs) as single tokens. Analyzed text is space-separated, so spaces still split terms.
+FTS_TOKENIZE = "porter unicode61 remove_diacritics 2 tokenchars '-._:/'"
 _WRITE_LOCK = threading.Lock()
+
+
+class AnalysisUnavailable(Exception):
+    """The Tokenization service could not analyze text. Nothing is written or searched."""
+
+
+def analyze(text):
+    """Return the lexical-v1 terms for text, in order. Whole identifiers and their parts both appear."""
+    request = urllib.request.Request(
+        f"{TOKENIZATION_URL}/tokenize",
+        data=json.dumps({"profile": TOKENIZE_PROFILE, "text": text}).encode("utf-8"),
+        method="POST", headers={"content-type": "application/json", "accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=TOKENIZE_TIMEOUT) as response:
+            body = json.loads(response.read())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise AnalysisUnavailable(f"tokenization: {exc}") from exc
+    if not isinstance(body, dict) or body.get("ok") is not True or not isinstance(body.get("tokens"), list):
+        raise AnalysisUnavailable("tokenization: unexpected response")
+    return [token["term"] for token in body["tokens"]]
+
+
+def match_expression(terms):
+    """Quote each distinct term so FTS5 treats it as one token, and OR the terms together."""
+    seen, quoted = set(), []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            quoted.append('"' + term.replace('"', '""') + '"')
+    return " OR ".join(quoted)
 
 
 def _connect_read():
@@ -44,10 +87,10 @@ def _connect_write():
 
 
 def search(query, top_k):
-    terms = re.findall(r"[^\W_]+", query, re.UNICODE)
+    terms = analyze(query)
     if not terms:
         return []
-    match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+    match = match_expression(terms)
     conn = _connect_read()
     try:
         rows = conn.execute(
@@ -78,8 +121,13 @@ def search(query, top_k):
 
 
 def ingest_document(session, messages):
-    """Add one session and its messages. Idempotent: an existing (file, uuid, kind, text) is skipped."""
+    """Add one session and its messages. Idempotent: an existing (file, uuid, kind, text) is skipped.
+
+    Analysis happens before any lock is taken or row is written, so a Tokenization failure
+    leaves the database untouched and the caller can retry the whole document.
+    """
     file_path = session["file"]
+    analyzed = [" ".join(analyze(message["text"])) for message in messages]
     inserted = skipped = 0
     with _WRITE_LOCK:
         conn = _connect_write()
@@ -92,7 +140,7 @@ def ingest_document(session, messages):
                      session.get("title"), session.get("first_ts"), session.get("last_ts"), file_path,
                      int(bool(session.get("is_subagent"))), session.get("bytes", 0)),
                 )
-                for message in messages:
+                for message, terms in zip(messages, analyzed):
                     exists = conn.execute(
                         "SELECT 1 FROM messages WHERE file = ? AND uuid = ? AND kind = ? AND text = ? LIMIT 1",
                         (file_path, message["uuid"], message.get("kind", "text"), message["text"]),
@@ -101,13 +149,13 @@ def ingest_document(session, messages):
                         skipped += 1
                         continue
                     cursor = conn.execute(
-                        "INSERT INTO messages (session_id, uuid, role, kind, ts, text, file)"
-                        " VALUES (?,?,?,?,?,?,?)",
+                        "INSERT INTO messages (session_id, uuid, role, kind, ts, text, file, analyzed)"
+                        " VALUES (?,?,?,?,?,?,?,?)",
                         (session["session_id"], message["uuid"], message["role"], message.get("kind", "text"),
-                         message.get("ts", ""), message["text"], file_path),
+                         message.get("ts", ""), message["text"], file_path, terms),
                     )
-                    conn.execute("INSERT INTO messages_fts (rowid, text) VALUES (?, ?)",
-                                 (cursor.lastrowid, message["text"]))
+                    conn.execute("INSERT INTO messages_fts (rowid, analyzed) VALUES (?, ?)",
+                                 (cursor.lastrowid, terms))
                     inserted += 1
         finally:
             conn.close()
@@ -190,7 +238,7 @@ class LexicalHandler(BaseHTTPRequestHandler):
                 self._send(200, ingest_document(session, messages))
             except ValueError as exc:
                 self._error(400, "invalid_request", str(exc))
-            except sqlite3.Error as exc:
+            except (sqlite3.Error, AnalysisUnavailable) as exc:
                 self._error(503, "service_unavailable", str(exc))
             return
         query, top_k = body.get("query"), body.get("top_k", 10)
@@ -205,7 +253,7 @@ class LexicalHandler(BaseHTTPRequestHandler):
             return
         try:
             self._send(200, {"ok": True, "results": search(query, top_k)})
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, AnalysisUnavailable) as exc:
             self._error(503, "service_unavailable", str(exc))
 
     def log_message(self, fmt, *args):

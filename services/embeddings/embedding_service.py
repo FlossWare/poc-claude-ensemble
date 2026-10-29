@@ -28,6 +28,7 @@ MODES = {"document", "query"}
 
 _embedder = None
 _load_error = None
+_MODEL_LOCK = threading.Lock()   # one inference at a time; ONNX sessions are not called concurrently here
 
 
 def _load():
@@ -104,10 +105,11 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
         if _embedder is None:
             self._error(503, "service_unavailable", f"model not loaded: {_load_error}")
             return
-        if mode == "query":
-            vectors = _embedder.embed_queries(texts)
-        else:
-            vectors = _embedder.embed_documents(texts)
+        with _MODEL_LOCK:
+            if mode == "query":
+                vectors = _embedder.embed_queries(texts)
+            else:
+                vectors = _embedder.embed_documents(texts)
         self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
                          "embeddings": vectors.tolist()})
 

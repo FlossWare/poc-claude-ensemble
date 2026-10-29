@@ -173,10 +173,11 @@ class VectorHandler(BaseHTTPRequestHandler):
         matrix = np.asarray(embeddings, dtype=np.float32)
         if matrix.ndim != 2 or matrix.shape[1] != DIMENSIONS or not np.isfinite(matrix).all():
             raise ValueError(f"embeddings must be finite vectors of {DIMENSIONS} dimensions")
-        if metadatas is None:
-            metadatas = [{} for _ in ids]
         if not isinstance(metadatas, list) or len(metadatas) != len(ids):
-            raise ValueError("metadatas must match ids in length")
+            raise ValueError("metadatas must be a list matching ids in length")
+        # ChromaDB rejects empty metadata objects, so every record must carry at least one attribute.
+        if not all(isinstance(m, dict) and m for m in metadatas):
+            raise ValueError("each record needs a non-empty metadata object")
         with _lock:
             collection(name).upsert(ids=ids, embeddings=matrix.tolist(), documents=documents, metadatas=metadatas)
             _apply_upsert(name, ids, documents, matrix, metadatas)

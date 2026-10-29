@@ -55,8 +55,8 @@ TRANSCRIPT_ROOTS = [os.path.expanduser(p) for p in os.environ.get(
 INGEST_EMBED_BATCH = 64     # matches the embedding service's per-request cap
 EMBED_CHARS = 4000          # the model reads at most 512 tokens; longer text is never embedded
 INGEST_TIMEOUT = 600
-INGEST_LOG = os.path.expanduser("~/.FlossWare/claude-ensemble-state/logs/ingest-sessions.log")
-INGEST_STATE = os.path.expanduser("~/.FlossWare/claude-ensemble-state/ingest-state.json")
+INGEST_LOG = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/state/logs/ingest-sessions.log")
+INGEST_STATE = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/state/ingest-state.json")
 FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
 FILE_KEYS = ("file_path", "notebook_path", "path")
 TOOL_TEXT_CHARS = 20000   # tool inputs, tool results, and thinking are clipped, as in the bulk index
@@ -106,53 +106,37 @@ def fuse(ranked_lists):
     return [dict(records[k], score=round(scores[k], 6)) for k in order]
 
 
-PROMPT_LEDGER = os.path.expanduser("~/.FlossWare/claude-ensemble/shared/data/prompts/prompts.jsonl")
+PROMPT_LEDGER = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/shared/data/prompts/prompts.jsonl")
 MAX_PROMPT_BODY_BYTES = 262_144
 MAX_PROMPT_CHARS = 65_536
-
-
-def _index_record(record):
-    """Embed one ledger record and upsert it into the vector store (both over REST)."""
-    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings",
-                     {"texts": [record["prompt"]], "mode": "document"})
-    cwd = record.get("cwd") or ""
-    _call("vector", f"{VECTOR_URL}/collections/{COLLECTION}/upsert", {
-        "ids": [record["event_id"]],
-        "embeddings": embedded["embeddings"],
-        "documents": [record["prompt"]],
-        "metadatas": [{"kind": "prompt", "role": "user", "session_id": record["session_id"],
-                       "project": os.path.basename(cwd.rstrip("/")) if cwd else "",
-                       "timestamp": record["timestamp"]}],
-    })
+_LEDGER_LOCK = threading.Lock()   # the duplicate check and the append must be one step
 
 
 def store_prompt(session_id, prompt, timestamp, cwd):
-    """Durably record a prompt, then index it in the vector store.
+    """Durably append a prompt to the ledger. Nothing is indexed here.
 
     The ledger is the source of truth. The event ID is derived from the session, the
-    timestamp, and the text, so a retried capture is recognised as a duplicate. The
-    lexical index is built from the transcript database, so a prompt is keyword-searchable
-    only after that index is rebuilt; vector search sees it immediately.
+    timestamp, and the text, so a retried capture is recognised as a duplicate. Prompts
+    become searchable when the session's transcript is ingested at turn end (Stop), so
+    the response reports neither vector nor lexical indexing.
     """
     event_id = hashlib.sha256(f"{session_id}|{timestamp}|{prompt}".encode("utf-8")).hexdigest()
     os.makedirs(os.path.dirname(PROMPT_LEDGER), exist_ok=True)
-    already = False
-    if os.path.exists(PROMPT_LEDGER):
-        with open(PROMPT_LEDGER, encoding="utf-8") as handle:
-            already = any(json.loads(line).get("event_id") == event_id for line in handle if line.strip())
-    indexed, index_error = False, None
-    if not already:
-        record = {"event_id": event_id, "session_id": session_id, "timestamp": timestamp,
-                  "cwd": cwd, "prompt": prompt}
-        fd = os.open(PROMPT_LEDGER, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        # Indexing happens from the transcript on Stop, so each prompt is written to the index once.
-        pass
+    with _LEDGER_LOCK:
+        already = False
+        if os.path.exists(PROMPT_LEDGER):
+            with open(PROMPT_LEDGER, encoding="utf-8") as handle:
+                already = any(json.loads(line).get("event_id") == event_id for line in handle if line.strip())
+        if not already:
+            record = {"event_id": event_id, "session_id": session_id, "timestamp": timestamp,
+                      "cwd": cwd, "prompt": prompt}
+            fd = os.open(PROMPT_LEDGER, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
     return {"ok": True, "event_id": event_id, "status": "duplicate" if already else "stored",
-            "vector_indexed": indexed, "index_error": index_error, "lexical_indexed": False}
+            "vector_indexed": False, "index_error": None, "lexical_indexed": False}
 
 
 FILE_QUERY = re.compile(r"(?:/[\w.\-]+)+|[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,7}\b")
@@ -442,6 +426,10 @@ def _run_ingest(real):
         known_first = entry.get("first_ts")
     try:
         result = ingest_session(real, offset, known_first)
+        if result.get("skipped"):
+            # Index refused this revision, so its content is not published and the offset must not move.
+            _log_ingest(dict(result, at=stamp, from_offset=offset))
+            return
         state[real] = {"offset": result["end_offset"], "first_ts": result["first_ts"]}
         os.makedirs(os.path.dirname(INGEST_STATE), exist_ok=True)
         tmp = INGEST_STATE + ".tmp"

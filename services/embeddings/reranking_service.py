@@ -12,6 +12,7 @@ Endpoints
 """
 
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 
@@ -26,6 +27,7 @@ MAX_QUERY_CHARS = 2_000
 
 _model = None
 _load_error = None
+_MODEL_LOCK = threading.Lock()   # the cross-encoder is called from one thread at a time
 
 
 def _load():
@@ -89,7 +91,8 @@ class RerankHandler(BaseHTTPRequestHandler):
         if _model is None:
             self._error(503, "service_unavailable", f"model not loaded: {_load_error}")
             return
-        scores = _model.predict([(query, document) for document in documents])
+        with _MODEL_LOCK:
+            scores = _model.predict([(query, document) for document in documents])
         self._send(200, {"ok": True, "model": MODEL_ID, "scores": [float(s) for s in scores]})
 
     def log_message(self, fmt, *args):

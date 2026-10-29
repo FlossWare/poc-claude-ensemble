@@ -17,11 +17,11 @@ import time
 import urllib.request
 
 HOME = os.path.expanduser("~")
-TRANSCRIPTS_DB = os.path.join(HOME, ".FlossWare/claude-ensemble/shared/data/transcripts/transcripts.db")
+TRANSCRIPTS_DB = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/shared/data/transcripts/transcripts.db")
 EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
 VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
 COLLECTION = "transcript_text"
-LOG = os.path.join(HOME, ".FlossWare/claude-ensemble-state/logs/embed-transcripts.log")
+LOG = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/state/logs/embed-transcripts.log")
 BATCH = 64
 EMBED_CHARS = 4000   # the model reads at most 512 tokens (about 2-3k chars), so longer text adds nothing
 CHUNK = 1024      # sort by length within chunks to limit padding

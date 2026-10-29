@@ -23,10 +23,16 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 
 ## Running the tests
 
-    cd services/chunking && python3 -m unittest -v test_chunking_service
+From the repository root, run the whole suite with pytest:
 
-Each service directory is self-contained. The Knowledge tests start a real Index server on an ephemeral port.
+    python3 -m pytest services -q
+
+Each service directory also runs on its own, for example `cd services/chunking && python3 -m unittest -v test_chunking_service`. The embeddings tests load the real nomic and cross-encoder models from `~/.FlossWare/models` and skip only when those files are absent. Tests that cross a service boundary start the real services in-process on ephemeral loopback ports.
 
 ## Status
 
-The services run from `shared/` in the working deployment and are copied here as they stand. Items not yet done: keyword analysis still uses SQLite's built-in analyzer rather than the Tokenization service, and sourced documents do not yet flow through Knowledge.
+The services run from `shared/` in the working deployment and are copied here as they stand.
+
+- Keyword analysis: index text and queries go through the Tokenization service (`lexical-v1`). Existing databases are upgraded with `services/embeddings/migrate_lexical_tokenization.py`, run with the lexical service stopped.
+- Sourced documents: `services/embeddings/build_knowledge_chunks.py` stores each document as a Knowledge record, chunks it through Chunking, and writes vectors to `knowledge_chunks`. Lexical indexing covers transcript sessions only.
+- Not yet built: Thompson outcome recording from transcripts, and worker/arbiter quality monitoring.
