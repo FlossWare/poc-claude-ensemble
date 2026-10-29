@@ -48,7 +48,7 @@ EXTRACTION_URL = os.environ.get("ENSEMBLE_EXTRACTION_URL", "http://127.0.0.1:877
 INTENT_URL = os.environ.get("ENSEMBLE_INTENT_URL", "http://127.0.0.1:8779")
 INDEX_SERVICE_URL = os.environ.get("ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777")
 CHUNKING_URL = os.environ.get("ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
-RERANK_ENABLED = os.environ.get("ENSEMBLE_RERANK_ENABLED", "1") == "1"
+RERANK_ENABLED = os.environ.get("ENSEMBLE_RERANK_ENABLED", "0") == "1"   # off until a labeled evaluation shows a benefit
 RERANK_TOP = 30          # cross-encoder scores only the top fused candidates
 RERANK_TIMEOUT = 5       # a slow reranker must not stall a prompt; fall back to fused order
 TRANSCRIPT_ROOTS = [os.path.expanduser(p) for p in os.environ.get(
