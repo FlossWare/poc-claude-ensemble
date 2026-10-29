@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-INDEX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "index")
+INDEX_DIR = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/shared/index")
 sys.path.insert(0, INDEX_DIR)
 import index_service  # noqa: E402
 import knowledge_service as ks  # noqa: E402

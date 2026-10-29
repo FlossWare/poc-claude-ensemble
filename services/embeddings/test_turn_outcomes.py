@@ -90,6 +90,70 @@ class DerivationTests(unittest.TestCase):
         self.assertEqual(len(list(to.outcomes_from_lines(["{bad", "[1]", assistant("ok", "claude-haiku-5-5")]))), 1)
 
 
+def human(text):
+    return json.dumps({"uuid": "h", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+
+
+class SignalTests(unittest.TestCase):
+    def signals(self, *lines):
+        return [(o["uuid"], o["success"], o["signal"]) for o in to.outcomes_from_lines(lines)]
+
+    def test_correction_in_the_next_message_is_a_failure(self):
+        self.assertEqual(self.signals(assistant("c1", "claude-opus-5"), human("That's wrong, the file is elsewhere")),
+                         [("c1", False, "correction")])
+
+    def test_neutral_next_message_is_a_success(self):
+        self.assertEqual(self.signals(assistant("n1", "claude-opus-5"), human("thanks, now add a test")),
+                         [("n1", True, "none")])
+
+    def test_interrupted_turn_is_a_failure(self):
+        self.assertEqual(self.signals(assistant("i1", "claude-opus-5"), human("[Request interrupted by user]")),
+                         [("i1", False, "interrupted")])
+
+    def test_turn_at_the_end_of_input_is_a_provisional_success(self):
+        self.assertEqual(self.signals(assistant("p1", "claude-opus-5")), [("p1", True, "provisional")])
+
+    def test_tool_error_is_a_failure_with_its_own_signal(self):
+        self.assertEqual(self.signals(user_tool_result(True), assistant("t1", "claude-haiku-5-5"), human("ok")),
+                         [("t1", False, "tool_error")])
+
+    def test_a_later_correction_does_not_change_an_earlier_turn(self):
+        lines = [assistant("e1", "claude-opus-5"), human("thanks"), assistant("e2", "claude-opus-5"), human("no, that's wrong")]
+        self.assertEqual(self.signals(*lines), [("e1", True, "none"), ("e2", False, "correction")])
+
+
+def response_record(uuid, msg_id, model="claude-opus-5", stop="end_turn", inp=10, out=5):
+    return json.dumps({"uuid": uuid, "timestamp": "2026-10-29T10:00:00Z", "message": {
+        "id": msg_id, "role": "assistant", "model": model, "stop_reason": stop,
+        "content": [{"type": "text", "text": "answer"}],
+        "usage": {"input_tokens": inp, "output_tokens": out}}})
+
+
+class DuplicateRecordTests(unittest.TestCase):
+    def test_one_response_written_as_several_records_is_one_outcome(self):
+        lines = [response_record("r1", "msg_A"), response_record("r2", "msg_A"), response_record("r3", "msg_A")]
+        self.assertEqual([o["key"] for o in to.outcomes_from_lines(lines)], ["msg_A"])
+
+    def test_distinct_responses_are_distinct_outcomes(self):
+        lines = [response_record("r1", "msg_A"), human("thanks"), response_record("r2", "msg_B")]
+        self.assertEqual([o["key"] for o in to.outcomes_from_lines(lines)], ["msg_A", "msg_B"])
+
+    def test_retry_across_batches_does_not_double_record(self):
+        dir_ = tempfile.mkdtemp()
+        saved = (to.LEDGER, to.THOMPSON_URL)
+        to.LEDGER = os.path.join(dir_, "o.jsonl")
+        fake = FakeThompson(accept=True)
+        to.THOMPSON_URL = fake.url
+        try:
+            to.record_pending(to.outcomes_from_lines([response_record("r1", "msg_X")]))
+            accepted, _ = to.record_pending(to.outcomes_from_lines([response_record("r2", "msg_X")]))
+            self.assertEqual(accepted, 0)
+            self.assertEqual(len(fake.received), 1)
+        finally:
+            fake.close()
+            to.LEDGER, to.THOMPSON_URL = saved
+
+
 class RecordingTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

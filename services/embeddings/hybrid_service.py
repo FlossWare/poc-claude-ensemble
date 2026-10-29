@@ -412,7 +412,7 @@ def _log_ingest(record):
         handle.write(json.dumps(record) + "\n")
 
 
-def _run_ingest(real):
+def _run_ingest(real, record_outcomes=True):
     """Background ingest. Resumes from the stored byte offset, so only new lines are processed."""
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
     size = os.stat(real).st_size
@@ -427,7 +427,7 @@ def _run_ingest(real):
     else:
         known_first = entry.get("first_ts")
     try:
-        result = ingest_session(real, offset, known_first)
+        result = ingest_session(real, offset, known_first, record_outcomes=record_outcomes)
         if result.get("skipped"):
             # Index refused this revision, so its content is not published and the offset must not move.
             _log_ingest(dict(result, at=stamp, from_offset=offset))
@@ -517,7 +517,7 @@ def record_turn_outcomes(path, start):
     return {"accepted": accepted, "pending": pending, "retried": retried, "retry_failed": retry_failed}
 
 
-def ingest_session(transcript_path, start=0, known_first_ts=None):
+def ingest_session(transcript_path, start=0, known_first_ts=None, record_outcomes=True):
     """Orchestrate one session's ingestion through the owning services. Idempotent by content ID."""
     real = _validate_transcript(transcript_path)
     parsed = _parse_transcript(real, start, known_first_ts)
@@ -528,10 +528,13 @@ def ingest_session(transcript_path, start=0, known_first_ts=None):
     graph = _ingest_graph(parsed)
     vectors = _ingest_vectors(parsed)
     lexical = _ingest_lexical(parsed)
-    try:
-        outcomes = record_turn_outcomes(real, start)
-    except Exception as exc:  # outcome recording is secondary; the transcript is already indexed
-        outcomes = {"error": f"{type(exc).__name__}: {exc}"}
+    if not record_outcomes:
+        outcomes = {"skipped": "record_outcomes is false"}
+    else:
+        try:
+            outcomes = record_turn_outcomes(real, start)
+        except Exception as exc:  # outcome recording is secondary; the transcript is already indexed
+            outcomes = {"error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "session_id": parsed["session_id"], "project": parsed["project"],
             "graph": graph, "vector": vectors,
             "lexical": lexical, "outcomes": outcomes,
@@ -637,7 +640,11 @@ class HybridHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._error(400, "invalid_request", str(exc))
                 return
-            threading.Thread(target=_run_ingest, args=(real,), name="session-ingest", daemon=True).start()
+            record_outcomes = body.get("record_outcomes", True)
+            if not isinstance(record_outcomes, bool):
+                self._error(400, "invalid_request", "record_outcomes must be true or false")
+                return
+            threading.Thread(target=_run_ingest, args=(real, record_outcomes), name="session-ingest", daemon=True).start()
             self._send(202, {"ok": True, "status": "accepted", "transcript": os.path.basename(real)})
             return
         query, top_k = body.get("query"), body.get("top_k", 10)

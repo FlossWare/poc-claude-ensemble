@@ -26,7 +26,7 @@ TASK_TYPE = "claude_code_turn"
 LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_OUTCOME_LEDGER",
                                            "~/.FlossWare/ledger/outcomes/outcomes.jsonl"))
 PRICING_PATH = os.path.expanduser(os.environ.get("ENSEMBLE_PRICING_PATH",
-                                                 "~/.FlossWare/poc-claude-ensemble/core/cost_tracking/pricing.py"))
+                                                 "~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py"))
 GATEWAY_ARMS = {
     "rits/zai-org/glm-5-3": "glm-5-3",
     "rits/deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
@@ -61,9 +61,76 @@ def pricing_model(model):
     return model.lower() if model.lower().startswith("rits/") else model
 
 
+CORRECTION_PHRASES = ("wrong", "not right", "isn't right", "not what i", "not what we", "that's not",
+                      "that is not", "doesn't work", "does not work", "didn't work", "did not work",
+                      "won't work", "wont work", "still broken", "still failing", "try again", "undo",
+                      "revert", "incorrect", "you missed", "you forgot", "mistake")
+CORRECTION_OPENERS = ("no ", "nope", "nah", "no,", "no.", "no!")
+INTERRUPT_MARKER = "[Request interrupted by user"
+
+
+def _human_text(message):
+    """Text typed by the user, or None for tool results and automated messages (system reminders, notifications)."""
+    content = message.get("content")
+    if isinstance(content, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return None
+        texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        content = " ".join(texts) if texts else None
+    if not isinstance(content, str) or not content.strip():
+        return None
+    if content.lstrip().startswith("<"):
+        return None
+    return content
+
+
+def _result_text(block):
+    content = block.get("content")
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return content if isinstance(content, str) else ""
+
+
+def _signal_from_human(text):
+    if INTERRUPT_MARKER in text:
+        return "interrupted"
+    lowered = text[:300].lower()
+    if lowered.startswith(CORRECTION_OPENERS) or lowered == "no":
+        return "correction"
+    if any(phrase in lowered for phrase in CORRECTION_PHRASES):
+        return "correction"
+    return None
+
+
+def _finish(outcome, later_signal):
+    """Decide success from the first failure signal seen. No failure signal means success."""
+    if outcome["tool_error"]:
+        signal = "tool_error"
+    elif outcome["interrupted"]:
+        signal = "interrupted"
+    elif later_signal:
+        signal = later_signal
+    elif outcome["next_message"] is None:
+        signal = "provisional"
+    else:
+        signal = "none"
+    result = {k: v for k, v in outcome.items() if k not in ("tool_error", "interrupted", "next_message")}
+    result["success"] = signal not in ("tool_error", "interrupted", "correction")
+    result["signal"] = signal
+    return result
+
+
 def outcomes_from_lines(lines):
-    """Yield one outcome per finished assistant turn, from transcript JSON lines in order."""
+    """Yield one outcome per finished assistant turn, from transcript JSON lines in order.
+
+    A turn is judged by the failure signals in it (tool errors, interruption) and by the user's next
+    message (a correction). A turn at the end of the input is judged without the next message and is
+    marked provisional.
+    """
+    pending = None
     tool_error = False
+    interrupted = False
+    seen = set()   # one API response is written as several records; each message id is one turn
     for line in lines:
         try:
             record = json.loads(line)
@@ -72,31 +139,55 @@ def outcomes_from_lines(lines):
         if not isinstance(record, dict):
             continue
         message = record.get("message") if isinstance(record.get("message"), dict) else {}
+        role = message.get("role")
         content = message.get("content")
-        if message.get("role") == "user" and isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
-                    tool_error = True
+        if role == "user":
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tool_error = tool_error or bool(block.get("is_error"))
+                        interrupted = interrupted or INTERRUPT_MARKER in _result_text(block)
+            text = _human_text(message)
+            if text is not None and pending is not None:
+                yield _finish(dict(pending, next_message=text), _signal_from_human(text))
+                pending = None
+            elif text is not None:
+                tool_error = interrupted = False
             continue
-        if message.get("role") != "assistant":
+        if role != "assistant":
             continue
         stop = message.get("stop_reason")
-        if stop != "end_turn":
-            if stop == "max_tokens":
-                tool_error = False
+        if stop == "max_tokens":
+            tool_error = interrupted = False
             continue
+        if stop != "end_turn":
+            continue
+        key = message.get("id") or record.get("uuid")
+        if not key:
+            continue
+        if pending is not None and pending["key"] == key:
+            continue   # another record of the same response
+        if key in seen:
+            continue
+        seen.add(key)
         arm = arm_for(message.get("model"))
         usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
-        success = not tool_error
-        tool_error = False
-        if arm is None or not record.get("uuid"):
+        if pending is not None:
+            yield _finish(pending, None)
+            pending = None
+        if arm is None:
+            tool_error = interrupted = False
             continue
-        yield {"uuid": record["uuid"], "model": message.get("model"), "arm": arm, "success": success,
-               "input_tokens": int(usage.get("input_tokens") or 0),
-               "output_tokens": int(usage.get("output_tokens") or 0),
-               "cache_write_tokens": int(usage.get("cache_creation_input_tokens") or 0),
-               "cache_read_tokens": int(usage.get("cache_read_input_tokens") or 0),
-               "timestamp": record.get("timestamp") or ""}
+        pending = {"key": key, "uuid": record.get("uuid") or key, "model": message.get("model"), "arm": arm,
+                   "input_tokens": int(usage.get("input_tokens") or 0),
+                   "output_tokens": int(usage.get("output_tokens") or 0),
+                   "cache_write_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+                   "cache_read_tokens": int(usage.get("cache_read_input_tokens") or 0),
+                   "timestamp": record.get("timestamp") or "",
+                   "tool_error": tool_error, "interrupted": interrupted, "next_message": None}
+        tool_error = interrupted = False
+    if pending is not None:
+        yield _finish(pending, None)
 
 
 def cost_of(outcome):
@@ -122,8 +213,8 @@ def _append(row):
         os.fsync(handle.fileno())
 
 
-def event_id(uuid):
-    return hashlib.sha256(f"turn-outcome|{uuid}".encode("utf-8")).hexdigest()
+def event_id(key):
+    return hashlib.sha256(f"turn-outcome|{key}".encode("utf-8")).hexdigest()
 
 
 def post_to_thompson(outcome):
@@ -148,7 +239,7 @@ def record_pending(outcomes):
     seen = {r["event_id"] for r in rows}
     accepted = pending = 0
     for outcome in outcomes:
-        eid = event_id(outcome["uuid"])
+        eid = event_id(outcome["key"])
         if eid in done:
             continue
         outcome = dict(outcome, cost=cost_of(outcome),
@@ -157,7 +248,8 @@ def record_pending(outcomes):
         if eid not in seen:
             _append({"schema_version": 1, "producer": "claude-code", "kind": "turn_outcome",
                      "event_id": eid, "status": "pending", "uuid": outcome["uuid"], "arm": outcome["arm"],
-                     "model": outcome["model"], "success": outcome["success"], "cost": outcome["cost"],
+                     "model": outcome["model"], "success": outcome["success"], "signal": outcome["signal"],
+                     "cost": outcome["cost"],
                      "tokens": outcome["tokens"], "timestamp": outcome["timestamp"]})
             seen.add(eid)
         if post_to_thompson(outcome):

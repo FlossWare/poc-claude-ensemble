@@ -23,7 +23,7 @@ WORKERS = ["rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"]
 ARBITER = "claude-haiku-5-5"
 MAX_TOKENS = 4000
 MAX_STORED_CHARS = 4000
-PRICING_PATH = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/core/cost_tracking/pricing.py")
+PRICING_PATH = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py")
 
 
 def gateway_settings():
