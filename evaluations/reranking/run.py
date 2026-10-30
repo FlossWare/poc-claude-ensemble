@@ -1,5 +1,5 @@
 """Evaluate the pinned local cross-encoder on labeled query/document candidates."""
-import argparse,json,sys,time
+import argparse,json,os,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/"services"/"embeddings")); sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -15,6 +15,8 @@ def main():
  p=argparse.ArgumentParser(description=__doc__); p.add_argument("--batch-sizes",type=int,nargs="+",default=[8,16,32]); p.add_argument("--warmups",type=int,default=1); p.add_argument("--iterations",type=int,default=3); p.add_argument("--output",default="evaluations/results"); a=p.parse_args()
  if min(a.batch_sizes)<1 or a.warmups<0 or a.iterations<1: p.error("batch sizes and iterations must be positive; warmups must be non-negative")
  import reranking_service as rs
+ os.environ["HF_HUB_OFFLINE"]="1"
+ os.environ["TRANSFORMERS_OFFLINE"]="1"
  from sentence_transformers import CrossEncoder
  model_dir=Path(rs.MODEL_DIR)
  if not model_dir.is_dir(): p.error(f"pinned local reranker is missing: {model_dir}; no model downloads are performed")
