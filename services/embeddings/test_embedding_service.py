@@ -1,4 +1,4 @@
-"""Tests for the embedding service: request validation, serialized model calls, and real-model behaviour."""
+"""Tests for the embedding service contract and backend provenance."""
 import json
 import os
 import threading
@@ -10,11 +10,16 @@ import urllib.request
 import numpy as np
 
 import embedding_service as es
-from embed_lib import DIMENSIONS, MODEL_DIR
+from embed_lib import DIMENSIONS, MODEL_DIR, Embedder
 
 
 class StubEmbedder:
-    """Stands in for the ONNX model in validation tests. Records how many calls overlap."""
+    """Stands in for the model while recording concurrent calls."""
+
+    backend = "onnxruntime-cpu"
+    runtime = "onnxruntime/test"
+    device = "CPUExecutionProvider"
+    precision = "FP32"
 
     def __init__(self, delay=0.0):
         self.delay = delay
@@ -40,8 +45,12 @@ class StubEmbedder:
 
 def post(port, body=None, raw=None, path="/embeddings"):
     data = raw if raw is not None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method="POST",
-                                     headers={"content-type": "application/json"})
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=data,
+        method="POST",
+        headers={"content-type": "application/json"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             return response.status, json.loads(response.read())
@@ -55,6 +64,12 @@ def get(port, path):
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read())
+
+
+class BackendSelectionTests(unittest.TestCase):
+    def test_unknown_backend_is_rejected_before_loading_model(self):
+        with self.assertRaisesRegex(ValueError, "unsupported embedding backend"):
+            Embedder(backend="automatic-fallback")
 
 
 class HttpValidationTests(unittest.TestCase):
@@ -71,17 +86,29 @@ class HttpValidationTests(unittest.TestCase):
 
     def setUp(self):
         self._saved = es._embedder
+        self._saved_error = es._load_error
         self.stub = StubEmbedder()
         es._embedder = self.stub
 
     def tearDown(self):
         es._embedder = self._saved
+        es._load_error = self._saved_error
 
-    def test_model_endpoint_reports_identity_and_limits(self):
+    def test_model_endpoint_reports_identity_limits_and_runtime(self):
         status, body = get(self.port, "/model")
         self.assertEqual(status, 200)
         self.assertEqual((body["dimensions"], body["max_texts"]), (DIMENSIONS, es.MAX_TEXTS))
         self.assertEqual(body["modes"], ["document", "query"])
+        self.assertEqual(body["backend"], "onnxruntime-cpu")
+        self.assertEqual(body["device"], "CPUExecutionProvider")
+        self.assertEqual(body["precision"], "FP32")
+        self.assertTrue(body["model_revision"])
+
+    def test_health_reports_selected_backend(self):
+        status, body = get(self.port, "/health")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["model_loaded"])
+        self.assertEqual(body["backend"], "onnxruntime-cpu")
 
     def test_health_is_503_until_model_loads(self):
         es._embedder = None
@@ -120,7 +147,7 @@ class HttpValidationTests(unittest.TestCase):
     def test_non_object_and_malformed_bodies_are_400(self):
         self.assertEqual(post(self.port, raw=b"[]")[0], 400)
         self.assertEqual(post(self.port, raw=b"{oops")[0], 400)
-        self.assertEqual(post(self.port, raw=b"\xff")[0], 400)
+        self.assertEqual(post(self.port, raw=b"\\xff")[0], 400)
 
     def test_empty_body_and_unknown_path(self):
         self.assertEqual(post(self.port, raw=b"")[0], 400)
@@ -131,29 +158,30 @@ class HttpValidationTests(unittest.TestCase):
         try:
             self.assertEqual(post(self.port, raw=oversized)[0], 413)
         except (urllib.error.URLError, ConnectionError, OSError):
-            pass  # the server may close the socket before the client finishes sending
+            pass
         self.assertEqual(get(self.port, "/health")[0], 200)
 
     def test_concurrent_requests_never_call_the_model_at_once(self):
         self.stub.delay = 0.05
-        threads = [threading.Thread(target=post, args=(self.port, {"texts": [f"concurrent {i}"]}))
-                   for i in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
+        threads = [
+            threading.Thread(target=post, args=(self.port, {"texts": [f"concurrent {i}"]}))
+            for i in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
         self.assertEqual(self.stub.max_in_flight, 1)
 
 
 class RealModelTests(unittest.TestCase):
-    """Runs the deployed nomic model. Skipped only when the model files are absent."""
+    """Runs the deployed Nomic model. Skipped only when model files are absent."""
 
     @classmethod
     def setUpClass(cls):
         if not os.path.isfile(os.path.join(MODEL_DIR, "onnx", "model.onnx")):
             raise unittest.SkipTest(f"model not installed at {MODEL_DIR}")
-        from embed_lib import Embedder
-        cls.embedder = Embedder(threads=2)
+        cls.embedder = Embedder(threads=2, backend="onnxruntime-cpu")
 
     def test_vectors_are_unit_length_with_model_dimensions(self):
         vectors = self.embedder.embed_documents(["first sentence about parsers", "second about deployment"])
@@ -178,6 +206,40 @@ class RealModelTests(unittest.TestCase):
         first = self.embedder.embed_documents(["determinism check text"])
         second = self.embedder.embed_documents(["determinism check text"])
         np.testing.assert_allclose(first, second, atol=1e-6)
+
+
+@unittest.skipUnless(
+    os.environ.get("FLOSSWARE_TEST_OPENVINO") == "1",
+    "set FLOSSWARE_TEST_OPENVINO=1 to run hardware-dependent OpenVINO tests",
+)
+class OpenVINOBackendTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise unittest.SkipTest("OpenVINO is not installed") from exc
+        if not any(name.upper().startswith("GPU") for name in ov.Core().available_devices):
+            raise unittest.SkipTest("no OpenVINO GPU is available")
+        cls.gpu = Embedder(threads=2, backend="openvino-gpu")
+
+    def test_gpu_backend_uses_fp16_graph_and_reports_gpu(self):
+        self.assertEqual(self.gpu.precision, "FP16")
+        self.assertTrue(self.gpu.device.upper().startswith("GPU"))
+        self.assertEqual(self.gpu.model_file, "model_fp16.onnx")
+
+    def test_gpu_vectors_preserve_shape_normalization_and_cpu_similarity(self):
+        cpu = Embedder(threads=2, backend="onnxruntime-cpu")
+        texts = [
+            "TLS certificate renewal and load balancer validation",
+            "SQLite manifest revision ordering and tombstones",
+        ]
+        gpu_vectors = self.gpu.embed_documents(texts)
+        cpu_vectors = cpu.embed_documents(texts)
+        self.assertEqual(gpu_vectors.shape, (2, DIMENSIONS))
+        np.testing.assert_allclose(np.linalg.norm(gpu_vectors, axis=1), 1.0, atol=1e-4)
+        similarities = np.sum(gpu_vectors * cpu_vectors, axis=1)
+        self.assertTrue(np.all(similarities > 0.9999), similarities)
 
 
 if __name__ == "__main__":
