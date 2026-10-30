@@ -124,7 +124,7 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
             else:
                 vectors = _embedder.embed_documents(texts)
         self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
-                         "profile": _embedder.profile, "embeddings": vectors.tolist()})
+                         "profile": getattr(_embedder, "profile", None), "embeddings": vectors.tolist()})
 
     def log_message(self, fmt, *args):
         return
