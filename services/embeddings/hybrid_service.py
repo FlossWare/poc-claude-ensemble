@@ -62,6 +62,7 @@ FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
 FILE_KEYS = ("file_path", "notebook_path", "path")
 TOOL_TEXT_CHARS = 20000   # tool inputs, tool results, and thinking are clipped, as in the bulk index
 COLLECTION = "transcript_text"
+KNOWLEDGE_COLLECTION = "knowledge_chunks"
 CANDIDATES = 200
 RRF_K = 60
 DEP_TIMEOUT = 30
@@ -189,6 +190,44 @@ def _related_sessions(query):
     return list(sessions.values())[:10]
 
 
+def _knowledge_result(record):
+    """Normalize a knowledge vector hit without discarding document/chunk provenance."""
+    metadata = record.get("metadata") or {}
+    return {
+        "key": record["id"], "text": record["document"], "source": "knowledge",
+        "source_type": "knowledge", "kind": metadata.get("kind", "knowledge_chunk"),
+        "origin": metadata.get("source"), "url": metadata.get("url"),
+        "title": metadata.get("title"), "chunk_id": metadata.get("chunk_id"),
+        "chunk_index": metadata.get("chunk"), "chunk_count": metadata.get("chunks"),
+        "content_sha256": metadata.get("content_sha256"),
+        "score": record.get("score"),
+    }
+
+
+def knowledge_search(query, top_k, rerank=True):
+    """Search only the independently versioned knowledge_chunks collection."""
+    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings",
+                     {"texts": [query], "mode": "query"})
+    vector = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
+                   {"embedding": embedded["embeddings"][0], "top_k": max(top_k, RERANK_TOP)})
+    results = [_knowledge_result(record) for record in vector["results"]]
+    reranked = False
+    if RERANK_ENABLED and rerank and results:
+        try:
+            scored = _call("rerank", f"{RERANK_URL}/rerank",
+                           {"query": query, "documents": [r["text"][:4000] for r in results[:RERANK_TOP]]},
+                           timeout=RERANK_TIMEOUT)
+            for record, score in zip(results[:RERANK_TOP], scored["scores"]):
+                record["rerank_score"] = round(float(score), 4)
+            results[:RERANK_TOP] = sorted(results[:RERANK_TOP],
+                                          key=lambda record: -record["rerank_score"])
+            reranked = True
+        except DependencyError:
+            pass
+    return {"ok": True, "results": results[:top_k], "degraded": [], "reranked": reranked,
+            "retrieval": "knowledge-only"}
+
+
 def _hybrid_search_uncached(query, top_k, rerank=True):
     degraded = []
     vector_list, lexical_list = [], []
@@ -206,12 +245,21 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
             vector = _call("vector", f"{VECTOR_URL}/collections/{COLLECTION}/query",
                            {"embedding": embedding, "top_k": CANDIDATES})
             vector_list = [{"key": r["id"], "text": r["document"], "source": "vector",
+                            "source_type": "transcript",
                             "project": (r.get("metadata") or {}).get("project"),
                             "session_id": (r.get("metadata") or {}).get("session_id"),
                             "role": (r.get("metadata") or {}).get("role"), "is_subagent": None}
                            for r in vector["results"]]
         except DependencyError as exc:
             degraded.append(exc.name)
+        try:
+            knowledge = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
+                              {"embedding": embedding, "top_k": CANDIDATES})
+            knowledge_list = [_knowledge_result(r) for r in knowledge["results"]]
+        except DependencyError as exc:
+            degraded.append(exc.name)
+    else:
+        knowledge_list = []
     try:
         lexical = lexical_future.result()
         lexical_list = [{"key": r["text_sha"], "text": r["text"], "source": "lexical",
@@ -219,22 +267,23 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
                          "is_subagent": r["is_subagent"]} for r in lexical["results"]]
     except DependencyError as exc:
         degraded.append(exc.name)
-    if not vector_list and not lexical_list and degraded:
+    if not vector_list and not lexical_list and not knowledge_list and degraded:
         raise DependencyError("search", f"no candidate source succeeded ({', '.join(degraded)})")
     # Source metadata (session, project, role) comes only from lexical hits. A result found
     # only by the vector side has its text but no source fields.
     records = {}
-    for record in vector_list + lexical_list:
+    for record in vector_list + lexical_list + knowledge_list:
         records[record["key"]] = {**records.get(record["key"], {}), **record}
-    lists = {"vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
-             "lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)]}
+    lists = {"transcript_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
+             "transcript_lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)],
+             "knowledge_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(knowledge_list)]}
     try:
         ranked = _call("ranking", f"{RANKING_URL}/rank", {"lists": lists, "top_k": CANDIDATES, "k": RRF_K})
         fused = [dict(records[item["key"]], score=item["score"], contributions=item["contributions"])
                  for item in ranked["results"] if item["key"] in records]
     except DependencyError as exc:
         degraded.append(exc.name)
-        fused = fuse([vector_list, lexical_list])
+        fused = fuse([vector_list, lexical_list, knowledge_list])
     reranked = False
     if RERANK_ENABLED and rerank and fused:
         head = fused[:RERANK_TOP]
@@ -645,7 +694,7 @@ class HybridHandler(BaseHTTPRequestHandler):
         self._error(404, "not_found", "unknown path")
 
     def do_POST(self):
-        if self.path not in {"/search", "/prompts", "/sessions/ingest"}:
+        if self.path not in {"/search", "/knowledge/search", "/prompts", "/sessions/ingest"}:
             self._error(404, "not_found", "unknown path")
             return
         limit = MAX_PROMPT_BODY_BYTES if self.path == "/prompts" else MAX_BODY_BYTES
@@ -697,8 +746,10 @@ class HybridHandler(BaseHTTPRequestHandler):
             return
         try:
             started = time.monotonic()
-            result = hybrid_search(query, top_k, rerank)
-            log_search(query, top_k, rerank, result, round((time.monotonic() - started) * 1000))
+            result = (knowledge_search(query, top_k, rerank) if self.path == "/knowledge/search"
+                      else hybrid_search(query, top_k, rerank))
+            if self.path == "/search":
+                log_search(query, top_k, rerank, result, round((time.monotonic() - started) * 1000))
             self._send(200, result)
         except DependencyError as exc:
             self._error(503, "service_unavailable", str(exc))
