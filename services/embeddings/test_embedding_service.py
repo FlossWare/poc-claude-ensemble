@@ -1,14 +1,20 @@
-"""Tests for the embedding service contract and backend provenance."""
+""""Tests for the embedding service contract and backend provenance."""
 import json
 import os
+import sys
+import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
+import embed_lib
 import embedding_service as es
 from embed_lib import DIMENSIONS, MODEL_DIR, Embedder
 
@@ -70,6 +76,91 @@ class BackendSelectionTests(unittest.TestCase):
     def test_unknown_backend_is_rejected_before_loading_model(self):
         with self.assertRaisesRegex(ValueError, "unsupported embedding backend"):
             Embedder(backend="automatic-fallback")
+
+    def test_graph_must_match_selected_backend(self):
+        with self.assertRaisesRegex(ValueError, "requires model_fp16.onnx"):
+            Embedder(backend="openvino-gpu", variant="model.onnx")
+        with self.assertRaisesRegex(ValueError, "requires model.onnx"):
+            Embedder(backend="openvino-cpu", variant="model_fp16.onnx")
+
+
+class OpenVINOFailurePathTests(unittest.TestCase):
+    """Exercise OpenVINO selection and fail-closed paths without GPU hardware."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
+        (root / "onnx").mkdir()
+        (root / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (root / "onnx" / "model.onnx").touch()
+        (root / "onnx" / "model_fp16.onnx").touch()
+        self.model_dir = patch.object(embed_lib, "MODEL_DIR", str(root))
+        self.model_dir.start()
+        self.tokenizer = patch(
+            "embed_lib.Tokenizer.from_file", return_value=types.SimpleNamespace(
+                enable_truncation=lambda _limit: None
+            )
+        )
+        self.tokenizer.start()
+        self.addCleanup(self.tokenizer.stop)
+        self.addCleanup(self.model_dir.stop)
+        self.addCleanup(self.temp_dir.cleanup)
+
+    @staticmethod
+    def fake_openvino(devices):
+        class CompiledModel:
+            inputs = []
+
+            def output(self, _index):
+                return "output"
+
+            def get_property(self, name):
+                return {
+                    "EXECUTION_DEVICES": devices,
+                    "INFERENCE_PRECISION_HINT": "f16",
+                }[name]
+
+        class Core:
+            available_devices = devices
+
+            def compile_model(self, _path, device, config):
+                self.selected_device = device
+                self.config = config
+                return CompiledModel()
+
+        return types.SimpleNamespace(Core=Core, __version__="test")
+
+    def test_missing_openvino_dependency_fails_closed(self):
+        with patch.dict(sys.modules, {"openvino": None}):
+            with self.assertRaisesRegex(RuntimeError, "requires the optional 'openvino'"):
+                Embedder(backend="openvino-gpu")
+
+    def test_gpu_unavailable_fails_closed(self):
+        fake = self.fake_openvino(["CPU"])
+        with patch.dict(sys.modules, {"openvino": fake}):
+            with self.assertRaisesRegex(RuntimeError, "no GPU device is available"):
+                Embedder(backend="openvino-gpu")
+
+    def test_missing_fp16_graph_fails_closed(self):
+        (Path(embed_lib.MODEL_DIR) / "onnx" / "model_fp16.onnx").unlink()
+        with patch.dict(sys.modules, {"openvino": None}):
+            with self.assertRaisesRegex(FileNotFoundError, "model_fp16.onnx"):
+                Embedder(backend="openvino-gpu")
+
+    def test_bad_performance_hint_is_rejected_before_runtime_initialization(self):
+        with patch.dict(sys.modules, {"openvino": None}):
+            with self.assertRaisesRegex(ValueError, "unsupported OpenVINO performance hint"):
+                Embedder(backend="openvino-gpu", performance_hint="MAGIC")
+
+    def test_openvino_reports_compiled_device_and_precision_hint(self):
+        fake = self.fake_openvino(["GPU.0"])
+        with patch.dict(sys.modules, {"openvino": fake}):
+            embedder = Embedder(backend="openvino-gpu")
+        self.assertEqual(embedder.graph_precision, "FP16")
+        self.assertEqual(embedder.precision, "FP16")
+        self.assertEqual(embedder.execution_devices, ["GPU.0"])
+        self.assertEqual(embedder.inference_precision_hint, "f16")
+        self.assertEqual(embedder.device, "GPU.0")
 
 
 class HttpValidationTests(unittest.TestCase):
