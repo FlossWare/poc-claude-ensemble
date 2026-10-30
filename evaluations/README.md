@@ -1,6 +1,6 @@
 # Evaluations
 
-This directory contains repeatable quality, correctness, and performance evaluations for the poc-claude-ensemble services and local inference runtimes. It is deliberately separate from service unit tests: unit tests protect contracts; evaluations compare implementations and measure behavior on representative workloads.
+This directory contains repeatable quality, correctness, and performance evaluations for poc-claude-ensemble. It is deliberately separate from service unit tests: unit tests protect contracts; evaluations compare implementations and measure behavior on representative workloads.
 
 ## Principles
 
@@ -11,34 +11,28 @@ This directory contains repeatable quality, correctness, and performance evaluat
 - Use isolated temporary stores and collections. Never benchmark against or mutate live CE data.
 - Warm up models before timed runs; report cold-start separately.
 - Run repeated trials and report p50/p95 latency, throughput, and sample count.
-- Make optional hardware providers explicit. Missing OpenVINO/GPU support must be reported as unavailable, not silently treated as CPU.
-- Keep all model artifacts local; evaluations must not download models or access hosted inference APIs.
+- Missing optional providers must be reported as unavailable, not silently treated as CPU.
+- Keep model artifacts local; evaluations must not download models or access hosted inference APIs.
 
-## Evaluation tracks
+## Current runners
 
-| Track | Scope | Primary outputs |
+Run from the repository root. Results are written to `evaluations/results/` by default; pass `--output` to change that location.
+
+| Track | Command | What it measures |
 |---|---|---|
-| embedding | ONNX Runtime CPU vs OpenVINO CPU/GPU; batch sizes and thread counts | vectors/sec, latency, RAM, provider, vector quality |
-| vector | Exact NumPy search vs ChromaDB HNSW | Recall@K, p50/p95, build time, memory |
-| reranking | Current MiniLM CPU vs ONNX/OpenVINO and quantized variants | NDCG@10, MRR, latency, pairs/sec |
-| hybrid | Vector + FTS5 + RRF, optional reranking | Recall@K, MRR, NDCG@10, p50/p95 |
-| chunking | Existing versioned profiles and candidate changes | throughput, chunk count, boundary/coverage checks |
-| tokenization | Existing lexical-v1 and candidate analyzers | chars/sec, tokens/sec, correctness |
-| llm | Local Ollama models and runtime settings | prompt/generation tokens/sec, latency, quality, RAM/GPU/power |
-| pipeline | End-to-end ingestion and search | documents/sec, latency, retrieval quality |
+| Embedding | `python3 evaluations/embedding/run.py` | Current Nomic ONNX CPU baseline, batch sizes, latency, throughput, vector validity and a small semantic smoke check |
+| Vector | `python3 evaluations/vector/run.py` | Exact NumPy vs argpartition vs Chroma HNSW; Recall@K against exact ground truth |
+| Chunking | `python3 evaluations/chunking/run.py` | Existing profiles, throughput, coverage, offsets and deterministic output |
+| Tokenization | `python3 evaluations/tokenization/run.py` | lexical-v1 throughput, deterministic output and source-offset correctness |
 
-## Quick start
-
-See PLAN.md for the evaluation design. Test fixtures live in fixtures/.
+The vector runner defaults to 1K and 10K vectors. Add `--sizes 1000 10000 100000` for the larger case. Embedding evaluation requires the pinned local Nomic model already installed. No runner downloads models.
 
 The existing service test suite remains:
 
     python3 -m pytest services -q
 
-Evaluation runners should be independent commands under this directory and must write machine-readable JSON results under an explicitly supplied output directory. They must not be included in the normal unit-test command.
+Evaluation runners are independent and are not included in the normal unit-test command. Each writes a unique JSON result containing host and git metadata, raw/aggregate timings, configuration, and quality/correctness metrics.
 
-## Result format
+## Planned tracks
 
-Every run should emit JSON with schema version, run ID and UTC timestamp, track and case, git commit and dirty state, host/CPU/RAM/GPU/driver/OS, runtime/library versions, model ID and immutable revision, quantization, provider and actual execution device, warmup and measured iteration counts, batch size and concurrency, raw durations and p50/p95, throughput and quality metrics, and errors/skips/unavailable capabilities.
-
-Never compare results if model revision, corpus, workload, or hardware configuration differs without explicitly identifying that difference.
+Reranking (PyTorch baseline vs exported ONNX/OpenVINO and validated quantization), hybrid retrieval (vector-only, lexical-only, RRF, optional reranking with labeled judgments), local Ollama model comparison, and end-to-end pipeline throughput/latency are specified in PLAN.md. They are not represented as implemented until executable runners exist.
