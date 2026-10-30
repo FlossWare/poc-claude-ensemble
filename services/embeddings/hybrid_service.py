@@ -269,13 +269,24 @@ def _stable_id(prefix, *parts):
     return f"{prefix}:{digest[:40]}"
 
 
+def _project_for(path):
+    """The project directory name. Subagent transcripts live under <project>/<session>/subagents/...,
+    and their records carry the parent session's ID, so they take the parent's project."""
+    parts = os.path.normpath(path).split(os.sep)
+    if "subagents" in parts[:-1]:
+        index = len(parts) - 1 - parts[::-1].index("subagents")
+        if index >= 2:
+            return parts[index - 2]
+    return os.path.basename(os.path.dirname(path))
+
+
 def _parse_transcript(path, start=0, known_first_ts=None):
     """Extract messages and file touches from the transcript starting at a byte offset.
 
     Only complete lines are consumed, so a line still being written is left for the next run.
     """
     session_id = os.path.basename(path)[:-6]
-    project = os.path.basename(os.path.dirname(path))
+    project = _project_for(path)
     messages, touches = [], []
     first_ts, last_ts = known_first_ts, None
     end = start

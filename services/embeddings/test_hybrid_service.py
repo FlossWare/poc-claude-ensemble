@@ -154,6 +154,32 @@ class TranscriptParsingTests(unittest.TestCase):
         self.assertEqual(len(hs._parse_transcript(self.path)["messages"][0]["text"]), hs.TOOL_TEXT_CHARS)
 
 
+class SubagentProjectTests(unittest.TestCase):
+    def test_subagent_takes_parent_project(self):
+        path = "/home/u/.claude/projects/-home-u/abc123/subagents/agent-x.jsonl"
+        self.assertEqual(hs._project_for(path), "-home-u")
+
+    def test_nested_workflow_subagent_takes_parent_project(self):
+        path = "/home/u/.claude/projects/-home-u/abc123/subagents/workflows/wf_1/agent-x.jsonl"
+        self.assertEqual(hs._project_for(path), "-home-u")
+
+    def test_top_level_transcript_uses_its_directory(self):
+        path = "/home/u/.claude/projects/-home-u/abc123.jsonl"
+        self.assertEqual(hs._project_for(path), "-home-u")
+
+    def test_parsed_subagent_reports_parent_project(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        folder = os.path.join(root, "-home-u", "abc123", "subagents")
+        os.makedirs(folder)
+        path = os.path.join(folder, "agent-x.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"uuid": "u1", "sessionId": "abc123", "timestamp": "2026-10-29T10:00:00Z",
+                                     "message": {"role": "user", "content": "hi"}}) + "\n")
+        parsed = hs._parse_transcript(path)
+        self.assertEqual((parsed["session_id"], parsed["project"]), ("abc123", "-home-u"))
+
+
 class TranscriptValidationTests(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
