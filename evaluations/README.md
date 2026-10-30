@@ -22,10 +22,13 @@ Run from the repository root. Results are written to `evaluations/results/` by d
 |---|---|---|
 | Embedding | `python3 evaluations/embedding/run.py` | Current Nomic ONNX CPU baseline, batch sizes, latency, throughput, vector validity and a small semantic smoke check |
 | Vector | `python3 evaluations/vector/run.py` | Exact NumPy vs argpartition vs Chroma HNSW; Recall@K against exact ground truth |
+| Reranking | `python3 evaluations/reranking/run.py` | Pinned local MiniLM quality (MRR/NDCG) and batch-size latency/throughput |
+| Hybrid | `python3 evaluations/hybrid/run.py` | Production RRF implementation against fixed lexical/vector relevance judgments |
 | Chunking | `python3 evaluations/chunking/run.py` | Existing profiles, throughput, coverage, offsets and deterministic output |
 | Tokenization | `python3 evaluations/tokenization/run.py` | lexical-v1 throughput, deterministic output and source-offset correctness |
+| Local LLM | `python3 evaluations/llm/run_ollama.py --models qwen3.5:2b` | Already-installed Ollama models, prompt/generation rates, response latency and JSON validity |
 
-The vector runner defaults to 1K and 10K vectors. Add `--sizes 1000 10000 100000` for the larger case. Embedding evaluation requires the pinned local Nomic model already installed. No runner downloads models.
+The vector runner defaults to 1K and 10K vectors. Add `--sizes 1000 10000 100000` for the larger case. Embedding and reranking evaluations require their pinned local model artifacts. The Ollama runner checks `/api/tags` and skips models that are not already installed. No runner downloads models.
 
 The existing service test suite remains:
 
@@ -33,6 +36,6 @@ The existing service test suite remains:
 
 Evaluation runners are independent and are not included in the normal unit-test command. Each writes a unique JSON result containing host and git metadata, raw/aggregate timings, configuration, and quality/correctness metrics.
 
-## Planned tracks
+## Not yet implemented
 
-Reranking (PyTorch baseline vs exported ONNX/OpenVINO and validated quantization), hybrid retrieval (vector-only, lexical-only, RRF, optional reranking with labeled judgments), local Ollama model comparison, and end-to-end pipeline throughput/latency are specified in PLAN.md. They are not represented as implemented until executable runners exist.
+OpenVINO provider comparison for embeddings/reranking, a full end-to-end pipeline benchmark against an isolated temporary deployment, and production-corpus relevance judgments. These require validating the installed runtime/provider and preparing a representative, privacy-safe evaluation corpus. They are intentionally not faked with synthetic timing claims.
