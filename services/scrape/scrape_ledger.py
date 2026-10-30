@@ -29,9 +29,12 @@ def already_fetched(url):
     return url in load_ledger()
 
 
-def _add_book(out, seen, root, name):
-    """Add one PDF from the books source. Its identity is its file path, since it has no web URL."""
-    path = os.path.join(root, name)
+def _add_book(out, seen, root, relpath):
+    """Add one PDF from the books source (relpath is under the books directory, subfolders included).
+
+    Its identity is its file path, since it has no web URL.
+    """
+    path = os.path.join(root, relpath)
     url = "file://" + path
     if url in seen:
         return 0
@@ -39,7 +42,7 @@ def _add_book(out, seen, root, name):
         digest = hashlib.sha256(handle.read()).hexdigest()
     row = {"schema_version": 1, "producer": "scrape", "kind": "fetch", "url": url, "source": "books",
            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(os.path.getmtime(path))),
-           "record": os.path.join("books", name), "sha256": digest}
+           "record": os.path.join("books", relpath), "sha256": digest}
     out.write(json.dumps(row) + "\n")
     seen[url] = row
     return 1
@@ -54,11 +57,13 @@ def build():
             root = os.path.join(RAW, source)
             if not os.path.isdir(root):
                 continue
+            if source == "books":
+                for dirpath, _dirs, files in os.walk(root):
+                    for name in sorted(files):
+                        if name.lower().endswith(".pdf"):
+                            added += _add_book(out, seen, root, os.path.relpath(os.path.join(dirpath, name), root))
+                continue
             for name in os.listdir(root):
-                if source == "books":
-                    if name.lower().endswith(".pdf"):
-                        added += _add_book(out, seen, root, name)
-                    continue
                 if not name.endswith(".json"):
                     continue
                 path = os.path.join(root, name)
