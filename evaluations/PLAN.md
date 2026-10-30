@@ -55,7 +55,13 @@ For tokenization, compare lexical-v1 with candidate implementations on identifie
 
 Use Ollama as a separately measured inference runtime. Candidate models must be pulled and pinned before benchmarking; the runner itself must never pull models.
 
-Discover candidate names from the local `/api/tags` response (`ollama list`) and pass exact installed tags to the runner. Do not bake unverified model tags into the evaluation suite. The current laptop baseline is `qwen3.5:2b` only if that exact tag appears in the local inventory.
+Initial candidates, subject to confirming exact tags exist locally:
+- qwen3.5:2b baseline
+- granite4.2:3b
+- qwen3.5:4b
+- gemma4:e2b
+- gemma4:e4b
+- qwen3.5:9b stretch candidate
 
 For each model, record exact model digest, quantization, context length, Ollama processor allocation, runner logs, prompt-eval tokens/sec, generation tokens/sec, time-to-first-token, total latency, peak RSS, GPU utilization, and power when sensors are available.
 
@@ -71,19 +77,13 @@ A candidate is eligible to replace a baseline only when it passes correctness an
 
 No aggregate score should hide a regression. Publish the metric vector and explain tradeoffs.
 
-## Implementation status
-
-Implemented runners: embedding CPU baseline, exact/argpartition/Chroma HNSW vector comparison, CPU cross-encoder reranking with MRR/NDCG, production RRF fusion quality smoke test, chunking profile throughput/correctness, lexical-v1 tokenization throughput/offset checks, and local Ollama model timing/JSON-validity checks.
-
-The current relevance fixtures are deliberately small smoke datasets, not a statistically credible acceptance corpus. Expand them with representative, privacy-safe queries and independently judged relevance labels before using quality deltas to make production decisions.
-
-Not yet implemented: ONNX Runtime OpenVINO CPU/GPU provider comparisons, exported/quantized reranker comparisons, isolated full-pipeline ingestion/search tests, streaming TTFT, peak RSS sampling, and consolidated cross-run reports. These remain explicit follow-up work rather than implied capabilities of the current runners.
-
 ## Suggested implementation order
 
-1. Run and validate the current runners on laptop-02; retain raw JSON output.
-2. Add OpenVINO provider/device variants without silently falling back to CPU.
-3. Add reranker ONNX/OpenVINO variants and validated quantization.
-4. Expand retrieval and reranking relevance judgments.
-5. Build an isolated temporary service deployment for end-to-end ingestion/search.
-6. Add streaming TTFT, resource sampling, and consolidated reports.
+1. Common result schema and host/runtime metadata collector.
+2. Embedding benchmark and semantic fixture.
+3. Vector exact-vs-HNSW benchmark.
+4. Reranking quality/performance benchmark.
+5. Hybrid retrieval quality benchmark.
+6. Chunking/tokenization throughput benchmarks.
+7. Ollama LLM benchmark.
+8. End-to-end pipeline benchmark and consolidated report.
