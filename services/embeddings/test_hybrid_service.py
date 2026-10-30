@@ -432,8 +432,11 @@ class HttpValidationTests(unittest.TestCase):
     def test_ingest_endpoint_accepts_transcript_under_root(self):
         path = os.path.join(self.dir, "accepted.jsonl")
         open(path, "w").close()
-        status, body = post(self.port, {"transcript_path": path}, path="/sessions/ingest")
-        self.assertEqual((status, body["status"]), (202, "accepted"))
+        # The background ingest is stubbed: this test checks acceptance only, and a real ingest would write
+        # to the live index, graph, and ingest log.
+        with mock.patch.object(hs, "_run_ingest", lambda *args, **kwargs: None):
+            status, body = post(self.port, {"transcript_path": path}, path="/sessions/ingest")
+            self.assertEqual((status, body["status"]), (202, "accepted"))
 
     def test_unknown_path_is_404(self):
         self.assertEqual(post(self.port, {}, path="/elsewhere")[0], 404)
