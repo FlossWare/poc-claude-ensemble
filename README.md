@@ -85,7 +85,8 @@ cd services/embeddings && FLOSSWARE_TEST_OPENVINO=1 python3 -m unittest -v test_
 ```
 
 The opt-in tests verify the selected GPU device, FP16 graph, vector shape and
-normalization, and cosine similarity against CPU FP32. They are skipped by
+normalization, and cosine similarity against CPU FP32 (each tested vector pair
+must exceed 0.9999). They are skipped by
 default so ordinary CI does not require Intel GPU hardware. Ordinary CI also
 runs mocked OpenVINO failure-path tests for a missing dependency, unavailable
 GPU, missing FP16 graph, invalid backend, and invalid performance hint; these
