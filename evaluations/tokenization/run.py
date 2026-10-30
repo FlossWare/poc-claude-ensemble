@@ -8,6 +8,7 @@ from common import summarize_ms,write_result
 
 def main():
  p=argparse.ArgumentParser(description=__doc__); p.add_argument("--iterations",type=int,default=100); p.add_argument("--output",default="evaluations/results"); a=p.parse_args()
+ if a.iterations<1: p.error("iterations must be positive")
  fixtures=[json.loads(x) for x in (Path(__file__).resolve().parents[1]/"fixtures"/"tokenization.jsonl").read_text().splitlines() if x.strip()]
  cases=[]
  for f in fixtures:
