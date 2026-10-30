@@ -11,12 +11,17 @@ Usage: multi_model_review.py PATH [--max-chars N]
 
 import argparse
 import hashlib
+import sys
 import importlib.util
 import json
 import os
 import time
 import urllib.error
 import urllib.request
+
+CORE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core")
+if os.path.isdir(os.path.join(CORE, "shared")) and CORE not in sys.path:
+    sys.path.insert(0, CORE)
 
 LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
 WORKERS = ["rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"]
@@ -140,6 +145,13 @@ def main(argv=None):
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     base = {"schema_version": 1, "producer": "multi-model-review", "review_id": review_id,
             "subject": args.path, "subject_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest()}
+
+    try:
+        from shared import thompson_shadow
+        for slot in range(len(WORKERS)):
+            thompson_shadow.record("worker", [WORKERS[slot]], WORKERS, source="multi-model-review", slot=slot)
+    except ImportError:
+        pass   # shadow selection is optional; the review itself does not depend on it
 
     workers = []
     for model in WORKERS:

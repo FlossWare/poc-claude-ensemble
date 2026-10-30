@@ -194,6 +194,7 @@ class ModelPool:
 
         selected = available[:count]
         self.used_workers.update(selected)
+        self._shadow("worker", selected, available)
         return selected
 
     def get_arbiter(self, tier: str = "expensive") -> str:
@@ -220,7 +221,16 @@ class ModelPool:
             )
         arbiter = available[0]
         self.used_arbiters.add(arbiter)
+        self._shadow("arbiter", [arbiter], available)
         return arbiter
+
+    def _shadow(self, role, chosen, eligible):
+        """Record what Thompson would have chosen for this slot. The live choice is not affected."""
+        try:
+            from shared import thompson_shadow
+        except ImportError:
+            return
+        thompson_shadow.record(role, chosen, eligible, source="arbitration")
 
 
 class ContextManager:
