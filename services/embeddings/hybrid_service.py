@@ -230,7 +230,7 @@ def knowledge_search(query, top_k, rerank=True):
 
 def _hybrid_search_uncached(query, top_k, rerank=True):
     degraded = []
-    vector_list, lexical_list = [], []
+    vector_list, lexical_list, knowledge_list = [], [], []
     embedding = None
     # Lexical and embedding/vector legs are independent, so run the lexical call concurrently.
     lexical_future = _POOL.submit(_call, "lexical", f"{LEXICAL_URL}/search",
@@ -274,7 +274,7 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     records = {}
     for record in vector_list + lexical_list + knowledge_list:
         records[record["key"]] = {**records.get(record["key"], {}), **record}
-    lists = {"transcript_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
+    lists = {"vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
              "transcript_lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)],
              "knowledge_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(knowledge_list)]}
     try:
@@ -689,7 +689,9 @@ class HybridHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._send(200, {"ok": True, "service": "hybrid-search",
-                             "depends_on": ["embedding", "vector", "lexical"]})
+                             "depends_on": ["embedding", "vector", "lexical"],
+                             "collections": {"transcripts": COLLECTION, "knowledge": KNOWLEDGE_COLLECTION},
+                             "endpoints": ["/search", "/knowledge/search"]})
             return
         self._error(404, "not_found", "unknown path")
 
