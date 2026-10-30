@@ -82,6 +82,31 @@ The opt-in tests verify the selected GPU device, FP16 graph, vector shape and
 normalization, and cosine similarity against CPU FP32. They are skipped by
 default so ordinary CI does not require Intel GPU hardware.
 
+To smoke-test the actual REST process without touching the deployed service,
+start a second instance on a separate loopback port:
+
+```bash
+ENSEMBLE_EMBED_BACKEND=openvino-gpu \
+ENSEMBLE_EMBED_PORT=18770 \
+python3 services/embeddings/embedding_service.py
+```
+
+In another terminal, inspect the selected runtime and send a real embedding
+request:
+
+```bash
+curl -fsS http://127.0.0.1:18770/health | jq
+curl -fsS http://127.0.0.1:18770/model | jq
+curl -fsS http://127.0.0.1:18770/embeddings \
+  -H 'content-type: application/json' \
+  -d '{"texts":["TLS certificate rotation validation"],"mode":"document"}' \
+  | jq '{ok, model, dimensions, vectors:(.embeddings|length), vector_dimensions:(.embeddings[0]|length)}'
+```
+
+The model endpoint should identify `openvino-gpu`, a `GPU.*` device, and
+`FP16`; the embedding response should contain one 768-dimensional vector.
+Stop this test process with Ctrl-C when finished.
+
 ## Running the tests
 
 From the repository root, run the whole suite with pytest:
