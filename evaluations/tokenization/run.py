@@ -14,7 +14,8 @@ def main():
   fn=lambda: tokenize("lexical-v1",f["text"]); expected=fn(); samples=[]
   for _ in range(a.iterations):
    t=time.perf_counter(); tokens=fn(); samples.append((time.perf_counter()-t)*1000)
-  valid=all(0<=x["start"]<x["end"]<=len(f["text"]) and f["text"][x["start"]:x["end"]].casefold()==x["term"] for x in tokens)
+  folded="".join(ch.casefold() if len(ch.casefold())==1 else ch.lower() for ch in f["text"])
+  valid=all(0<=x["start"]<x["end"]<=len(f["text"]) and folded[x["start"]:x["end"]]==x["term"] for x in tokens)
   cases.append({"case":f["case"],"input_chars":len(f["text"]),"token_count":len(tokens),"timing":summarize_ms(samples),
    "chars_per_second":len(f["text"])/(sum(samples)/1000/len(samples)) if samples else None,"deterministic":tokens==expected,"offsets_valid":valid})
  out=write_result("tokenization",{"profile":"lexical-v1","iterations":a.iterations,"cases":cases},a.output); print(out)
