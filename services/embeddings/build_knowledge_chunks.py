@@ -44,6 +44,14 @@ def log(message):
         handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {message}\n")
 
 
+def get(url):
+    with urllib.request.urlopen(url, timeout=TIMEOUT) as response:
+        body = json.loads(response.read())
+    if body.get("ok") is not True:
+        raise RuntimeError(f"{url} returned {body}")
+    return body
+
+
 def post(url, payload):
     request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                      headers={"content-type": "application/json"}, method="POST")
@@ -52,6 +60,17 @@ def post(url, payload):
     if body.get("ok") is not True:
         raise RuntimeError(f"{url} returned {body}")
     return body
+
+
+def active_profiles():
+    """Pin this ingestion run to the embedding precision reported by the live service."""
+    model = get(f"{EMBEDDING_URL}/model")
+    profile = model.get("profile")
+    if not profile:
+        raise RuntimeError(f"embedding service did not report an embedding profile: {model}")
+    profiles = dict(PROFILES)
+    profiles["embedding"] = profile
+    return profiles
 
 
 def revision_sequence(fetched_at):
@@ -128,7 +147,7 @@ def documents(sources):
                "title": (title or row["url"])[:300], "content": content}
 
 
-def store_knowledge(doc):
+def store_knowledge(doc, profiles=None):
     """Store the document as a Knowledge record. Returns True when its revision may be chunked."""
     body = post(f"{KNOWLEDGE_URL}/records", {
         "source_id": doc["url"],
@@ -137,7 +156,7 @@ def store_knowledge(doc):
         "title": doc["title"],
         "content": doc["content"],
         "provenance": {"origin": doc["source"], "locator": doc["url"]},
-        "profiles": PROFILES,
+        "profiles": profiles or PROFILES,
     })
     return body["decision"] in ("accepted", "duplicate")
 
@@ -161,9 +180,14 @@ def existing(ids):
     return found
 
 
-def flush(batch):
+def flush(batch, expected_profile=None):
     texts = [text for _, text, _ in batch]
     embedded = post(f"{EMBEDDING_URL}/embeddings", {"texts": texts, "mode": "document"})
+    if expected_profile and embedded.get("profile") != expected_profile:
+        raise RuntimeError(
+            f"embedding profile changed during ingestion: expected {expected_profile}, "
+            f"received {embedded.get('profile')}"
+        )
     if len(embedded["embeddings"]) != len(texts):
         raise RuntimeError(f"embedding service returned {len(embedded['embeddings'])} vectors for {len(texts)} texts")
     post(f"{VECTOR_URL}/collections/{COLLECTION}/upsert", {
@@ -201,26 +225,28 @@ def run(sources, limit=None):
     started = time.time()
     documents_seen = documents_accepted = chunks_stored = 0
     pending = []
+    profiles = active_profiles()
+    log(f"embedding profile: {profiles['embedding']}")
     try:
         for doc in documents(sources):
             if limit is not None and documents_seen >= limit:
                 break
             documents_seen += 1
-            if not store_knowledge(doc):
+            if not store_knowledge(doc, profiles):
                 log(f"refused by Index: {doc['url']}")
                 continue
             documents_accepted += 1
             ingest(doc, pending)
             while len(pending) >= EMBED_BATCH:
                 batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
-                chunks_stored += flush(batch)
+                chunks_stored += flush(batch, expected_profile=profiles["embedding"])
             if documents_seen % 50 == 0:
                 log(f"progress: {documents_seen} documents read, {chunks_stored} chunks stored, "
                     f"{time.time() - started:.0f}s")
     finally:
         # Chunks of accepted revisions are kept even when the run stops early, so they are not redone.
         if pending:
-            chunks_stored += flush(pending)
+            chunks_stored += flush(pending, expected_profile=profiles["embedding"])
             pending = []
     summary = {"documents": documents_seen, "accepted": documents_accepted, "chunks_stored": chunks_stored,
                "seconds": round(time.time() - started)}
