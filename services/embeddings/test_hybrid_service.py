@@ -29,6 +29,9 @@ import intent_service  # noqa: E402
 import ranking_service  # noqa: E402
 
 
+hs.SEARCH_LEDGER = os.path.join(tempfile.mkdtemp(prefix="ce-search-test-"), "searches.jsonl")  # tests never write the live search ledger
+
+
 def closed_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -298,6 +301,31 @@ class IndexDecisionTests(unittest.TestCase):
         decision = hs._index_decision(parsed, 10)
         self.assertIn(decision, ("accepted", "duplicate"))
         self.assertIsInstance(decision, str)
+
+
+class SearchLogTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = hs.SEARCH_LEDGER
+        self.ledger = os.path.join(tempfile.mkdtemp(), "searches.jsonl")
+        hs.SEARCH_LEDGER = self.ledger
+
+    def tearDown(self):
+        hs.SEARCH_LEDGER = self._saved
+
+    def test_each_search_writes_one_row_with_its_top_results(self):
+        result = {"ok": True, "degraded": ["ranking"], "cached": False,
+                  "results": [{"source": "lexical", "session_id": "s1", "score": 0.5, "text": "x" * 500}]}
+        hs.log_search("how did we fix it", 5, True, result, 42)
+        with open(self.ledger, encoding="utf-8") as handle:
+            row = json.loads(handle.readline())
+        self.assertEqual((row["kind"], row["query"], row["latency_ms"], row["degraded"]),
+                         ("search", "how did we fix it", 42, ["ranking"]))
+        self.assertEqual(row["results"][0]["session_id"], "s1")
+        self.assertLessEqual(len(row["results"][0]["text"]), hs.SEARCH_LOG_CHARS)
+
+    def test_unwritable_search_ledger_never_raises(self):
+        hs.SEARCH_LEDGER = "/proc/ce-no-such-dir/searches.jsonl"
+        hs.log_search("q", 1, False, {"results": []}, 1)
 
 
 class IngestStateTests(unittest.TestCase):

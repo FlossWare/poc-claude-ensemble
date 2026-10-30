@@ -107,6 +107,29 @@ def fuse(ranked_lists):
     return [dict(records[k], score=round(scores[k], 6)) for k in order]
 
 
+SEARCH_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SEARCH_LEDGER", "~/.FlossWare/ledger/searches/searches.jsonl"))
+SEARCH_LOG_TOP = 5          # results stored per search
+SEARCH_LOG_CHARS = 160      # characters of each result stored
+
+
+def log_search(query, top_k, rerank, result, latency_ms):
+    """Append one search to the search ledger. Best effort: a failed write never fails the search."""
+    try:
+        row = {"schema_version": 1, "producer": "hybrid-search", "kind": "search",
+               "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "query": query, "top_k": top_k, "rerank": rerank, "latency_ms": latency_ms,
+               "cached": bool(result.get("cached")), "degraded": result.get("degraded", []),
+               "result_count": len(result.get("results", [])),
+               "results": [{"source": r.get("source"), "session_id": r.get("session_id"),
+                            "score": r.get("score"), "text": (r.get("text") or "")[:SEARCH_LOG_CHARS]}
+                           for r in result.get("results", [])[:SEARCH_LOG_TOP]]}
+        os.makedirs(os.path.dirname(SEARCH_LEDGER), exist_ok=True)
+        with open(SEARCH_LEDGER, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 PROMPT_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_PROMPT_LEDGER", "~/.FlossWare/ledger/prompts/prompts.jsonl"))
 MAX_PROMPT_BODY_BYTES = 262_144
 MAX_PROMPT_CHARS = 65_536
@@ -662,7 +685,10 @@ class HybridHandler(BaseHTTPRequestHandler):
             self._error(400, "invalid_request", f"top_k must be an integer from 1 to {MAX_TOP_K}")
             return
         try:
-            self._send(200, hybrid_search(query, top_k, rerank))
+            started = time.monotonic()
+            result = hybrid_search(query, top_k, rerank)
+            log_search(query, top_k, rerank, result, round((time.monotonic() - started) * 1000))
+            self._send(200, result)
         except DependencyError as exc:
             self._error(503, "service_unavailable", str(exc))
 
