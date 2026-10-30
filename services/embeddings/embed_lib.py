@@ -11,7 +11,10 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-MODEL_DIR = os.path.expanduser("~/.FlossWare/models/nomic-embed-text-v1.5")
+# ~/.FlossWare/models/<kind>/<model-name>/<revision>/ ; the revision is the Hugging Face commit the files came from.
+MODEL_DIR = os.path.expanduser(os.environ.get("ENSEMBLE_EMBEDDING_MODEL_DIR",
+    "~/.FlossWare/models/embeddings/nomic-ai/nomic-embed-text-v1.5/e9b6763023c676ca8431644204f50c2b100d9aab"))
+MODEL_REVISION = "e9b6763023c676ca8431644204f50c2b100d9aab"
 MODEL_ID = "nomic-ai/nomic-embed-text-v1.5"
 DIMENSIONS = 768
 MAX_TOKENS = 512
