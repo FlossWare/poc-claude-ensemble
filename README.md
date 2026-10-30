@@ -40,7 +40,7 @@ does not become a required dependency for CPU deployments. Install it in the
 service's Python environment only when selecting an OpenVINO backend:
 
 ```bash
-python3 -m pip install openvino
+python3 -m pip install 'openvino>=2026.2'
 ```
 
 Select the backend before starting the embedding service:
@@ -58,8 +58,11 @@ python3 services/embeddings/embedding_service.py
 Supported OpenVINO performance hints are `THROUGHPUT` (default),
 `LATENCY`, and `CUMULATIVE_THROUGHPUT`. `ENSEMBLE_EMBED_THREADS` applies
 to ONNX Runtime CPU. OpenVINO selects the device explicitly and reports its
-actual device, runtime, precision, backend, and pinned model revision from
-`GET /model` and `GET /health`.
+actual execution device(s), runtime, graph precision, OpenVINO inference precision
+hint when exposed by the runtime, backend, and pinned model revision from
+`GET /model` and `GET /health`. Graph precision describes the ONNX file; the
+compiled inference precision hint is separate and is not a per-operation
+execution trace.
 
 **GPU selection fails closed.** If OpenVINO is not installed, the FP16 graph is
 missing, or no GPU device is available, model loading fails and `/health`
@@ -68,9 +71,12 @@ returns 503. The service never silently falls back to CPU when
 
 The runtime choice does not change the model ID, revision, vector dimensions,
 prefixes, pooling, normalization, REST response shape, or ChromaDB collection
-identity. Existing vectors do not need migration. CPU FP32 remains available
-as the fallback. Keep one backend selected for a running embedding service;
-do not switch inference backends while that process is serving requests.
+identity. Existing vectors do not need migration, but FP32 and FP16 inference can
+produce slightly different vectors. Keep one backend and precision consistent
+for all writes to a collection. If changing precision for an existing collection,
+plan a deliberate full re-embedding/rebuild rather than mixing old and new
+vectors. Keep one backend selected for a running embedding service; do not
+switch inference backends while that process is serving requests.
 
 To run the hardware-dependent GPU parity tests explicitly:
 
@@ -80,7 +86,10 @@ cd services/embeddings && FLOSSWARE_TEST_OPENVINO=1 python3 -m unittest -v test_
 
 The opt-in tests verify the selected GPU device, FP16 graph, vector shape and
 normalization, and cosine similarity against CPU FP32. They are skipped by
-default so ordinary CI does not require Intel GPU hardware.
+default so ordinary CI does not require Intel GPU hardware. Ordinary CI also
+runs mocked OpenVINO failure-path tests for a missing dependency, unavailable
+GPU, missing FP16 graph, invalid backend, and invalid performance hint; these
+tests do not require OpenVINO or GPU hardware.
 
 To smoke-test the actual REST process without touching the deployed service,
 start a second instance on a separate loopback port:
