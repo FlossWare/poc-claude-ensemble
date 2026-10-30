@@ -1,4 +1,4 @@
-"""Local Nomic embeddings with selectable ONNX Runtime/OpenVINO execution.
+""""Local Nomic embeddings with selectable ONNX Runtime/OpenVINO execution.
 
 Documents use the search_document prefix and queries use search_query. Both
 backends share tokenization, masked mean pooling, and L2 normalization so the
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from tokenizers import Tokenizer
@@ -24,6 +25,12 @@ MAX_TOKENS = 512
 DOC_PREFIX = "search_document: "
 QUERY_PREFIX = "search_query: "
 BACKENDS = {"onnxruntime-cpu", "openvino-cpu", "openvino-gpu"}
+OPENVINO_HINTS = {"LATENCY", "THROUGHPUT", "CUMULATIVE_THROUGHPUT"}
+BACKEND_GRAPHS = {
+    "onnxruntime-cpu": ("model.onnx", "FP32"),
+    "openvino-cpu": ("model.onnx", "FP32"),
+    "openvino-gpu": ("model_fp16.onnx", "FP16"),
+}
 
 
 class Embedder:
@@ -42,19 +49,15 @@ class Embedder:
         backend: str | None = None,
         performance_hint: str | None = None,
     ):
-        self.backend = backend or os.environ.get(
-            "ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"
-        ).strip().lower()
-        if self.backend not in BACKENDS:
+        self.backend = self._resolve_backend(backend)
+        expected_graph, self.graph_precision = BACKEND_GRAPHS[self.backend]
+        self.model_file = variant or expected_graph
+        if self.model_file != expected_graph:
             raise ValueError(
-                f"unsupported embedding backend {self.backend!r}; "
-                f"choose one of {', '.join(sorted(BACKENDS))}"
+                f"{self.backend} requires {expected_graph} "
+                f"({self.graph_precision}); received {self.model_file}"
             )
 
-        default_variant = (
-            "model_fp16.onnx" if self.backend == "openvino-gpu" else "model.onnx"
-        )
-        self.model_file = variant or default_variant
         model_path = Path(MODEL_DIR) / "onnx" / self.model_file
         if not model_path.is_file():
             raise FileNotFoundError(f"embedding model graph not found: {model_path}")
@@ -64,59 +67,107 @@ class Embedder:
         self.input_names: set[str]
         self.runtime = ""
         self.device = ""
-        self.precision = "FP32"
+        self.precision = self.graph_precision
+        self.inference_precision_hint: str | None = None
+        self.execution_devices: list[str] = []
+        self.output_port = None
 
         if self.backend == "onnxruntime-cpu":
-            import onnxruntime as ort
-
-            options = ort.SessionOptions()
-            options.intra_op_num_threads = threads or os.cpu_count() or 1
-            options.enable_cpu_mem_arena = cpu_mem_arena
-            self.session = ort.InferenceSession(
-                str(model_path), options, providers=["CPUExecutionProvider"]
-            )
-            self.input_names = {item.name for item in self.session.get_inputs()}
-            self.runtime = f"onnxruntime/{ort.__version__}"
-            self.device = self.session.get_providers()[0]
-            self.output_port = None
+            self._init_onnxruntime(model_path, threads, cpu_mem_arena)
         else:
-            try:
-                import openvino as ov
-            except ImportError as exc:
-                raise RuntimeError(
-                    f"{self.backend} requires the optional 'openvino' package"
-                ) from exc
+            self._init_openvino(model_path, performance_hint)
 
-            core = ov.Core()
-            available = list(core.available_devices)
-            if self.backend == "openvino-gpu":
-                gpu_devices = [name for name in available if name.upper().startswith("GPU")]
-                if not gpu_devices:
-                    raise RuntimeError(
-                        "OpenVINO GPU was requested but no GPU device is available; "
-                        f"available devices: {available}"
-                    )
-                device = gpu_devices[0]
-                self.precision = "FP16"
-            else:
-                if "CPU" not in available:
-                    raise RuntimeError(
-                        f"OpenVINO CPU was requested but CPU is unavailable: {available}"
-                    )
-                device = "CPU"
-
-            hint = (performance_hint or os.environ.get(
-                "ENSEMBLE_OPENVINO_PERFORMANCE_HINT", "THROUGHPUT"
-            )).strip().upper()
-            if hint not in {"LATENCY", "THROUGHPUT", "CUMULATIVE_THROUGHPUT"}:
-                raise ValueError(f"unsupported OpenVINO performance hint: {hint!r}")
-            self.session = core.compile_model(
-                str(model_path), device, {"PERFORMANCE_HINT": hint}
+    @staticmethod
+    def _resolve_backend(backend: str | None) -> str:
+        selected = (backend or os.environ.get(
+            "ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"
+        )).strip().lower()
+        if selected not in BACKENDS:
+            raise ValueError(
+                f"unsupported embedding backend {selected!r}; "
+                f"choose one of {', '.join(sorted(BACKENDS))}"
             )
-            self.input_names = {str(port.get_any_name()) for port in self.session.inputs}
-            self.output_port = self.session.output(0)
-            self.runtime = f"openvino/{ov.__version__}"
-            self.device = device
+        return selected
+
+    def _init_onnxruntime(
+        self, model_path: Path, threads: int | None, cpu_mem_arena: bool
+    ) -> None:
+        import onnxruntime as ort
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = threads or os.cpu_count() or 1
+        options.enable_cpu_mem_arena = cpu_mem_arena
+        self.session = ort.InferenceSession(
+            str(model_path), options, providers=["CPUExecutionProvider"]
+        )
+        self.input_names = {item.name for item in self.session.get_inputs()}
+        self.runtime = f"onnxruntime/{ort.__version__}"
+        self.device = self.session.get_providers()[0]
+        self.execution_devices = [self.device]
+
+    @staticmethod
+    def _resolve_openvino_hint(performance_hint: str | None) -> str:
+        hint = (performance_hint or os.environ.get(
+            "ENSEMBLE_OPENVINO_PERFORMANCE_HINT", "THROUGHPUT"
+        )).strip().upper()
+        if hint not in OPENVINO_HINTS:
+            raise ValueError(f"unsupported OpenVINO performance hint: {hint!r}")
+        return hint
+
+    def _init_openvino(self, model_path: Path, performance_hint: str | None) -> None:
+        hint = self._resolve_openvino_hint(performance_hint)
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise RuntimeError(
+                f"{self.backend} requires the optional 'openvino' package"
+            ) from exc
+
+        core = ov.Core()
+        available = list(core.available_devices)
+        device = self._select_openvino_device(available)
+        self.session = core.compile_model(
+            str(model_path), device, {"PERFORMANCE_HINT": hint}
+        )
+        self.input_names = {
+            str(port.get_any_name()) for port in self.session.inputs
+        }
+        self.output_port = self.session.output(0)
+        self.runtime = f"openvino/{ov.__version__}"
+        self.device = device
+        self.execution_devices = self._compiled_property(
+            self.session, "EXECUTION_DEVICES", [device]
+        )
+        self.inference_precision_hint = self._compiled_property(
+            self.session, "INFERENCE_PRECISION_HINT", None
+        )
+        if self.inference_precision_hint is not None:
+            self.inference_precision_hint = str(self.inference_precision_hint)
+
+    def _select_openvino_device(self, available: list[str]) -> str:
+        if self.backend == "openvino-gpu":
+            devices = [name for name in available if name.upper().startswith("GPU")]
+            if not devices:
+                raise RuntimeError(
+                    "OpenVINO GPU was requested but no GPU device is available; "
+                    f"available devices: {available}"
+                )
+            return devices[0]
+        if "CPU" not in available:
+            raise RuntimeError(
+                f"OpenVINO CPU was requested but CPU is unavailable: {available}"
+            )
+        return "CPU"
+
+    @staticmethod
+    def _compiled_property(compiled_model: Any, name: str, default: Any) -> Any:
+        try:
+            value = compiled_model.get_property(name)
+        except (AttributeError, RuntimeError, TypeError):
+            return default
+        if name == "EXECUTION_DEVICES":
+            return list(value)
+        return value
 
     def _encode_raw(self, texts: list[str]) -> np.ndarray:
         encodings = self.tokenizer.encode_batch(texts)
