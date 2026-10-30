@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8777
 DB_PATH = os.environ.get("ENSEMBLE_INDEX_DB", os.path.expanduser(
-    "~/.FlossWare/poc-claude-ensemble/shared/data/index/manifest.sqlite3"))
+    "~/.FlossWare/data/sqlite/v1/manifest.sqlite3"))
 MAX_BODY_BYTES = 1_048_576
 MAX_ID_CHARS = 512
 MAX_MANIFEST = 500

@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8772
 DB_PATH = os.environ.get("ENSEMBLE_LEXICAL_DB", os.path.expanduser(
-    "~/.FlossWare/poc-claude-ensemble/shared/data/transcripts/transcripts.db"))
+    "~/.FlossWare/data/sqlite/v1/transcripts.db"))
 MAX_BODY_BYTES = 65_536
 MAX_DOCUMENT_BODY_BYTES = 8 * 1_048_576
 MAX_QUERY_CHARS = 2_000
