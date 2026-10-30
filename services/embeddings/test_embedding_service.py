@@ -147,7 +147,7 @@ class HttpValidationTests(unittest.TestCase):
     def test_non_object_and_malformed_bodies_are_400(self):
         self.assertEqual(post(self.port, raw=b"[]")[0], 400)
         self.assertEqual(post(self.port, raw=b"{oops")[0], 400)
-        self.assertEqual(post(self.port, raw=b"\\xff")[0], 400)
+        self.assertEqual(post(self.port, raw=b"\xff")[0], 400)
 
     def test_empty_body_and_unknown_path(self):
         self.assertEqual(post(self.port, raw=b"")[0], 400)
