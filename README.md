@@ -169,3 +169,41 @@ This change reads the existing `knowledge_chunks` collection. It does not
 re-ingest documents, re-embed chunks, modify the Knowledge or Index databases,
 or enable prompt-time memory injection. Knowledge retrieval is vector-backed;
 the existing lexical service continues to provide transcript lexical results.
+
+## Operational dashboard API
+
+The REST gateway exposes a read-only operational inventory for the POC services.
+It probes each configured service's `GET /health` endpoint and reports the
+HTTP result and probe latency. Service URLs can be overridden with
+`ENSEMBLE_<SERVICE>_URL` (for example, `ENSEMBLE_VECTOR_URL`).
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/dashboard` | Aggregated service health and storage snapshot |
+| `GET /api/v1/services` | Registered service inventory and health |
+| `GET /api/v1/services/{id}` | One service's metadata and health |
+| `GET /api/v1/services/{id}/health` | One service's health probe |
+| `GET /api/v1/services/{id}/metrics` | Service-specific metrics where supported |
+
+The initial inventory includes embedding, vector, lexical, hybrid, reranking,
+chunking, tokenization, index, extraction, intent, ranking, knowledge, and
+memory. VectorDB metrics use its existing `GET /collections` endpoint and
+report collection names, per-collection vector counts, and aggregate vector
+count. The dashboard does not infer health from process presence alone.
+
+Example:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/v1/dashboard | jq
+curl -fsS http://127.0.0.1:8080/api/v1/services | jq
+curl -fsS http://127.0.0.1:8080/api/v1/services/vector/metrics | jq
+```
+
+Health and metrics are deliberately separate. A successful health probe does
+not imply that every service-specific operation or dependency is ready.
+Services without a dedicated metrics contract report metrics as unavailable;
+the gateway does not fabricate zeroes. In particular, cumulative ingestion
+counts (documents discovered/accepted/rejected/failed and chunks generated,
+skipped, and stored) remain unavailable until ingestion runs write durable
+operational records. That is the next instrumentation step, rather than
+attempting to reconstruct totals from log files.
