@@ -28,7 +28,19 @@ MODES = {"document", "query"}
 
 _embedder = None
 _load_error = None
-_MODEL_LOCK = threading.Lock()   # one inference at a time; ONNX sessions are not called concurrently here
+_MODEL_LOCK = threading.Lock()   # one inference at a time; model execution is serialized here
+
+
+def _model_metadata():
+    info = getattr(_embedder, "info", {}) if _embedder is not None else {}
+    return {
+        "backend": info.get("backend"),
+        "device": info.get("device"),
+        "precision": info.get("precision"),
+        "variant": info.get("variant"),
+        "profile": info.get("profile"),
+        "fallback_reason": info.get("fallback_reason"),
+    }
 
 
 def _load():
@@ -60,9 +72,10 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
                                               "error": None if ready else _load_error})
             return
         if self.path == "/model":
-            self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
-                             "max_texts": MAX_TEXTS, "max_text_chars": MAX_TEXT_CHARS,
-                             "modes": sorted(MODES)})
+            self._send(200, {"ok": True, "model": MODEL_ID, "revision": "e9b6763023c676ca8431644204f50c2b100d9aab",
+                             "dimensions": DIMENSIONS, "max_texts": MAX_TEXTS,
+                             "max_text_chars": MAX_TEXT_CHARS, "modes": sorted(MODES),
+                             **_model_metadata()})
             return
         self._error(404, "not_found", "unknown path")
 
@@ -111,7 +124,7 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
             else:
                 vectors = _embedder.embed_documents(texts)
         self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
-                         "embeddings": vectors.tolist()})
+                         "profile": _embedder.profile, "embeddings": vectors.tolist()})
 
     def log_message(self, fmt, *args):
         return
