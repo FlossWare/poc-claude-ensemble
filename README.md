@@ -75,7 +75,7 @@ do not switch inference backends while that process is serving requests.
 To run the hardware-dependent GPU parity tests explicitly:
 
 ```bash
-FLOSSWARE_TEST_OPENVINO=1 python3 -m unittest services/embeddings/test_embedding_service.py
+cd services/embeddings && FLOSSWARE_TEST_OPENVINO=1 python3 -m unittest -v test_embedding_service
 ```
 
 The opt-in tests verify the selected GPU device, FP16 graph, vector shape and
