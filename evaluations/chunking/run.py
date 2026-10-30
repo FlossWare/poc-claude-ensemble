@@ -21,7 +21,7 @@ def main():
    if end>cursor: covered+=end-max(start,cursor); cursor=max(cursor,end)
   cases.append({"case":f["case"],"profile":f["profile"],"input_chars":text_len,"chunk_count":len(records),"timing":summarize_ms(samples),
    "chars_per_second":text_len/(sum(samples)/1000/len(samples)) if samples else None,"deterministic":records==expected,
-   "offsets_valid":all(f["text"][r["start"]:r["end"]]==r["text"] for r in records),"covered_characters_including_overlap":covered,
+   "offsets_valid":all(f["text"][r["start"]:r["end"]]==r["text"] for r in records),"covered_characters":covered,
    "coverage_ratio":(covered / text_len) if text_len else 1.0})
  out=write_result("chunking",{"iterations":a.iterations,"cases":cases},a.output); print(out)
 if __name__=="__main__": main()
