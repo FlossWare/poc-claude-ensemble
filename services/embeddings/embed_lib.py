@@ -163,7 +163,7 @@ class Embedder:
     def _compiled_property(compiled_model: Any, name: str, default: Any) -> Any:
         try:
             value = compiled_model.get_property(name)
-        except (AttributeError, RuntimeError, TypeError):
+        except Exception:  # Runtime/plugin versions expose different optional properties.
             return default
         if name == "EXECUTION_DEVICES":
             return list(value)
