@@ -13,3 +13,5 @@ os.environ.setdefault("ENSEMBLE_SELECTION_LEDGER", os.path.join(_TEST_ROOT, "sel
 with socket.socket() as _probe:
     _probe.bind(("127.0.0.1", 0))
     os.environ.setdefault("ENSEMBLE_THOMPSON_URL", f"http://127.0.0.1:{_probe.getsockname()[1]}")
+
+os.environ.setdefault("ENSEMBLE_REVIEW_LEDGER", os.path.join(_TEST_ROOT, "reviews.jsonl"))

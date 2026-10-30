@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from providers import ClaudeCodeProvider, ModelProvider, ModelRequest, build_model_request
+from arbitration import review_ledger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -505,6 +506,11 @@ class ArbitrationOrchestrator:
             "refusing to fabricate a model response"
         )
 
+    def _review_id(self):
+        if getattr(self, "_run_review_id", None) is None:
+            self._run_review_id = review_ledger.new_review_id(getattr(self, "task_description", ""))
+        return self._run_review_id
+
     def run(self) -> str:
         if not self.phases:
             raise ValueError("At least one arbitration phase is required")
@@ -525,6 +531,8 @@ class ArbitrationOrchestrator:
                 )
 
             arbiter_result = self._run_arbiter(phase_config, worker_results, current_context)
+            review_ledger.record_phase(self._review_id(), self.task_type.value if hasattr(self.task_type, "value")
+                                       else str(self.task_type), phase_config.phase, worker_results, arbiter_result)
             self.results.append((worker_results, arbiter_result))
             self.context_manager.add_stage_result(phase_config.phase, worker_results, arbiter_result)
             current_context = self.context_manager.get_stage_context()
