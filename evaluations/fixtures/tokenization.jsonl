@@ -1,0 +1,4 @@
+{"case":"compound-service","text":"memory-service calls graph.api_v1","expected_terms":["memory-service","memory","service","calls","graph.api_v1","graph","api","v1"]}
+{"case":"paths-and-uuid","text":"/home/user/project/src/main.py 550e8400-e29b-41d4-a716-446655440000","expected_terms":["home","user","project","src","main.py","main","py","550e8400-e29b-41d4-a716-446655440000"]}
+{"case":"unicode-casefold","text":"Straße CAFÉ naïve","expected_terms":["straße","café","naïve"]}
+{"case":"punctuation","text":"JSON: parser_error, trailing-comma!","expected_terms":["json","parser_error","parser","error","trailing-comma","trailing","comma"]}
