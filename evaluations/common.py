@@ -39,7 +39,7 @@ def host_metadata() -> dict:
                 break
     except OSError:
         pass
-    return {"hostname": platform.node(), "os": platform.platform(), "kernel": platform.release(),
+    return {"hostname": platform.node(), "os": platform.platform(), "kernel": platform.release(), "python": platform.python_version(),
             "architecture": platform.machine(), "cpu": cpu, "ram_bytes": ram,
             "gpu_summary": command_output(["bash", "-lc", "lspci 2>/dev/null | grep -Ei 'vga|3d|display' | head -10"]) if sys.platform.startswith("linux") else None}
 
@@ -47,7 +47,7 @@ def host_metadata() -> dict:
 def git_metadata(root: Path) -> dict:
     def git(*args):
         return command_output(["git", "-C", str(root), *args])
-    return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+    return {"commit": git("rev-parse", "HEAD"), "branch": git("branch", "--show-current"), "dirty": bool(git("status", "--porcelain"))}
 
 
 def percentile(values: list[float], pct: float) -> float | None:
