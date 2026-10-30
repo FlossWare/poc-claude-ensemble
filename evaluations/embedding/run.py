@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--output", default="evaluations/results")
     args = parser.parse_args()
+    if args.threads < 1 or args.warmups < 0 or args.iterations < 1 or min(args.batch_sizes) < 1:
+        parser.error("threads and batch sizes must be positive; warmups must be non-negative; iterations must be positive")
 
     from embed_lib import Embedder, MODEL_DIR, MODEL_ID, MODEL_REVISION, DIMENSIONS
     model_path = Path(MODEL_DIR) / "onnx" / args.variant
