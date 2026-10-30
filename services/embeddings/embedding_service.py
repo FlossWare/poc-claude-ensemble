@@ -3,13 +3,14 @@
 
 Endpoints
   GET  /health       liveness; reports whether the model loaded
-  GET  /model        model identity, dimensions, limits
+  GET  /model        model identity, dimensions, limits, and runtime provenance
   POST /embeddings   {"texts": [...], "mode": "document" | "query"}
                      -> {"ok": true, "model": ..., "dimensions": ..., "embeddings": [[...], ...]}
 
-Only loopback binds are accepted. Model calls are serialized with a lock.
+The default backend remains ONNX Runtime CPU FP32. OpenVINO CPU/GPU are
+explicit opt-ins through ENSEMBLE_EMBED_BACKEND. GPU selection fails closed
+rather than silently falling back to CPU.
 """
-
 import json
 import os
 import sys
@@ -17,7 +18,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from embed_lib import DIMENSIONS, MODEL_ID, Embedder  # noqa: E402
+from embed_lib import DIMENSIONS, MODEL_ID, MODEL_REVISION, Embedder  # noqa: E402
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8770
@@ -28,15 +29,40 @@ MODES = {"document", "query"}
 
 _embedder = None
 _load_error = None
-_MODEL_LOCK = threading.Lock()   # one inference at a time; ONNX sessions are not called concurrently here
+_MODEL_LOCK = threading.Lock()
 
 
 def _load():
     global _embedder, _load_error
+    _embedder = None
+    _load_error = None
     try:
-        _embedder = Embedder(threads=int(os.environ.get("ENSEMBLE_EMBED_THREADS", "8")))
-    except Exception as exc:  # reported via /health and 503 responses
+        _embedder = Embedder(
+            threads=int(os.environ.get("ENSEMBLE_EMBED_THREADS", "8")),
+            backend=os.environ.get("ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
+            performance_hint=os.environ.get("ENSEMBLE_OPENVINO_PERFORMANCE_HINT"),
+        )
+    except Exception as exc:
         _load_error = str(exc)
+
+
+def _runtime_metadata():
+    backend = getattr(
+        _embedder, "backend",
+        os.environ.get("ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
+    )
+    return {
+        "backend": backend,
+        "runtime": getattr(_embedder, "runtime", None),
+        "device": getattr(_embedder, "device", None),
+        "precision": getattr(_embedder, "precision", None),
+        "graph_precision": getattr(_embedder, "graph_precision", None),
+        "inference_precision_hint": getattr(
+            _embedder, "inference_precision_hint", None
+        ),
+        "execution_devices": getattr(_embedder, "execution_devices", None),
+        "model_revision": MODEL_REVISION,
+    }
 
 
 class EmbeddingHandler(BaseHTTPRequestHandler):
@@ -56,13 +82,24 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             ready = _embedder is not None
-            self._send(200 if ready else 503, {"ok": ready, "service": "embedding", "model_loaded": ready,
-                                              "error": None if ready else _load_error})
+            self._send(200 if ready else 503, {
+                "ok": ready,
+                "service": "embedding",
+                "model_loaded": ready,
+                "error": None if ready else _load_error,
+                **_runtime_metadata(),
+            })
             return
         if self.path == "/model":
-            self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
-                             "max_texts": MAX_TEXTS, "max_text_chars": MAX_TEXT_CHARS,
-                             "modes": sorted(MODES)})
+            self._send(200, {
+                "ok": True,
+                "model": MODEL_ID,
+                "dimensions": DIMENSIONS,
+                "max_texts": MAX_TEXTS,
+                "max_text_chars": MAX_TEXT_CHARS,
+                "modes": sorted(MODES),
+                **_runtime_metadata(),
+            })
             return
         self._error(404, "not_found", "unknown path")
 
@@ -110,8 +147,12 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
                 vectors = _embedder.embed_queries(texts)
             else:
                 vectors = _embedder.embed_documents(texts)
-        self._send(200, {"ok": True, "model": MODEL_ID, "dimensions": DIMENSIONS,
-                         "embeddings": vectors.tolist()})
+        self._send(200, {
+            "ok": True,
+            "model": MODEL_ID,
+            "dimensions": DIMENSIONS,
+            "embeddings": vectors.tolist(),
+        })
 
     def log_message(self, fmt, *args):
         return
