@@ -262,7 +262,7 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
         knowledge_list = []
     try:
         lexical = lexical_future.result()
-        lexical_list = [{"key": r["text_sha"], "text": r["text"], "source": "lexical",
+        lexical_list = [{"key": r["text_sha"], "text": r["text"], "source": "lexical", "source_type": "transcript",
                          "role": r["role"], "project": r["project"], "session_id": r["session_id"],
                          "is_subagent": r["is_subagent"]} for r in lexical["results"]]
     except DependencyError as exc:
@@ -275,7 +275,7 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     for record in vector_list + lexical_list + knowledge_list:
         records[record["key"]] = {**records.get(record["key"], {}), **record}
     lists = {"vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
-             "transcript_lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)],
+             "lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)],
              "knowledge_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(knowledge_list)]}
     try:
         ranked = _call("ranking", f"{RANKING_URL}/rank", {"lists": lists, "top_k": CANDIDATES, "k": RRF_K})
