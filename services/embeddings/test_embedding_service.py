@@ -18,6 +18,9 @@ class StubEmbedder:
 
     def __init__(self, delay=0.0):
         self.delay = delay
+        self.profile = "nomic-embed-text-v1.5@fp32"
+        self.info = {"backend": "stub", "device": "CPU", "precision": "FP32",
+                     "variant": "model.onnx", "profile": self.profile, "fallback_reason": None}
         self.in_flight = 0
         self.max_in_flight = 0
         self._guard = threading.Lock()
@@ -82,6 +85,9 @@ class HttpValidationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual((body["dimensions"], body["max_texts"]), (DIMENSIONS, es.MAX_TEXTS))
         self.assertEqual(body["modes"], ["document", "query"])
+        self.assertEqual(body["profile"], self.stub.profile)
+        self.assertEqual((body["backend"], body["device"], body["precision"]),
+                         ("stub", "CPU", "FP32"))
 
     def test_health_is_503_until_model_loads(self):
         es._embedder = None
@@ -99,6 +105,7 @@ class HttpValidationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual((body["dimensions"], len(body["embeddings"])), (DIMENSIONS, 2))
         self.assertEqual(len(body["embeddings"][0]), DIMENSIONS)
+        self.assertEqual(body["profile"], self.stub.profile)
 
     def test_mode_defaults_to_document_and_unknown_mode_is_400(self):
         self.assertEqual(post(self.port, {"texts": ["a sample text"]})[0], 200)
