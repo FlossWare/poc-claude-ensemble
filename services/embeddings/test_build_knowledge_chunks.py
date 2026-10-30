@@ -290,6 +290,21 @@ def urllib_quote(value):
     return quote(value, safe="")
 
 
+class EmbedBatchSettingTests(unittest.TestCase):
+    def test_batch_defaults_to_64_and_reads_environment(self):
+        import importlib
+        import subprocess
+        code = "import build_knowledge_chunks as bk; print(bk.EMBED_BATCH)"
+        here = os.path.dirname(os.path.abspath(__file__))
+        env = {k: v for k, v in os.environ.items() if k != "ENSEMBLE_KNOWLEDGE_EMBED_BATCH"}
+        default = subprocess.run([sys.executable, "-c", code], cwd=here, env=env,
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        env["ENSEMBLE_KNOWLEDGE_EMBED_BATCH"] = "32"
+        overridden = subprocess.run([sys.executable, "-c", code], cwd=here, env=env,
+                                    capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual((default, overridden), ("64", "32"))
+
+
 class socket_free_url:
     """A loopback URL with nothing listening on it."""
 

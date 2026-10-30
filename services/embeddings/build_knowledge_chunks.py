@@ -34,7 +34,7 @@ COLLECTION = "knowledge_chunks"
 CHUNK_PROFILE = "window-v1"
 PROFILES = {"chunking": "window-v1@1", "embedding": "nomic-embed-text-v1.5@fp32", "vector": "knowledge_chunks@1"}
 SOURCES = ("rfc", "patents", "research_paper", "research", "books")
-EMBED_BATCH = 64        # the embedding service's per-request cap
+EMBED_BATCH = int(os.environ.get("ENSEMBLE_KNOWLEDGE_EMBED_BATCH", "64"))  # texts per embedding request; the service caps at 64
 TIMEOUT = 600
 
 
