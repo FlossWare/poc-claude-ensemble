@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ KNOWLEDGE_URL = os.environ.get("ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781"
 COLLECTION = "knowledge_chunks"
 CHUNK_PROFILE = "window-v1"
 PROFILES = {"chunking": "window-v1@1", "embedding": "nomic-embed-text-v1.5@fp32", "vector": "knowledge_chunks@1"}
-SOURCES = ("rfc", "patents", "research_paper", "research")
+SOURCES = ("rfc", "patents", "research_paper", "research", "books")
 EMBED_BATCH = 64        # the embedding service's per-request cap
 TIMEOUT = 600
 
@@ -84,6 +85,27 @@ def ledger_rows():
                 log(f"skipped non-object ledger line {number}")
 
 
+def pdf_text(path):
+    """Plain text of a PDF through pdftotext. Returns an empty string when the file has no text layer."""
+    result = subprocess.run(["pdftotext", "-q", path, "-"], capture_output=True, timeout=600)
+    if result.returncode != 0:
+        raise ValueError(f"pdftotext failed on {os.path.basename(path)}")
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+def read_record(row):
+    """The document's title and text. Scraped sources store JSON records; books are PDFs read directly."""
+    record_path = os.path.join(RAW, row["record"])
+    if record_path.lower().endswith(".pdf"):
+        title = os.path.splitext(os.path.basename(record_path))[0]
+        return title, pdf_text(record_path)
+    with open(record_path, encoding="utf-8") as handle:
+        record = json.load(handle)
+    if not isinstance(record, dict):
+        raise ValueError("record is not an object")
+    return (record.get("title") or row.get("url") or ""), (record.get("content") or "")
+
+
 def documents(sources):
     """Yield every ledger document of the selected sources whose raw record can be read."""
     wanted = set(sources)
@@ -96,19 +118,14 @@ def documents(sources):
             log(f"skipped {row.get('url')}: fetched_at missing or invalid")
             continue
         try:
-            with open(os.path.join(RAW, row["record"]), encoding="utf-8") as handle:
-                record = json.load(handle)
-        except (OSError, ValueError, KeyError):
+            title, content = read_record(row)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             log(f"skipped unreadable record for {row.get('url')}")
             continue
-        if not isinstance(record, dict):
-            log(f"skipped non-object record for {row.get('url')}")
-            continue
-        content = record.get("content") or ""
         if not content.strip():
             continue
         yield {"url": row["url"], "source": row["source"], "fetched_at": row.get("fetched_at"),
-               "title": (record.get("title") or row["url"])[:300], "content": content}
+               "title": (title or row["url"])[:300], "content": content}
 
 
 def store_knowledge(doc):

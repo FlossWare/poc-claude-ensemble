@@ -215,6 +215,24 @@ class IngestTests(KnowledgeIngestTestCase):
         self.assertGreater(summary["chunks_stored"], 0)
 
 
+class BooksSourceTests(KnowledgeIngestTestCase):
+    def test_pdf_book_is_read_through_pdftotext_and_ingested(self):
+        os.makedirs(os.path.join(self.raw, "books"), exist_ok=True)
+        with open(os.path.join(self.raw, "books", "Guide.pdf"), "wb") as handle:
+            handle.write(b"%PDF-1.4 placeholder")
+        with open(self.ledger, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"url": "file:///x/Guide.pdf", "source": "books",
+                                     "fetched_at": "2026-07-11T10:00:00", "record": "books/Guide.pdf"}) + "\n")
+        real = bk.pdf_text
+        bk.pdf_text = lambda path: body_for(PARAGRAPHS)
+        try:
+            summary = bk.run(["books"])
+        finally:
+            bk.pdf_text = real
+        self.assertEqual((summary["documents"], summary["accepted"]), (1, 1))
+        self.assertGreater(summary["chunks_stored"], 0)
+
+
 class RevisionSequenceTests(unittest.TestCase):
     def test_later_fetch_is_a_larger_sequence(self):
         self.assertGreater(bk.revision_sequence("2026-08-01T10:00:00"), bk.revision_sequence("2026-07-01T10:00:00"))

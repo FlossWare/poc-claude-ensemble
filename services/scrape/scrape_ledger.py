@@ -11,7 +11,7 @@ import time
 
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
 LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SCRAPE_LEDGER", "~/.FlossWare/ledger/scrape/fetches.jsonl"))
-SOURCES = ["patents", "rfc", "research", "research_paper"]
+SOURCES = ["patents", "rfc", "research", "research_paper", "books"]
 
 
 def load_ledger():
@@ -29,6 +29,22 @@ def already_fetched(url):
     return url in load_ledger()
 
 
+def _add_book(out, seen, root, name):
+    """Add one PDF from the books source. Its identity is its file path, since it has no web URL."""
+    path = os.path.join(root, name)
+    url = "file://" + path
+    if url in seen:
+        return 0
+    with open(path, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    row = {"schema_version": 1, "producer": "scrape", "kind": "fetch", "url": url, "source": "books",
+           "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(os.path.getmtime(path))),
+           "record": os.path.join("books", name), "sha256": digest}
+    out.write(json.dumps(row) + "\n")
+    seen[url] = row
+    return 1
+
+
 def build():
     seen = load_ledger()
     os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
@@ -39,6 +55,10 @@ def build():
             if not os.path.isdir(root):
                 continue
             for name in os.listdir(root):
+                if source == "books":
+                    if name.lower().endswith(".pdf"):
+                        added += _add_book(out, seen, root, name)
+                    continue
                 if not name.endswith(".json"):
                     continue
                 path = os.path.join(root, name)
