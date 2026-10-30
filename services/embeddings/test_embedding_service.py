@@ -165,6 +165,16 @@ class OpenVINOFailurePathTests(unittest.TestCase):
         self.assertEqual(embedder.inference_precision_hint, "f16")
         self.assertEqual(embedder.device, "GPU.0")
 
+    def test_openvino_cpu_uses_fp32_graph_and_reports_cpu(self):
+        fake = self.fake_openvino(["CPU"])
+        with patch.dict(sys.modules, {"openvino": fake}):
+            embedder = Embedder(backend="openvino-cpu")
+        self.assertEqual(embedder.model_file, "model.onnx")
+        self.assertEqual(embedder.graph_precision, "FP32")
+        self.assertEqual(embedder.precision, "FP32")
+        self.assertEqual(embedder.execution_devices, ["CPU"])
+        self.assertEqual(embedder.device, "CPU")
+
 
 class HttpValidationTests(unittest.TestCase):
     @classmethod
