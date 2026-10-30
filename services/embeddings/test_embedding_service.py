@@ -26,6 +26,9 @@ class StubEmbedder:
     runtime = "onnxruntime/test"
     device = "CPUExecutionProvider"
     precision = "FP32"
+    graph_precision = "FP32"
+    inference_precision_hint = None
+    execution_devices = ["CPUExecutionProvider"]
 
     def __init__(self, delay=0.0):
         self.delay = delay
@@ -193,6 +196,8 @@ class HttpValidationTests(unittest.TestCase):
         self.assertEqual(body["backend"], "onnxruntime-cpu")
         self.assertEqual(body["device"], "CPUExecutionProvider")
         self.assertEqual(body["precision"], "FP32")
+        self.assertEqual(body["graph_precision"], "FP32")
+        self.assertEqual(body["execution_devices"], ["CPUExecutionProvider"])
         self.assertTrue(body["model_revision"])
 
     def test_health_reports_selected_backend(self):
