@@ -11,7 +11,7 @@ import chromadb
 
 from embed_lib import DIMENSIONS, MODEL_ID
 
-STORE_DIR = os.path.expanduser(os.environ.get("ENSEMBLE_VECTOR_STORE", "~/.FlossWare/data/chromadb/1.5.9"))
+STORE_DIR = os.path.expanduser(os.environ.get("ENSEMBLE_VECTOR_STORE", "~/.FlossWare/poc-claude-ensemble/data/chromadb/1.5.9"))
 
 
 def client():
