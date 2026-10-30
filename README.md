@@ -137,3 +137,35 @@ The services run from `shared/` in the working deployment and are copied here as
 - Keyword analysis: index text and queries go through the Tokenization service (`lexical-v1`). Existing databases are upgraded with `services/embeddings/migrate_lexical_tokenization.py`, run with the lexical service stopped.
 - Sourced documents: `services/embeddings/build_knowledge_chunks.py` stores each document as a Knowledge record, chunks it through Chunking, and writes vectors to `knowledge_chunks`. Lexical indexing covers transcript sessions only.
 - Not yet built: Thompson outcome recording from transcripts, and worker/arbiter quality monitoring.
+
+
+## Knowledge retrieval
+
+The hybrid search service queries both the existing `transcript_text` and
+`knowledge_chunks` vector collections. Knowledge candidates retain
+`source_type: "knowledge"`, origin, source URL, document title, chunk ID and
+position, and content SHA-256. Transcript candidates retain
+`source_type: "transcript"`. Both candidate types participate in the same
+reciprocal-rank fusion and optional cross-encoder reranking; transcript lexical
+search remains an independent leg.
+
+For knowledge-only retrieval, call:
+
+```bash
+curl -s http://127.0.0.1:8773/knowledge/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"your question","top_k":10}'
+```
+
+Combined retrieval remains:
+
+```bash
+curl -s http://127.0.0.1:8773/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"your question","top_k":10}'
+```
+
+This change reads the existing `knowledge_chunks` collection. It does not
+re-ingest documents, re-embed chunks, modify the Knowledge or Index databases,
+or enable prompt-time memory injection. Knowledge retrieval is vector-backed;
+the existing lexical service continues to provide transcript lexical results.
