@@ -28,6 +28,7 @@ from policy import Policy, evaluate
 from collaboration import CollaborationOrchestrator
 from collaboration.reviewer import MCPReviewer
 from shared.operational_memory import OperationalMemoryWriter
+from operational_dashboard import OperationalDashboard
 
 LOG = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
@@ -329,6 +330,7 @@ class EnsembleApplication:
         provenance_path = os.environ.get("ENSEMBLE_DECISION_PROVENANCE_FILE")
         self.provenance = DecisionProvenanceStore(provenance_path)
         self.memory_writer = OperationalMemoryWriter()
+        self.operational_dashboard = OperationalDashboard()
         experiment_path = os.environ.get("ENSEMBLE_EXPERIMENT_FILE")
         self.experiments = ExperimentStore(experiment_path)
         self.decision = DecisionSupportAPI(
@@ -367,6 +369,12 @@ class EnsembleApplication:
         parts = route.split("/", 1)
         service = parts[0]
         remainder = "/" + parts[1] if len(parts) == 2 else "/"
+        if service == "dashboard":
+            self._handle_operational(handler, service, remainder)
+            return
+        if service == "services":
+            self._handle_operational(handler, service, remainder)
+            return
         if service == "health":
             _send(handler, HTTPStatus.OK, {"ok": True, "service": "claude-ensemble"})
             return
@@ -421,6 +429,31 @@ class EnsembleApplication:
             LOG.exception("REST request failed")
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "internal server error"})
+
+    def _handle_operational(self, handler: BaseHTTPRequestHandler, service: str, path: str) -> None:
+        """Expose the read-only service inventory and aggregated operational snapshot."""
+        if handler.command != "GET":
+            _send(handler, HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
+            return
+        if service == "dashboard" and path == "/":
+            _send(handler, HTTPStatus.OK, self.operational_dashboard.dashboard())
+            return
+        if service == "services" and path == "/":
+            _send(handler, HTTPStatus.OK, self.operational_dashboard.services())
+            return
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 1:
+            result = self.operational_dashboard.service(parts[0])
+        elif len(parts) == 2 and parts[1] == "health":
+            result = self.operational_dashboard.service(parts[0])
+        elif len(parts) == 2 and parts[1] == "metrics":
+            result = self.operational_dashboard.service_metrics(parts[0])
+        else:
+            result = None
+        if result is None:
+            _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "service or operational endpoint not found"})
+            return
+        _send(handler, HTTPStatus.OK, result)
 
     def _handle_readiness(self, handler: BaseHTTPRequestHandler) -> None:
         """Report downstream readiness separately from gateway liveness."""
