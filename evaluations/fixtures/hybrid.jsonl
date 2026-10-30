@@ -1,0 +1,2 @@
+{"query_id":"tls-renewal","relevance":{"tls-01":3,"tls-02":2,"tax-01":0,"parser-01":0,"backup-01":0},"vector":["tax-01","tls-01","backup-01","tls-02"],"lexical":["tls-02","parser-01","tls-01","tax-01"]}
+{"query_id":"parser-trailing-comma","relevance":{"parser-01":3,"parser-02":3,"tls-01":0,"db-backup":0,"parser-03":1},"vector":["tls-01","parser-02","parser-03","parser-01"],"lexical":["parser-01","db-backup","parser-02","tls-01"]}
