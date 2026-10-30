@@ -2,8 +2,9 @@
 
 Example: python3 evaluations/llm/run_ollama.py --models qwen3.5:2b
 """
-import argparse,json,subprocess,time,urllib.error,urllib.request
+import argparse,json,subprocess,sys,time,urllib.error,urllib.request
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from common import command_output,write_result
 
 
