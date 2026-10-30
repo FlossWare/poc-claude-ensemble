@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+"#!/usr/bin/env python3
 """Loopback REST embedding service for Claude Ensemble.
 
 Endpoints
@@ -56,6 +56,11 @@ def _runtime_metadata():
         "runtime": getattr(_embedder, "runtime", None),
         "device": getattr(_embedder, "device", None),
         "precision": getattr(_embedder, "precision", None),
+        "graph_precision": getattr(_embedder, "graph_precision", None),
+        "inference_precision_hint": getattr(
+            _embedder, "inference_precision_hint", None
+        ),
+        "execution_devices": getattr(_embedder, "execution_devices", None),
         "model_revision": MODEL_REVISION,
     }
 
