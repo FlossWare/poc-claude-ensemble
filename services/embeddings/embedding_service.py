@@ -1,4 +1,4 @@
-"#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Loopback REST embedding service for Claude Ensemble.
 
 Endpoints
