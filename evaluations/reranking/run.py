@@ -13,6 +13,7 @@ def metrics(ranked,k=10):
 
 def main():
  p=argparse.ArgumentParser(description=__doc__); p.add_argument("--batch-sizes",type=int,nargs="+",default=[8,16,32]); p.add_argument("--warmups",type=int,default=1); p.add_argument("--iterations",type=int,default=3); p.add_argument("--output",default="evaluations/results"); a=p.parse_args()
+ if min(a.batch_sizes)<1 or a.warmups<0 or a.iterations<1: p.error("batch sizes and iterations must be positive; warmups must be non-negative")
  import reranking_service as rs
  from sentence_transformers import CrossEncoder
  model_dir=Path(rs.MODEL_DIR)
