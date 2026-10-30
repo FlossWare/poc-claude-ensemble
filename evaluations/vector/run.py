@@ -37,10 +37,11 @@ def main():
     parser.add_argument("--dimensions", type=int, default=768)
     parser.add_argument("--top-k", type=int, nargs="+", default=[5, 10, 20, 50])
     parser.add_argument("--queries", type=int, default=100)
-    parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20261030)
     parser.add_argument("--output", default="evaluations/results")
     args = parser.parse_args()
+    if min(args.sizes) < 1 or args.dimensions < 1 or args.queries < 1 or min(args.top_k) < 1:
+        parser.error("sizes, dimensions, queries, and top-k values must be positive")
     try:
         import chromadb
     except ImportError:
