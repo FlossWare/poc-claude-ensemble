@@ -17,6 +17,7 @@ def rate(tokens,duration_ns): return tokens/(duration_ns/1e9) if tokens and dura
 
 def main():
  p=argparse.ArgumentParser(description=__doc__); p.add_argument("--models",nargs="+",required=True); p.add_argument("--host",default="http://127.0.0.1:11434"); p.add_argument("--iterations",type=int,default=2); p.add_argument("--context",type=int,default=8192); p.add_argument("--output",default="evaluations/results"); a=p.parse_args()
+ if a.iterations<1 or a.context<1: p.error("iterations and context must be positive")
  root=Path(__file__).resolve().parents[1]; prompts=[json.loads(x) for x in (root/"fixtures"/"llm-prompts.jsonl").read_text().splitlines() if x.strip()]
  try: tags=request(a.host,"/api/tags",timeout=5)
  except Exception as exc:p.error(f"Ollama API unavailable at {a.host}: {exc}")
