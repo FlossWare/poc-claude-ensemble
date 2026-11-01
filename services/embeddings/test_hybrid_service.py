@@ -607,3 +607,47 @@ class PartialSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KnowledgeRetrievalTests(unittest.TestCase):
+    def test_knowledge_result_preserves_document_and_chunk_provenance(self):
+        hit = hs._knowledge_result({
+            "id": "chunk-revision-id",
+            "document": "A sourced knowledge chunk",
+            "score": 0.91,
+            "metadata": {
+                "kind": "knowledge_chunk", "source": "rfc", "url": "https://example.test/rfc/1",
+                "title": "Example RFC", "chunk_id": "chunk-7", "chunk": 6, "chunks": 12,
+                "content_sha256": "a" * 64,
+            },
+        })
+        self.assertEqual(hit["key"], "chunk-revision-id")
+        self.assertEqual(hit["source_type"], "knowledge")
+        self.assertEqual(hit["origin"], "rfc")
+        self.assertEqual(hit["url"], "https://example.test/rfc/1")
+        self.assertEqual(hit["title"], "Example RFC")
+        self.assertEqual(hit["chunk_id"], "chunk-7")
+        self.assertEqual(hit["chunk_index"], 6)
+        self.assertEqual(hit["chunk_count"], 12)
+        self.assertEqual(hit["content_sha256"], "a" * 64)
+
+    def test_knowledge_search_uses_knowledge_collection_only(self):
+        calls = []
+        def fake_call(name, url, payload=None, method="POST", timeout=None):
+            calls.append((name, url, payload))
+            if name == "embedding":
+                return {"ok": True, "embeddings": [[0.0] * 768]}
+            if name == "knowledge-vector":
+                return {"ok": True, "results": [{
+                    "id": "k1", "document": "knowledge text", "metadata": {
+                        "kind": "knowledge_chunk", "source": "paper", "url": "https://example.test/paper",
+                        "title": "Paper", "chunk_id": "c1", "chunk": 0, "chunks": 1,
+                        "content_sha256": "b" * 64,
+                    }}]}
+            raise AssertionError(name)
+        with mock.patch.object(hs, "_call", side_effect=fake_call):
+            result = hs.knowledge_search("query", 5, rerank=False)
+        self.assertEqual(result["retrieval"], "knowledge-only")
+        self.assertEqual([r["source_type"] for r in result["results"]], ["knowledge"])
+        self.assertTrue(any("/collections/knowledge_chunks/query" in call[1] for call in calls))
+        self.assertFalse(any("/collections/transcript_text/query" in call[1] for call in calls))
