@@ -526,6 +526,30 @@ class KnowledgeSearchTests(unittest.TestCase):
         self.assertEqual({r["key"] for r in results}, {"v1", "v2"})
         self.assertTrue(all("score" in r for r in results))
 
+    def test_identifier_query_puts_exact_match_first(self):
+        # The vector leg ranks an unrelated RFC first; the exact-match leg ranks the identifier's document first.
+        responses = {
+            f"{hs.VECTOR_URL}/collections/{hs.KNOWLEDGE_COLLECTION}/query": {"results": [
+                {"id": "v-other", "document": "other", "score": 0.9,
+                 "metadata": {"chunk_id": "c-other", "url": "https://u/823", "source": "rfc", "title": "RFC 823"}},
+                {"id": "v-8259", "document": "json text", "score": 0.5,
+                 "metadata": {"chunk_id": "c-8259", "url": "https://u/8259", "source": "rfc", "title": "RFC 8259"}}]},
+            f"{hs.LEXICAL_URL}/knowledge/search": {"ok": True, "results": [
+                {"key": "v-8259", "vector_id": "v-8259", "chunk_id": "c-8259", "url": "https://u/8259",
+                 "source": "rfc", "title": "RFC 8259", "text": "json text"}]},
+        }
+        with mock.patch.object(hs, "_call", self.fake_call(responses)):
+            results = hs._knowledge_search("RFC 8259", [0.1] * 768, [])
+        self.assertEqual(results[0]["key"], "v-8259")
+
+    def test_plain_query_keeps_equal_weights(self):
+        self.assertEqual(hs.exact_weight("embedding service restart"), 1.0)
+        self.assertEqual(hs.exact_weight("RFC 8259"), hs.IDENTIFIER_EXACT_WEIGHT)
+
+    def test_weighted_fusion_with_equal_weights_matches_plain_fusion(self):
+        lists = [[{"key": "a"}, {"key": "b"}], [{"key": "b"}, {"key": "c"}]]
+        self.assertEqual(hs.fuse_weighted([(1.0, lists[0]), (1.0, lists[1])]), hs.fuse(lists))
+
     def test_lexical_failure_degrades_but_keeps_vector_hits(self):
         responses = {
             f"{hs.VECTOR_URL}/collections/{hs.KNOWLEDGE_COLLECTION}/query": {"results": [

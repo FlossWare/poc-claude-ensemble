@@ -102,15 +102,28 @@ def _call(name, url, payload=None, method="POST", timeout=None):
     return body
 
 
-def fuse(ranked_lists):
+def fuse_weighted(weighted_lists):
+    """Reciprocal-rank fusion where each list carries a weight. Equal weights give plain RRF."""
     scores, records = {}, {}
-    for ranked in ranked_lists:
+    for weight, ranked in weighted_lists:
         for rank, record in enumerate(ranked, start=1):
             key = record["key"]
-            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+            scores[key] = scores.get(key, 0.0) + weight / (RRF_K + rank)
             records.setdefault(key, record)
     order = sorted(scores, key=lambda k: -scores[k])
     return [dict(records[k], score=round(scores[k], 6)) for k in order]
+
+
+def fuse(ranked_lists):
+    return fuse_weighted([(1.0, ranked) for ranked in ranked_lists])
+
+
+IDENTIFIER_EXACT_WEIGHT = 2.0   # exact-match weight when the query contains an identifier (a token with a digit)
+
+
+def exact_weight(query):
+    """Identifiers such as RFC numbers, patent numbers, and versions should match exactly first."""
+    return IDENTIFIER_EXACT_WEIGHT if re.search(r"\d", query) else 1.0
 
 
 SEARCH_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SEARCH_LEDGER", "~/.FlossWare/ledger/searches/searches.jsonl"))
@@ -240,7 +253,7 @@ def _knowledge_search(query, embedding, degraded, limit=KNOWLEDGE_TOP):
             exact_list.append(records[record["key"]])
     except DependencyError as exc:
         degraded.append(f"knowledge:{exc.name}")
-    fused = fuse([vector_list, exact_list])[:limit]
+    fused = fuse_weighted([(1.0, vector_list), (exact_weight(query), exact_list)])[:limit]
     for record in fused:
         record["text"] = record["text"][:KNOWLEDGE_TEXT_CHARS]
     return fused
