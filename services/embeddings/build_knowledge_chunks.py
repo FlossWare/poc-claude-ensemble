@@ -28,6 +28,7 @@ LEDGER = os.path.join(HOME, ".FlossWare/ledger/scrape/fetches.jsonl")
 LOG = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/state/logs/embed-knowledge-chunks.log")
 EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
 VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
+LEXICAL_URL = os.environ.get("ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
 CHUNKING_URL = os.environ.get("ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
 KNOWLEDGE_URL = os.environ.get("ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781")
 COLLECTION = "knowledge_chunks"
@@ -161,11 +162,20 @@ def existing(ids):
     return found
 
 
+def knowledge_rows(batch):
+    """Exact-match index rows for a batch of (vector_id, text, metadata) triples."""
+    return [{"chunk_id": meta["chunk_id"], "vector_id": vid, "url": meta["url"], "source": meta["source"],
+             "title": meta["title"], "text": text} for vid, text, meta in batch]
+
+
 def flush(batch):
     texts = [text for _, text, _ in batch]
     embedded = post(f"{EMBEDDING_URL}/embeddings", {"texts": texts, "mode": "document"})
     if len(embedded["embeddings"]) != len(texts):
         raise RuntimeError(f"embedding service returned {len(embedded['embeddings'])} vectors for {len(texts)} texts")
+    # Exact-match rows are written first. The write is idempotent, so if the vector write below fails,
+    # a rerun finds the vector missing and writes the same rows again without duplicating them.
+    post(f"{LEXICAL_URL}/knowledge/documents", {"chunks": knowledge_rows(batch)})
     post(f"{VECTOR_URL}/collections/{COLLECTION}/upsert", {
         "ids": [vid for vid, _, _ in batch], "embeddings": embedded["embeddings"],
         "documents": texts, "metadatas": [meta for _, _, meta in batch]})

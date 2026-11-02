@@ -211,6 +211,20 @@ class HttpTests(VectorTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["results"][0]["id"], "h2")
 
+    def test_records_pages_through_stored_records_without_embeddings(self):
+        self.call(f"/collections/{COLLECTION}/upsert", {
+            "ids": ["r1", "r2", "r3"], "embeddings": [basis(20), basis(21), basis(22)],
+            "documents": ["page one", "page two", "page three"], "metadatas": [meta(), meta(), meta()]})
+        status, body = self.call(f"/collections/{COLLECTION}/records?offset=0&limit=2", method="GET")
+        self.assertEqual((status, body["total"], len(body["records"])), (200, 3, 2))
+        self.assertNotIn("embedding", body["records"][0])
+        status, body = self.call(f"/collections/{COLLECTION}/records?offset=2&limit=2", method="GET")
+        self.assertEqual([r["id"] for r in body["records"]], ["r3"])
+        status, body = self.call(f"/collections/{COLLECTION}/records?offset=-1", method="GET")
+        self.assertEqual(status, 400)
+        status, body = self.call(f"/collections/{COLLECTION}/records?limit=0", method="GET")
+        self.assertEqual(status, 400)
+
     def test_existing_reports_only_stored_ids(self):
         self.call(f"/collections/{COLLECTION}/upsert", {
             "ids": ["e1"], "embeddings": [basis(20)], "documents": ["exists"], "metadatas": [meta()]})

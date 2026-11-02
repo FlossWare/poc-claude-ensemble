@@ -41,6 +41,11 @@ DEFAULT_PORT = 8773
 EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
 VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
 LEXICAL_URL = os.environ.get("ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
+# Knowledge (books, RFCs, papers) is searched beside transcripts, never merged into their ranking.
+KNOWLEDGE_COLLECTION = "knowledge_chunks"
+KNOWLEDGE_SEARCH = os.environ.get("ENSEMBLE_KNOWLEDGE_SEARCH", "1") == "1"
+KNOWLEDGE_TOP = 10
+KNOWLEDGE_TEXT_CHARS = 2000
 GRAPH_URL = os.environ.get("ENSEMBLE_GRAPH_URL", "http://127.0.0.1:8766")
 RERANK_URL = os.environ.get("ENSEMBLE_RERANK_URL", "http://127.0.0.1:8774")
 RANKING_URL = os.environ.get("ENSEMBLE_RANKING_URL", "http://127.0.0.1:8780")
@@ -204,13 +209,48 @@ def _knowledge_result(record):
     }
 
 
+def _knowledge_from_exact(row):
+    """Normalize an exact-match knowledge hit to the same provenance fields as a vector hit."""
+    return {
+        "key": row["key"], "text": row["text"], "source": "knowledge", "source_type": "knowledge",
+        "kind": "knowledge_chunk", "origin": row["source"], "url": row["url"], "title": row["title"],
+        "chunk_id": row["chunk_id"], "chunk_index": None, "chunk_count": None, "content_sha256": None,
+        "score": None,
+    }
+
+
+def _knowledge_search(query, embedding, degraded, limit=KNOWLEDGE_TOP):
+    """Vector and exact-match hits from knowledge, fused with RRF. Kept apart from transcript results."""
+    vector_list, exact_list, records = [], [], {}
+    if embedding is not None:
+        try:
+            vector = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
+                           {"embedding": embedding, "top_k": CANDIDATES})
+            for r in vector["results"]:
+                record = _knowledge_result(r)
+                records.setdefault(record["key"], record)
+                vector_list.append(records[record["key"]])
+        except DependencyError as exc:
+            degraded.append(f"knowledge:{exc.name}")
+    try:
+        exact = _call("lexical", f"{LEXICAL_URL}/knowledge/search", {"query": query, "top_k": CANDIDATES})
+        for row in exact["results"]:
+            record = _knowledge_from_exact(row)
+            records.setdefault(record["key"], record)
+            exact_list.append(records[record["key"]])
+    except DependencyError as exc:
+        degraded.append(f"knowledge:{exc.name}")
+    fused = fuse([vector_list, exact_list])[:limit]
+    for record in fused:
+        record["text"] = record["text"][:KNOWLEDGE_TEXT_CHARS]
+    return fused
+
+
 def knowledge_search(query, top_k, rerank=True):
-    """Search only the independently versioned knowledge_chunks collection."""
-    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings",
-                     {"texts": [query], "mode": "query"})
-    vector = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
-                   {"embedding": embedded["embeddings"][0], "top_k": max(top_k, RERANK_TOP)})
-    results = [_knowledge_result(record) for record in vector["results"]]
+    """Search only the knowledge collection and its exact-match index."""
+    degraded = []
+    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"})
+    results = _knowledge_search(query, embedded["embeddings"][0], degraded, limit=max(top_k, RERANK_TOP))
     reranked = False
     if RERANK_ENABLED and rerank and results:
         try:
@@ -219,18 +259,17 @@ def knowledge_search(query, top_k, rerank=True):
                            timeout=RERANK_TIMEOUT)
             for record, score in zip(results[:RERANK_TOP], scored["scores"]):
                 record["rerank_score"] = round(float(score), 4)
-            results[:RERANK_TOP] = sorted(results[:RERANK_TOP],
-                                          key=lambda record: -record["rerank_score"])
+            results[:RERANK_TOP] = sorted(results[:RERANK_TOP], key=lambda record: -record["rerank_score"])
             reranked = True
-        except DependencyError:
-            pass
-    return {"ok": True, "results": results[:top_k], "degraded": [], "reranked": reranked,
+        except DependencyError as exc:
+            degraded.append(f"rerank:{exc.name}")
+    return {"ok": True, "results": results[:top_k], "degraded": degraded, "reranked": reranked,
             "retrieval": "knowledge-only"}
 
 
 def _hybrid_search_uncached(query, top_k, rerank=True):
     degraded = []
-    vector_list, lexical_list, knowledge_list = [], [], []
+    vector_list, lexical_list = [], []
     embedding = None
     # Lexical and embedding/vector legs are independent, so run the lexical call concurrently.
     lexical_future = _POOL.submit(_call, "lexical", f"{LEXICAL_URL}/search",
@@ -252,14 +291,6 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
                            for r in vector["results"]]
         except DependencyError as exc:
             degraded.append(exc.name)
-        try:
-            knowledge = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
-                              {"embedding": embedding, "top_k": CANDIDATES})
-            knowledge_list = [_knowledge_result(r) for r in knowledge["results"]]
-        except DependencyError as exc:
-            degraded.append(exc.name)
-    else:
-        knowledge_list = []
     try:
         lexical = lexical_future.result()
         lexical_list = [{"key": r["text_sha"], "text": r["text"], "source": "lexical", "source_type": "transcript",
@@ -267,23 +298,22 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
                          "is_subagent": r["is_subagent"]} for r in lexical["results"]]
     except DependencyError as exc:
         degraded.append(exc.name)
-    if not vector_list and not lexical_list and not knowledge_list and degraded:
+    if not vector_list and not lexical_list and degraded:
         raise DependencyError("search", f"no candidate source succeeded ({', '.join(degraded)})")
     # Source metadata (session, project, role) comes only from lexical hits. A result found
     # only by the vector side has its text but no source fields.
     records = {}
-    for record in vector_list + lexical_list + knowledge_list:
+    for record in vector_list + lexical_list:
         records[record["key"]] = {**records.get(record["key"], {}), **record}
     lists = {"vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(vector_list)],
-             "lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)],
-             "knowledge_vector": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(knowledge_list)]}
+             "lexical": [{"key": r["key"], "rank": i + 1} for i, r in enumerate(lexical_list)]}
     try:
         ranked = _call("ranking", f"{RANKING_URL}/rank", {"lists": lists, "top_k": CANDIDATES, "k": RRF_K})
         fused = [dict(records[item["key"]], score=item["score"], contributions=item["contributions"])
                  for item in ranked["results"] if item["key"] in records]
     except DependencyError as exc:
         degraded.append(exc.name)
-        fused = fuse([vector_list, lexical_list, knowledge_list])
+        fused = fuse([vector_list, lexical_list])
     reranked = False
     if RERANK_ENABLED and rerank and fused:
         head = fused[:RERANK_TOP]
@@ -309,7 +339,8 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
         intent = {"label": intent["label"], "confidence": intent["confidence"]}
     except DependencyError as exc:
         degraded.append(exc.name)
-    return {"ok": True, "results": results, "degraded": degraded, "reranked": reranked,
+    knowledge = _knowledge_search(query, embedding, degraded) if KNOWLEDGE_SEARCH else []
+    return {"ok": True, "results": results, "knowledge": knowledge, "degraded": degraded, "reranked": reranked,
             "related_sessions": related, "intent": intent}
 
 

@@ -496,6 +496,66 @@ class HttpValidationTests(unittest.TestCase):
         self.assertEqual(post(self.port, {}, path="/elsewhere")[0], 404)
 
 
+class KnowledgeSearchTests(unittest.TestCase):
+    def fake_call(self, responses):
+        def call(name, url, payload=None, method="POST", timeout=None):
+            if url in responses:
+                result = responses[url]
+                if isinstance(result, Exception):
+                    raise result
+                return result
+            raise hs.DependencyError(name, f"unexpected call {url}")
+        return call
+
+    def test_vector_and_exact_hits_are_fused_and_kept_apart_from_transcripts(self):
+        responses = {
+            f"{hs.VECTOR_URL}/collections/{hs.KNOWLEDGE_COLLECTION}/query": {"results": [
+                {"id": "v1", "document": "semantic book passage", "score": 0.9,
+                 "metadata": {"chunk_id": "c1", "url": "https://u/1", "source": "books", "title": "Book One"}},
+                {"id": "v2", "document": "other passage", "score": 0.5,
+                 "metadata": {"chunk_id": "c2", "url": "https://u/2", "source": "rfc", "title": "RFC Two"}}]},
+            f"{hs.LEXICAL_URL}/knowledge/search": {"ok": True, "results": [
+                {"key": "v2", "vector_id": "v2", "chunk_id": "c2", "url": "https://u/2", "source": "rfc",
+                 "title": "RFC Two", "text": "other passage"}]},
+        }
+        degraded = []
+        with mock.patch.object(hs, "_call", self.fake_call(responses)):
+            results = hs._knowledge_search("query", [0.1] * 768, degraded)
+        self.assertEqual(degraded, [])
+        self.assertEqual(results[0]["key"], "v2")   # found by both legs, so it ranks first
+        self.assertEqual({r["key"] for r in results}, {"v1", "v2"})
+        self.assertTrue(all("score" in r for r in results))
+
+    def test_lexical_failure_degrades_but_keeps_vector_hits(self):
+        responses = {
+            f"{hs.VECTOR_URL}/collections/{hs.KNOWLEDGE_COLLECTION}/query": {"results": [
+                {"id": "v1", "document": "passage", "score": 0.9,
+                 "metadata": {"chunk_id": "c1", "url": "u", "source": "books", "title": "T"}}]},
+            f"{hs.LEXICAL_URL}/knowledge/search": hs.DependencyError("lexical", "down"),
+        }
+        degraded = []
+        with mock.patch.object(hs, "_call", self.fake_call(responses)):
+            results = hs._knowledge_search("query", [0.1] * 768, degraded)
+        self.assertEqual([r["key"] for r in results], ["v1"])
+        self.assertEqual(degraded, ["knowledge:lexical"])
+
+    def test_missing_embedding_skips_vector_leg(self):
+        responses = {f"{hs.LEXICAL_URL}/knowledge/search": {"ok": True, "results": []}}
+        degraded = []
+        with mock.patch.object(hs, "_call", self.fake_call(responses)):
+            self.assertEqual(hs._knowledge_search("query", None, degraded), [])
+        self.assertEqual(degraded, [])
+
+    def test_text_is_capped_in_knowledge_results(self):
+        long_text = "x" * (hs.KNOWLEDGE_TEXT_CHARS + 500)
+        responses = {f"{hs.LEXICAL_URL}/knowledge/search": {"ok": True, "results": [
+            {"key": "v1", "vector_id": "v1", "chunk_id": "c1", "url": "u", "source": "books", "title": "T",
+             "text": long_text}]}}
+        with mock.patch.object(hs, "_call", self.fake_call(responses)):
+            results = hs._knowledge_search("query", None, [])
+        self.assertEqual(len(results[0]["text"]), hs.KNOWLEDGE_TEXT_CHARS)
+
+
 class DependencyFailureTests(unittest.TestCase):
     """Refused connections to every dependency: the search must fail clearly, not return empty success."""
 
@@ -644,10 +704,15 @@ class KnowledgeRetrievalTests(unittest.TestCase):
                         "title": "Paper", "chunk_id": "c1", "chunk": 0, "chunks": 1,
                         "content_sha256": "b" * 64,
                     }}]}
+            if name == "lexical":
+                # The exact-match leg is the knowledge index, never the transcript index.
+                return {"ok": True, "results": []}
             raise AssertionError(name)
         with mock.patch.object(hs, "_call", side_effect=fake_call):
             result = hs.knowledge_search("query", 5, rerank=False)
         self.assertEqual(result["retrieval"], "knowledge-only")
         self.assertEqual([r["source_type"] for r in result["results"]], ["knowledge"])
         self.assertTrue(any("/collections/knowledge_chunks/query" in call[1] for call in calls))
+        self.assertTrue(any(call[1].endswith("/knowledge/search") for call in calls if call[0] == "lexical"))
         self.assertFalse(any("/collections/transcript_text/query" in call[1] for call in calls))
+        self.assertFalse(any(call[1].endswith("/search") and "knowledge" not in call[1] for call in calls))

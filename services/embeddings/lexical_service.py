@@ -29,6 +29,8 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import knowledge_lexical
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8772
 DB_PATH = os.environ.get("ENSEMBLE_LEXICAL_DB", os.path.expanduser(
@@ -41,6 +43,7 @@ MAX_MESSAGES_PER_DOCUMENT = 500
 MAX_MESSAGE_CHARS = 200_000
 TOKENIZATION_URL = os.environ.get("ENSEMBLE_TOKENIZATION_URL", "http://127.0.0.1:8776")
 TOKENIZE_PROFILE = "lexical-v1"
+KNOWLEDGE_DB_PATH = knowledge_lexical.DB_PATH
 TOKENIZE_TIMEOUT = 10
 # The FTS tokenizer keeps the Tokenization service's compound identifiers (paths, dotted names,
 # dashed names, UUIDs) as single tokens. Analyzed text is space-separated, so spaces still split terms.
@@ -216,10 +219,11 @@ class LexicalHandler(BaseHTTPRequestHandler):
         self._error(404, "not_found", "unknown path")
 
     def do_POST(self):
-        if self.path not in {"/search", "/documents"}:
+        if self.path not in {"/search", "/documents", "/knowledge/search", "/knowledge/documents"}:
             self._error(404, "not_found", "unknown path")
             return
-        limit = MAX_DOCUMENT_BODY_BYTES if self.path == "/documents" else MAX_BODY_BYTES
+        writes = self.path in {"/documents", "/knowledge/documents"}
+        limit = MAX_DOCUMENT_BODY_BYTES if writes else MAX_BODY_BYTES
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0 or length > limit:
             self._error(400, "invalid_request", f"request body must be between 1 byte and {limit} bytes")
@@ -241,6 +245,15 @@ class LexicalHandler(BaseHTTPRequestHandler):
             except (sqlite3.Error, AnalysisUnavailable) as exc:
                 self._error(503, "service_unavailable", str(exc))
             return
+        if self.path == "/knowledge/documents":
+            try:
+                self._send(200, {"ok": True, **knowledge_lexical.ingest(
+                    body.get("chunks"), analyze, path=KNOWLEDGE_DB_PATH)})
+            except knowledge_lexical.ChunkValidationError as exc:
+                self._error(400, "invalid_request", str(exc))
+            except (sqlite3.Error, AnalysisUnavailable) as exc:
+                self._error(503, "service_unavailable", str(exc))
+            return
         query, top_k = body.get("query"), body.get("top_k", 10)
         if not isinstance(query, str) or not query.strip():
             self._error(400, "invalid_request", "query must be a non-empty string")
@@ -252,7 +265,11 @@ class LexicalHandler(BaseHTTPRequestHandler):
             self._error(400, "invalid_request", f"top_k must be an integer from 1 to {MAX_TOP_K}")
             return
         try:
-            self._send(200, {"ok": True, "results": search(query, top_k)})
+            if self.path == "/knowledge/search":
+                results = knowledge_lexical.search(query, top_k, analyze, path=KNOWLEDGE_DB_PATH)
+            else:
+                results = search(query, top_k)
+            self._send(200, {"ok": True, "results": results})
         except (sqlite3.Error, AnalysisUnavailable) as exc:
             self._error(503, "service_unavailable", str(exc))
 

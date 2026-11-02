@@ -15,6 +15,7 @@ Endpoints
 """
 
 import json
+import urllib.parse
 import os
 import sys
 import threading
@@ -31,6 +32,7 @@ DEFAULT_PORT = 8771
 MAX_BODY_BYTES = 16 * 1_048_576
 MAX_UPSERT = 256
 MAX_TOP_K = 200
+MAX_RECORDS_PAGE = 1000
 
 _lock = threading.Lock()
 _cache = {}  # name -> {"ids", "documents", "buf" (grows by doubling), "rows", "index"}
@@ -107,8 +109,31 @@ class VectorHandler(BaseHTTPRequestHandler):
         parts = self.path.strip("/").split("/")
         return parts
 
+    def _records(self, name, query):
+        """One page of stored records, without embeddings. Used to backfill other indexes."""
+        try:
+            offset = int(query.get("offset", ["0"])[0])
+            limit = int(query.get("limit", [str(MAX_RECORDS_PAGE)])[0])
+        except ValueError:
+            self._error(400, "invalid_request", "offset and limit must be integers")
+            return
+        if offset < 0 or not 1 <= limit <= MAX_RECORDS_PAGE:
+            self._error(400, "invalid_request", f"offset must be >= 0 and limit 1 to {MAX_RECORDS_PAGE}")
+            return
+        with _lock:
+            entry = _ensure(name)
+            total = entry["rows"]
+            end = min(offset + limit, total)
+            records = [{"id": entry["ids"][i], "document": entry["documents"][i],
+                        "metadata": entry["metadatas"][i]} for i in range(min(offset, total), end)]
+        self._send(200, {"ok": True, "total": total, "offset": offset, "records": records})
+
     def do_GET(self):
-        parts = self._route()
+        parsed = urllib.parse.urlsplit(self.path)
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "collections" and parts[2] == "records":
+            self._records(parts[1], urllib.parse.parse_qs(parsed.query))
+            return
         if parts == ["health"]:
             try:
                 client().heartbeat()

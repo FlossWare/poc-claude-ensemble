@@ -3,6 +3,7 @@ embedding, and vector services running in-process on ephemeral loopback ports.
 
 Only the scrape ledger and raw records are fixtures; everything the client calls is real.
 """
+import re
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.request
 
 _SERVICES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +24,7 @@ import embedding_service as es  # noqa: E402
 import index_service as ix  # noqa: E402
 import knowledge_service as kn  # noqa: E402
 import vector_service as vs  # noqa: E402
+import lexical_service as lx  # noqa: E402
 import vector_store  # noqa: E402
 from embed_lib import MODEL_DIR  # noqa: E402
 
@@ -82,8 +85,15 @@ class KnowledgeIngestTestCase(unittest.TestCase):
         kn.INDEX_URL = self.index_url
         self.knowledge_server = serve(kn.create_server("127.0.0.1", 0))
         self.vector_server = serve(vs.create_server("127.0.0.1", 0))
+        # Exact-match index: a temporary database and a stub analyzer, so no live service is touched.
+        self.lexical_server = serve(lx.create_server("127.0.0.1", 0))
+        for patch in (mock.patch.object(lx, "KNOWLEDGE_DB_PATH", os.path.join(self.root, "knowledge-lexical.sqlite3")),
+                      mock.patch.object(lx, "analyze", lambda text: re.findall(r"[\w\-._:/]+", text.lower()))):
+            patch.start()
+            self.addCleanup(patch.stop)
         self._saved = {k: getattr(bk, k) for k in ("LEDGER", "RAW", "LOG", "EMBEDDING_URL", "VECTOR_URL",
-                                                   "CHUNKING_URL", "KNOWLEDGE_URL")}
+                                                   "CHUNKING_URL", "KNOWLEDGE_URL", "LEXICAL_URL")}
+        bk.LEXICAL_URL = f"http://127.0.0.1:{self.lexical_server.server_address[1]}"
         bk.LEDGER, bk.RAW = self.ledger, self.raw
         bk.LOG = os.path.join(self.root, "build.log")
         bk.EMBEDDING_URL = f"http://127.0.0.1:{self.embedding_server.server_address[1]}"
@@ -92,7 +102,7 @@ class KnowledgeIngestTestCase(unittest.TestCase):
         bk.KNOWLEDGE_URL = f"http://127.0.0.1:{self.knowledge_server.server_address[1]}"
 
     def tearDown(self):
-        for server in (self.knowledge_server, self.vector_server):
+        for server in (self.knowledge_server, self.vector_server, self.lexical_server):
             server.shutdown()
             server.server_close()
         for key, value in self._saved.items():
@@ -303,6 +313,28 @@ class EmbedBatchSettingTests(unittest.TestCase):
         overridden = subprocess.run([sys.executable, "-c", code], cwd=here, env=env,
                                     capture_output=True, text=True, check=True).stdout.strip()
         self.assertEqual((default, overridden), ("64", "32"))
+
+
+class ExactMatchWriteTests(KnowledgeIngestTestCase):
+    def test_flush_writes_exact_match_rows_and_vectors(self):
+        import knowledge_lexical as kl
+        meta = {"kind": "knowledge_chunk", "source": "rfc", "url": "https://u/rfc8259", "title": "RFC 8259",
+                "chunk": 0, "chunks": 1, "chunk_id": "chunk-a", "content_sha256": "sha"}
+        bk.flush([("vid-a", "RFC-8259 JSON text format", meta)])
+        db = lx.KNOWLEDGE_DB_PATH
+        self.assertEqual(kl.count(path=db), 1)
+        self.assertEqual(self.vector_count(), 1)
+        hits = kl.search("RFC-8259", 3, lambda text: re.findall(r"[\w\-._:/]+", text.lower()), path=db)
+        self.assertEqual(hits[0]["vector_id"], "vid-a")
+        self.assertEqual(hits[0]["chunk_id"], "chunk-a")
+
+    def test_repeated_flush_does_not_duplicate_exact_match_rows(self):
+        import knowledge_lexical as kl
+        meta = {"kind": "knowledge_chunk", "source": "rfc", "url": "u", "title": "T", "chunk": 0, "chunks": 1,
+                "chunk_id": "chunk-b", "content_sha256": "sha"}
+        bk.flush([("vid-b", "same text", meta)])
+        bk.flush([("vid-b", "same text", meta)])
+        self.assertEqual(kl.count(path=lx.KNOWLEDGE_DB_PATH), 1)
 
 
 class socket_free_url:
