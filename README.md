@@ -141,31 +141,27 @@ The services run from `shared/` in the working deployment and are copied here as
 
 ## Knowledge retrieval
 
-The hybrid search service queries both the existing `transcript_text` and
-`knowledge_chunks` vector collections. Knowledge candidates retain
-`source_type: "knowledge"`, origin, source URL, document title, chunk ID and
-position, and content SHA-256. Transcript candidates retain
-`source_type: "transcript"`. Both candidate types participate in the same
-reciprocal-rank fusion and optional cross-encoder reranking; transcript lexical
-search remains an independent leg.
+Knowledge (books, RFCs, papers) is searched beside transcripts, never merged into
+their ranking. `POST /search` returns the transcript results unchanged, plus a
+separate `knowledge` list. Each knowledge hit carries `source_type: "knowledge"`,
+origin, source URL, document title, chunk ID and position, and content SHA-256.
+Knowledge hits come from two legs fused with reciprocal-rank fusion:
 
-For knowledge-only retrieval, call:
+- **Vector:** the `knowledge_chunks` collection, for meaning-based matches.
+- **Exact match:** the knowledge lexical index (`ENSEMBLE_KNOWLEDGE_LEXICAL_DB`), analyzed
+  with the same analyzer as transcripts, so identifiers such as RFC numbers match exactly.
+
+Knowledge-only retrieval:
 
 ```bash
 curl -s http://127.0.0.1:8773/knowledge/search \
   -H 'content-type: application/json' \
-  -d '{"query":"your question","top_k":10}'
+  -d '{"query":"RFC 8259","top_k":10}'
 ```
 
-Combined retrieval remains:
+Set `ENSEMBLE_KNOWLEDGE_SEARCH=0` to turn off the `knowledge` section in `/search`.
+Knowledge failures are reported in `degraded` as `knowledge:<leg>` and never affect
+the transcript results.
 
-```bash
-curl -s http://127.0.0.1:8773/search \
-  -H 'content-type: application/json' \
-  -d '{"query":"your question","top_k":10}'
-```
-
-This change reads the existing `knowledge_chunks` collection. It does not
-re-ingest documents, re-embed chunks, modify the Knowledge or Index databases,
-or enable prompt-time memory injection. Knowledge retrieval is vector-backed;
-the existing lexical service continues to provide transcript lexical results.
+Chunks stored before exact-match rows existed are copied into the index with
+`services/embeddings/backfill_knowledge_lexical.py`. The copy is idempotent.
