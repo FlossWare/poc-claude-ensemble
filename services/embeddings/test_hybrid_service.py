@@ -550,6 +550,18 @@ class KnowledgeSearchTests(unittest.TestCase):
         lists = [[{"key": "a"}, {"key": "b"}], [{"key": "b"}, {"key": "c"}]]
         self.assertEqual(hs.fuse_weighted([(1.0, lists[0]), (1.0, lists[1])]), hs.fuse(lists))
 
+    def test_query_embedding_uses_the_longer_timeout(self):
+        seen = {}
+        def fake_call(name, url, payload=None, method="POST", timeout=None):
+            seen.setdefault(name, timeout)
+            if name == "embedding":
+                return {"ok": True, "embeddings": [[0.0] * 768]}
+            return {"ok": True, "results": []}
+        with mock.patch.object(hs, "_call", side_effect=fake_call):
+            hs.knowledge_search("query", 3, rerank=False)
+        self.assertEqual(seen["embedding"], hs.EMBED_QUERY_TIMEOUT)
+        self.assertGreater(hs.EMBED_QUERY_TIMEOUT, hs.DEP_TIMEOUT)
+
     def test_lexical_failure_degrades_but_keeps_vector_hits(self):
         responses = {
             f"{hs.VECTOR_URL}/collections/{hs.KNOWLEDGE_COLLECTION}/query": {"results": [

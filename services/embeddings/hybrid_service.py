@@ -55,7 +55,10 @@ INDEX_SERVICE_URL = os.environ.get("ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777"
 CHUNKING_URL = os.environ.get("ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
 RERANK_ENABLED = os.environ.get("ENSEMBLE_RERANK_ENABLED", "0") == "1"   # off until a labeled evaluation shows a benefit
 RERANK_TOP = 30          # cross-encoder scores only the top fused candidates
-RERANK_TIMEOUT = 5       # a slow reranker must not stall a prompt; fall back to fused order
+# A query embedding waits behind a builder batch of up to 64 texts (about 40 s on CPU), so it needs more
+# than DEP_TIMEOUT. The reranker scores 30 passages in about 2 s when idle and slower under load.
+EMBED_QUERY_TIMEOUT = int(os.environ.get("ENSEMBLE_EMBED_QUERY_TIMEOUT", "150"))
+RERANK_TIMEOUT = int(os.environ.get("ENSEMBLE_RERANK_TIMEOUT", "30"))   # past this, fall back to fused order
 TRANSCRIPT_ROOTS = [os.path.expanduser(p) for p in os.environ.get(
     "ENSEMBLE_TRANSCRIPT_ROOTS", "~/.claude/projects:~/2026-09_16-57-09_claude/projects").split(":")]
 INGEST_EMBED_BATCH = 64     # matches the embedding service's per-request cap
@@ -262,7 +265,8 @@ def _knowledge_search(query, embedding, degraded, limit=KNOWLEDGE_TOP):
 def knowledge_search(query, top_k, rerank=True):
     """Search only the knowledge collection and its exact-match index."""
     degraded = []
-    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"})
+    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
+                          timeout=EMBED_QUERY_TIMEOUT)
     results = _knowledge_search(query, embedded["embeddings"][0], degraded, limit=max(top_k, RERANK_TOP))
     reranked = False
     if RERANK_ENABLED and rerank and results:
@@ -288,7 +292,8 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     lexical_future = _POOL.submit(_call, "lexical", f"{LEXICAL_URL}/search",
                                   {"query": query, "top_k": CANDIDATES})
     try:
-        embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"})
+        embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
+                          timeout=EMBED_QUERY_TIMEOUT)
         embedding = embedded["embeddings"][0]
     except DependencyError as exc:
         degraded.append(exc.name)
