@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-DEPLOY_ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
+DEPLOY_ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
 DATA_DIR="$DEPLOY_ROOT/shared/data/ga-tuning"
 LOG_DIR="$DEPLOY_ROOT/shared/logs"
 SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$DEPLOY_ROOT/shared/claude-code/settings.json}"

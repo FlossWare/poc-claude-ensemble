@@ -139,15 +139,15 @@ def run():
                 }
 
         cost_advisor=ArbitrationAdvisor(CostAnalytics())
-        previous=os.environ.get("ENSEMBLE_ARBITER_COST")
-        os.environ["ENSEMBLE_ARBITER_COST"]="0.08"
+        previous=os.environ.get("POC_CLAUDE_ENSEMBLE_ARBITER_COST")
+        os.environ["POC_CLAUDE_ENSEMBLE_ARBITER_COST"]="0.08"
         try:
             result=cost_advisor.estimate_cost(["cheap","expensive"],"code_review",phases=3)
         finally:
             if previous is None:
-                os.environ.pop("ENSEMBLE_ARBITER_COST",None)
+                os.environ.pop("POC_CLAUDE_ENSEMBLE_ARBITER_COST",None)
             else:
-                os.environ["ENSEMBLE_ARBITER_COST"]=previous
+                os.environ["POC_CLAUDE_ENSEMBLE_ARBITER_COST"]=previous
         assert result["ok"]
         assert abs(result["data"]["worker_cost_per_phase"]-0.30)<1e-6
         assert abs(result["data"]["total_per_phase"]-0.38)<1e-6
@@ -212,14 +212,14 @@ def run():
             assert local_handler.statuses == [200], local_handler.statuses
 
             # Collaboration authentication follows RFC 6750 semantics.
-            original_token = os.environ.get("ENSEMBLE_COLLABORATION_AUTH_TOKEN")
-            original_solvers = os.environ.get("ENSEMBLE_COLLABORATION_SOLVERS")
-            os.environ.pop("ENSEMBLE_COLLABORATION_AUTH_TOKEN", None)
+            original_token = os.environ.get("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN")
+            original_solvers = os.environ.get("POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS")
+            os.environ.pop("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", None)
             try:
                 status,body=request(gateway,"POST","/api/v1/collaboration/run",{"task":"auth test"})
                 assert status==503 and body["error_code"]=="service_unavailable"
             finally:
-                os.environ["ENSEMBLE_COLLABORATION_AUTH_TOKEN"]="test-collaboration-token"
+                os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN"]="test-collaboration-token"
 
             status,headers,body=request_with_headers(gateway,"POST","/api/v1/collaboration/run",{"task":"auth test"})
             assert status==401 and body["error_code"]=="unauthorized"
@@ -232,7 +232,7 @@ def run():
             assert status==401 and body["error_code"]=="unauthorized"
             assert next((value for name, value in headers.items() if name.lower() == "www-authenticate"), None) == "Bearer", headers
 
-            os.environ["ENSEMBLE_COLLABORATION_SOLVERS"]="sonnet"
+            os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS"]="sonnet"
             status,body=request(
                 gateway,"POST","/api/v1/collaboration/run",{"task":"auth test","solvers":["haiku"]},
                 {"Authorization":"Bearer test-collaboration-token"},
@@ -240,13 +240,13 @@ def run():
             assert status==403 and body["error_code"]=="forbidden"
 
             if original_solvers is None:
-                os.environ.pop("ENSEMBLE_COLLABORATION_SOLVERS",None)
+                os.environ.pop("POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS",None)
             else:
-                os.environ["ENSEMBLE_COLLABORATION_SOLVERS"]=original_solvers
+                os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS"]=original_solvers
             if original_token is None:
-                os.environ.pop("ENSEMBLE_COLLABORATION_AUTH_TOKEN",None)
+                os.environ.pop("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN",None)
             else:
-                os.environ["ENSEMBLE_COLLABORATION_AUTH_TOKEN"]=original_token
+                os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN"]=original_token
 
             assert request(gateway,"GET","/api/v1/health")[0]==200
             graph_status, graph_health = request(gateway, "GET", "/api/v1/graph/health")
@@ -335,7 +335,7 @@ def run():
             gateway.application.memory_writer = FakeMemoryWriter()
             gateway.application.provenance = FakeProvenanceStore()
             gateway.application.models.registry.resolve = lambda *_args, **_kwargs: object()
-            os.environ["ENSEMBLE_COLLABORATION_AUTH_TOKEN"] = "test-collaboration-token"
+            os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN"] = "test-collaboration-token"
             try:
                 status, body = request(
                     gateway,
@@ -419,9 +419,9 @@ def run():
                 gateway.application.provenance = original_provenance_store
                 gateway.application.models.registry.resolve = original_resolve
                 if original_token is None:
-                    os.environ.pop("ENSEMBLE_COLLABORATION_AUTH_TOKEN", None)
+                    os.environ.pop("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", None)
                 else:
-                    os.environ["ENSEMBLE_COLLABORATION_AUTH_TOKEN"] = original_token
+                    os.environ["POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN"] = original_token
 
             # Memory is independently reachable through the same public boundary.
             assert request(gateway,"POST","/api/v1/memory/write",

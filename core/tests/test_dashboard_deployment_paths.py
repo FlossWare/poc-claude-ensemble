@@ -31,10 +31,10 @@ class CEIsolatedRuntimePathTests(unittest.TestCase):
     def test_source_installer_defaults_to_an_isolated_claude_profile(self):
         installer = (REPO / "install.sh").read_text(encoding="utf-8")
         self.assertIn(
-            'CLAUDE_HOME="${ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.FlossWare/claude-ensemble-profile}"',
+            'CLAUDE_HOME="${POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.FlossWare/claude-ensemble-profile}"',
             installer,
         )
-        self.assertNotIn('CLAUDE_HOME="${ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.claude}"', installer)
+        self.assertNotIn('CLAUDE_HOME="${POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.claude}"', installer)
 
 
 
@@ -48,7 +48,7 @@ class GADashboardDeploymentPathTests(unittest.TestCase):
             (root / "current").symlink_to("releases/0.1")
             results = root / "shared" / "data" / "ga-tuning" / "results"
             results.mkdir(parents=True)
-            with patch.dict(os.environ, {"HOME": str(home), "ENSEMBLE_INSTALL_ROOT": str(root)}, clear=False):
+            with patch.dict(os.environ, {"HOME": str(home), "POC_CLAUDE_ENSEMBLE_INSTALL_ROOT": str(root)}, clear=False):
                 os.environ.pop("CE_GA_RESULTS_DIR", None)
                 dashboard = DASHBOARD_MODULE.GATuningDashboard()
             self.assertEqual(dashboard.results_dir, results)
@@ -63,7 +63,7 @@ class GADashboardDeploymentPathTests(unittest.TestCase):
     def test_development_mode_keeps_repository_local_default(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"
-            with patch.dict(os.environ, {"HOME": str(home), "ENSEMBLE_INSTALL_ROOT": str(home / ".FlossWare" / "missing")}, clear=False):
+            with patch.dict(os.environ, {"HOME": str(home), "POC_CLAUDE_ENSEMBLE_INSTALL_ROOT": str(home / ".FlossWare" / "missing")}, clear=False):
                 os.environ.pop("CE_GA_RESULTS_DIR", None)
                 dashboard = DASHBOARD_MODULE.GATuningDashboard()
             self.assertEqual(dashboard.results_dir, REPO / "ga_tuning" / "results")

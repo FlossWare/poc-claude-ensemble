@@ -97,7 +97,7 @@ def test_registry_does_not_eagerly_construct_default_provider() -> None:
 
 
 def test_registry_defaults_expected_upstream_to_vertex(monkeypatch) -> None:
-    monkeypatch.delenv("ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", raising=False)
+    monkeypatch.delenv("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", raising=False)
     registry = ProviderRegistry()
     assert registry._configured_provider == "vertex"
 

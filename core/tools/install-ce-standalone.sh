@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-DEPLOY_ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
+DEPLOY_ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
 case "$DEPLOY_ROOT" in
   "~") DEPLOY_ROOT="$HOME" ;;
   "~/"*) DEPLOY_ROOT="$HOME/${DEPLOY_ROOT#\~/}" ;;
@@ -41,7 +41,7 @@ if [[ -e "$DEPLOY_ROOT" && ! -d "$DEPLOY_ROOT" ]]; then
 fi
 if [[ -d "$DEPLOY_ROOT/.git" || -f "$DEPLOY_ROOT/.git" ]]; then
   printf 'ERROR: Deployment path contains Git metadata; refusing to replace a working checkout: %s\n' "$DEPLOY_ROOT" >&2
-  printf 'Choose a separate ENSEMBLE_INSTALL_ROOT or move the checkout first.\n' >&2
+  printf 'Choose a separate POC_CLAUDE_ENSEMBLE_INSTALL_ROOT or move the checkout first.\n' >&2
   exit 1
 fi
 PROFILE_ROOT="$DEPLOY_ROOT/claude-code"
@@ -222,7 +222,7 @@ if ! mv -- "$STAGING" "$DEPLOY_ROOT"; then
   exit 1
 fi
 printf '\nInstalling Claude Ensemble from independent deployment: %s\n\n' "$DEPLOY_ROOT"
-if ENSEMBLE_STANDALONE_INSTALL=1 ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$PROFILE_ROOT" ENSEMBLE_DEFER_SERVICE_START=1 bash "$DEPLOY_ROOT/install.sh" "$DEPLOY_ROOT"; then
+if POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL=1 POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$PROFILE_ROOT" POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1 bash "$DEPLOY_ROOT/install.sh" "$DEPLOY_ROOT"; then
   :
 else
   status=$?

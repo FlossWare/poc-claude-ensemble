@@ -458,13 +458,13 @@ class ClaudeCodeHookLifecycleTests(unittest.TestCase):
             thompson_port, learning_port = self._free_ports(2)
             env.update({
                 "HOME": str(root / "home"),
-                "ENSEMBLE_LOG_DIR": str(root / "logs"),
-                "ENSEMBLE_LEARNING_DIR": str(root / "learning"),
-                "ENSEMBLE_RUNTIME_DIR": str(root / "runtime"),
-                "ENSEMBLE_THOMPSON_SOCKET": str(root / "thompson.sock"),
-                "ENSEMBLE_THOMPSON_HTTP_PORT": str(thompson_port),
-                "ENSEMBLE_LEARNING_HTTP_PORT": str(learning_port),
-                "ENSEMBLE_THOMPSON_STATE_FILE": str(root / "thompson-state.json"),
+                "POC_CLAUDE_ENSEMBLE_LOG_DIR": str(root / "logs"),
+                "POC_CLAUDE_ENSEMBLE_LEARNING_DIR": str(root / "learning"),
+                "POC_CLAUDE_ENSEMBLE_RUNTIME_DIR": str(root / "runtime"),
+                "POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET": str(root / "thompson.sock"),
+                "POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT": str(thompson_port),
+                "POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT": str(learning_port),
+                "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE": str(root / "thompson-state.json"),
             })
             script = r'''
 import json, os, socket, sys, tempfile, threading, time, urllib.request
@@ -488,8 +488,8 @@ class IsolatedMemory:
 
 socket_path = root / "thompson.sock"
 state_path = root / "thompson-state.json"
-thompson_url = "http://127.0.0.1:" + os.environ["ENSEMBLE_THOMPSON_HTTP_PORT"]
-learning_url = "http://127.0.0.1:" + os.environ["ENSEMBLE_LEARNING_HTTP_PORT"]
+thompson_url = "http://127.0.0.1:" + os.environ["POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT"]
+learning_url = "http://127.0.0.1:" + os.environ["POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT"]
 thompson = ThompsonService(socket_path, state_path)
 worker = threading.Thread(target=thompson.start, daemon=True)
 worker.start()

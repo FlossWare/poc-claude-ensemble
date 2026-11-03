@@ -14,7 +14,7 @@ import sqlite3
 import threading
 
 DB_PATH = os.path.expanduser(os.environ.get(
-    "ENSEMBLE_KNOWLEDGE_LEXICAL_DB", "~/.FlossWare/poc-claude-ensemble/data/sqlite/knowledge-lexical.sqlite3"))
+    "POC_CLAUDE_ENSEMBLE_KNOWLEDGE_LEXICAL_DB", "~/.FlossWare/poc-claude-ensemble/data/sqlite/knowledge-lexical.sqlite3"))
 # Same tokenizer settings as the transcript index, so identifiers keep their dashes, dots, and slashes.
 FTS_TOKENIZE = "porter unicode61 remove_diacritics 2 tokenchars '-._:/'"
 MAX_CHUNKS_PER_REQUEST = 500

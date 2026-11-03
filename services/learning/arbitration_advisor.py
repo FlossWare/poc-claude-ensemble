@@ -32,13 +32,13 @@ class ArbitrationAdvisor:
         costs={x["model"]:x["avg_cost"] for x in result.get("data",[]) if x.get("avg_cost") is not None}
         if not models or any(model not in costs for model in models):
             return {"ok":False,"error":"No observed cost data for every requested model","error_code":"no_data","data":None}
-        raw_arbiter_cost = __import__("os").environ.get("ENSEMBLE_ARBITER_COST")
+        raw_arbiter_cost = __import__("os").environ.get("POC_CLAUDE_ENSEMBLE_ARBITER_COST")
         if raw_arbiter_cost is None:
-            return {"ok":False,"error":"ENSEMBLE_ARBITER_COST is not configured","error_code":"no_data","data":None}
+            return {"ok":False,"error":"POC_CLAUDE_ENSEMBLE_ARBITER_COST is not configured","error_code":"no_data","data":None}
         try:
             arbiter_cost=float(raw_arbiter_cost)
         except ValueError:
-            return {"ok":False,"error":"ENSEMBLE_ARBITER_COST must be numeric","error_code":"internal_error","data":None}
+            return {"ok":False,"error":"POC_CLAUDE_ENSEMBLE_ARBITER_COST must be numeric","error_code":"internal_error","data":None}
         worker=sum(costs[model] for model in models)
         total=worker+arbiter_cost
         return {"ok":True,"error":None,"data":{"task_type":task_type,"phases":phases,"workers":models,"worker_cost_per_phase":worker,"arbiter_cost_per_phase":arbiter_cost,"total_per_phase":total,"total_all_phases":total*phases,"sample_count":result.get("sample_count",0)},"sample_count":result.get("sample_count",0)}

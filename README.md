@@ -29,7 +29,7 @@ The embedding REST contract is unchanged. The service still applies the Nomic
 normalization, and returns 768-dimensional vectors. The inference runtime is
 selectable at service startup:
 
-| `ENSEMBLE_EMBED_BACKEND` | Runtime | Graph | Precision |
+| `POC_CLAUDE_ENSEMBLE_EMBED_BACKEND` | Runtime | Graph | Precision |
 |---|---|---|---|
 | `onnxruntime-cpu` (default) | ONNX Runtime | `model.onnx` | FP32 |
 | `openvino-cpu` | OpenVINO CPU | `model.onnx` | FP32 |
@@ -47,16 +47,16 @@ Select the backend before starting the embedding service:
 
 ```bash
 # Existing behavior: ONNX Runtime CPU FP32
-export ENSEMBLE_EMBED_BACKEND=onnxruntime-cpu
+export POC_CLAUDE_ENSEMBLE_EMBED_BACKEND=onnxruntime-cpu
 
 # Optional Intel GPU path: OpenVINO GPU FP16
-export ENSEMBLE_EMBED_BACKEND=openvino-gpu
-export ENSEMBLE_OPENVINO_PERFORMANCE_HINT=THROUGHPUT
+export POC_CLAUDE_ENSEMBLE_EMBED_BACKEND=openvino-gpu
+export POC_CLAUDE_ENSEMBLE_OPENVINO_PERFORMANCE_HINT=THROUGHPUT
 python3 services/embeddings/embedding_service.py
 ```
 
 Supported OpenVINO performance hints are `THROUGHPUT` (default),
-`LATENCY`, and `CUMULATIVE_THROUGHPUT`. `ENSEMBLE_EMBED_THREADS` applies
+`LATENCY`, and `CUMULATIVE_THROUGHPUT`. `POC_CLAUDE_ENSEMBLE_EMBED_THREADS` applies
 to ONNX Runtime CPU. OpenVINO selects the device explicitly and reports its
 actual execution device(s), runtime, graph precision, OpenVINO inference precision
 hint when exposed by the runtime, backend, and pinned model revision from
@@ -96,8 +96,8 @@ To smoke-test the actual REST process without touching the deployed service,
 start a second instance on a separate loopback port:
 
 ```bash
-ENSEMBLE_EMBED_BACKEND=openvino-gpu \
-ENSEMBLE_EMBED_PORT=18770 \
+POC_CLAUDE_ENSEMBLE_EMBED_BACKEND=openvino-gpu \
+POC_CLAUDE_ENSEMBLE_EMBED_PORT=18770 \
 python3 services/embeddings/embedding_service.py
 ```
 
@@ -148,7 +148,7 @@ origin, source URL, document title, chunk ID and position, and content SHA-256.
 Knowledge hits come from two legs fused with reciprocal-rank fusion:
 
 - **Vector:** the `knowledge_chunks` collection, for meaning-based matches.
-- **Exact match:** the knowledge lexical index (`ENSEMBLE_KNOWLEDGE_LEXICAL_DB`), analyzed
+- **Exact match:** the knowledge lexical index (`POC_CLAUDE_ENSEMBLE_KNOWLEDGE_LEXICAL_DB`), analyzed
   with the same analyzer as transcripts, so identifiers such as RFC numbers match exactly.
 
 Knowledge-only retrieval:
@@ -159,7 +159,7 @@ curl -s http://127.0.0.1:8773/knowledge/search \
   -d '{"query":"RFC 8259","top_k":10}'
 ```
 
-Set `ENSEMBLE_KNOWLEDGE_SEARCH=0` to turn off the `knowledge` section in `/search`.
+Set `POC_CLAUDE_ENSEMBLE_KNOWLEDGE_SEARCH=0` to turn off the `knowledge` section in `/search`.
 Knowledge failures are reported in `degraded` as `knowledge:<leg>` and never affect
 the transcript results.
 

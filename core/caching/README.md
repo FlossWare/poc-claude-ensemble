@@ -14,18 +14,18 @@ Integration testing framework and Phase 1 results for prompt caching in Claude E
 **For cost optimization:** Override to **6 hours (21600 seconds)**
 - ~$500/month savings (with 10 continuously-cached blocks)
 - Safe ONLY if memory files are static during sessions
-- Set via environment variable: `export ENSEMBLE_CACHE_TTL_SECONDS=21600`
+- Set via environment variable: `export POC_CLAUDE_ENSEMBLE_CACHE_TTL_SECONDS=21600`
 
 **How to enable 6-hour TTL:**
 
 Add to `~/.bashrc` or `~/.zshrc`:
 ```bash
-export ENSEMBLE_CACHE_TTL_SECONDS=21600
+export POC_CLAUDE_ENSEMBLE_CACHE_TTL_SECONDS=21600
 ```
 
 Or pass per-session:
 ```bash
-ENSEMBLE_CACHE_TTL_SECONDS=21600 python3 script.py
+POC_CLAUDE_ENSEMBLE_CACHE_TTL_SECONDS=21600 python3 script.py
 ```
 
 **Why this matters — the cost difference:**
@@ -336,10 +336,10 @@ caching/
 
 The active CE model invocation path uses the installed Claude Code runtime. It does not use this direct Anthropic API validation script. `test_anthropic_api.py` is an optional, manual compatibility experiment for the separate cache-control integration and is not required for the default single-runtime path or CI.
 
-Run local cache tests by default. A live Anthropic API request is made only when you explicitly set `ENSEMBLE_LIVE_CACHE_TESTS=1`, have an `ANTHROPIC_API_KEY`, and understand that provider charges may apply:
+Run local cache tests by default. A live Anthropic API request is made only when you explicitly set `POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1`, have an `ANTHROPIC_API_KEY`, and understand that provider charges may apply:
 
 ```bash
-ENSEMBLE_LIVE_CACHE_TESTS=1 python3 caching/test_anthropic_api.py
+POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1 python3 caching/test_anthropic_api.py
 ```
 
 Without the opt-in flag, the script must not make an API request even if an API key is present. Never put a real API key in source control, shell transcripts, or tool output.

@@ -5,7 +5,7 @@ OPTIONAL LEGACY LIVE TEST: direct Anthropic API prompt-cache validation.
 This is not part of Claude Ensemble's supported Claude Code-only runtime or
 required CI. It tests the retired direct-Anthropic messages.create() path only.
 Run manually, only if deliberately validating that legacy API integration, with
-ENSEMBLE_LIVE_CACHE_TESTS=1 and ANTHROPIC_API_KEY set. It makes paid API calls.
+POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1 and ANTHROPIC_API_KEY set. It makes paid API calls.
 Do not use this script as evidence that the active Claude Code runtime works.
 """
 
@@ -326,8 +326,8 @@ class AnthropicCacheValidator:
 
 
 def main():
-    if os.environ.get("ENSEMBLE_LIVE_CACHE_TESTS") != "1":
-        print("Live Anthropic prompt-cache validation is opt-in; set ENSEMBLE_LIVE_CACHE_TESTS=1 to run.")
+    if os.environ.get("POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS") != "1":
+        print("Live Anthropic prompt-cache validation is opt-in; set POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1 to run.")
         return 0
     """Run all Anthropic API validation tests."""
     print("\n" + "=" * 80)
@@ -335,10 +335,10 @@ def main():
     print("=" * 80)
 
     # Live API calls require an explicit opt-in, even when a key is present.
-    live_api_enabled = os.environ.get("ENSEMBLE_LIVE_CACHE_TESTS") == "1"
+    live_api_enabled = os.environ.get("POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS") == "1"
     if not live_api_enabled:
         print("\nLive Anthropic API validation is disabled by default.")
-        print("Set ENSEMBLE_LIVE_CACHE_TESTS=1 to explicitly enable it.")
+        print("Set POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1 to explicitly enable it.")
         api_available = False
     elif not os.environ.get("ANTHROPIC_API_KEY"):
         print("\nENSEMBLE_LIVE_CACHE_TESTS=1 but ANTHROPIC_API_KEY is not set.")

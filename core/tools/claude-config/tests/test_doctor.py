@@ -58,8 +58,8 @@ class DoctorHealthTests(unittest.TestCase):
                 home=home,
                 repo_root=repo_root,
                 environ={
-                    "ENSEMBLE_GATEWAY_URL": "http://injected.invalid",
-                    "ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": str(claude_home),
+                    "POC_CLAUDE_ENSEMBLE_GATEWAY_URL": "http://injected.invalid",
+                    "POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": str(claude_home),
                 },
             )
             completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
@@ -132,7 +132,7 @@ class DoctorHealthTests(unittest.TestCase):
             config = doctor.DoctorConfig(
                 home=Path(tmp),
                 repo_root=Path(tmp),
-                environ={"ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": str(profile)},
+                environ={"POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": str(profile)},
             )
             output = io.StringIO()
             with (

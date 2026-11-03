@@ -18,7 +18,7 @@ import json
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8774
-MODEL_DIR = os.path.expanduser(os.environ.get("ENSEMBLE_RERANK_MODEL_DIR",
+MODEL_DIR = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_MODEL_DIR",
     "~/.FlossWare/models/rerankers/cross-encoder/ms-marco-MiniLM-L6-v2/233902d25c440f23af6f7d6e94d2946bac0bee0a"))
 MODEL_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 MODEL_ID = "cross-encoder/ms-marco-MiniLM-L6-v2 (local)"
@@ -108,8 +108,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_RERANK_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_RERANK_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_PORT", str(DEFAULT_PORT)))
     _load()
     server = create_server(host, port)
     try:

@@ -306,10 +306,10 @@ def test_timeout_cleanup_reports_failure_if_sigkill_does_not_close_pipes() -> No
 def test_env_overrides_preserve_inherited_environment() -> None:
     payload = {"result": "hello"}
 
-    provider = ClaudeCodeProvider(env={"ENSEMBLE_TEST_OVERRIDE": "override"})
+    provider = ClaudeCodeProvider(env={"POC_CLAUDE_ENSEMBLE_TEST_OVERRIDE": "override"})
     with patch.dict(
         "providers.claude_code.os.environ",
-        {"ENSEMBLE_TEST_INHERITED": "inherited"},
+        {"POC_CLAUDE_ENSEMBLE_TEST_INHERITED": "inherited"},
         clear=False,
     ), patch(
         "providers.claude_code.shutil.which", return_value="/usr/bin/claude"
@@ -319,8 +319,8 @@ def test_env_overrides_preserve_inherited_environment() -> None:
         provider.generate(ModelRequest("hello"))
 
     run_env = popen.call_args.kwargs["env"]
-    assert run_env["ENSEMBLE_TEST_INHERITED"] == "inherited"
-    assert run_env["ENSEMBLE_TEST_OVERRIDE"] == "override"
+    assert run_env["POC_CLAUDE_ENSEMBLE_TEST_INHERITED"] == "inherited"
+    assert run_env["POC_CLAUDE_ENSEMBLE_TEST_OVERRIDE"] == "override"
 
 
 @pytest.mark.parametrize(

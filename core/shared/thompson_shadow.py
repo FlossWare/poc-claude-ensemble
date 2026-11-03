@@ -14,9 +14,9 @@ import time
 import urllib.error
 import urllib.request
 
-THOMPSON_URL = os.environ.get("ENSEMBLE_THOMPSON_URL", "http://127.0.0.1:8769")
+THOMPSON_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_THOMPSON_URL", "http://127.0.0.1:8769")
 TIMEOUT = 2
-LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SELECTION_LEDGER",
+LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_SELECTION_LEDGER",
                                            "~/.FlossWare/ledger/selections/selections.jsonl"))
 
 

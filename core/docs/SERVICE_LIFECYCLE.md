@@ -23,7 +23,7 @@ tools/ce dev run memory
 
 Repeat with `tools/ce dev run thompson`, `tools/ce dev run learning`, and `tools/ce dev run graph` in separate terminals. Start the REST gateway last with `tools/ce dev run gateway`.
 
-The development mode uses loopback ports 18767 (Memory), 18766 (Graph), and 18080 (gateway) by default. These differ from the installed runtime ports to avoid accidental collisions. Set `ENSEMBLE_CE_DEV_MEMORY_PORT`, `ENSEMBLE_CE_DEV_GRAPH_PORT`, or `ENSEMBLE_CE_DEV_GATEWAY_PORT` before evaluating the environment to override them.
+The development mode uses loopback ports 18767 (Memory), 18766 (Graph), and 18080 (gateway) by default. These differ from the installed runtime ports to avoid accidental collisions. Set `POC_CLAUDE_ENSEMBLE_CE_DEV_MEMORY_PORT`, `POC_CLAUDE_ENSEMBLE_CE_DEV_GRAPH_PORT`, or `POC_CLAUDE_ENSEMBLE_CE_DEV_GATEWAY_PORT` before evaluating the environment to override them.
 
 In each terminal, use Ctrl-C to stop its service. This is explicit foreground execution, not daemon supervision. CE clients do not silently start a replacement daemon. If Memory is unavailable, `MemoryClient.append()` returns `False`; there is no automatic replay or flush. Start the missing service and retry the operation explicitly.
 

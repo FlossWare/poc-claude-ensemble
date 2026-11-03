@@ -24,7 +24,7 @@ The original audit identified developer-specific paths in runtime code, tests, d
 - `tools/discover-models.py`: `RH_TOOLS_ROOT` configures the global-skills checkout.
 - `caching/memory_cache_integration.py` and GA evaluators: `CE_MEMORY_DIR` overrides the historical RH memory directory; the old layout remains only as a compatibility fallback.
 - `hooks/pre-tool-validation.cjs`: `CE_PRE_TOOL_VALIDATOR_PATH` overrides the project-relative/legacy default.
-- Session-end hooks: `ENSEMBLE_ROOT` can be set explicitly; the managed `~/.FlossWare/claude-ensemble/current` is preferred when present.
+- Session-end hooks: `POC_CLAUDE_ENSEMBLE_ROOT` can be set explicitly; the managed `~/.FlossWare/claude-ensemble/current` is preferred when present.
 - `tools/install-ce-versioned.sh` references the `claude-global-skills` symlink by name to ensure the host-specific link is excluded from standalone releases. This is an intentional safety check, not a developer-home path.
 - `/home/test/...` strings in memory-sync tests are synthetic test fixtures, not production paths.
 - Documentation that describes old paths as historical context is intentionally retained where it explains compatibility or a previous issue.

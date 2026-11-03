@@ -25,7 +25,7 @@ multi-provider credential pool in its active runtime.
 
 Claude Code owns authentication. CE does not copy or rewrite `~/.claude`
 credentials as part of model routing. Before a request is sent, CE checks
-`claude auth status` against `ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER`, then
+`claude auth status` against `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER`, then
 validates the provider metadata returned by the CLI.
 
 The default expected provider is `vertex`. For Red Hat internal code, keep

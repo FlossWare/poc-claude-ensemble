@@ -55,7 +55,7 @@ def _start(server):
 
 
 def test_models_list_endpoint_returns_public_model_names_without_secrets(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     from server.ensemble_server import create_server
 
     server = create_server("127.0.0.1", 0)
@@ -73,7 +73,7 @@ def test_models_list_endpoint_returns_public_model_names_without_secrets(monkeyp
 
 
 def test_models_invoke_validates_required_fields_without_provider_call(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     from server.ensemble_server import create_server
 
     server = create_server("127.0.0.1", 0)
@@ -90,7 +90,7 @@ def test_models_invoke_validates_required_fields_without_provider_call(monkeypat
 
 
 def test_models_invoke_returns_provider_response_contract(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     from providers import ModelResponse
     from server.ensemble_server import create_server
 

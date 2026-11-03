@@ -24,8 +24,8 @@ PROVIDERS = {
 
 
 def main() -> int:
-    if os.environ.get("ENSEMBLE_LIVE_REVIEWER_TESTS") != "1":
-        print("not run: set ENSEMBLE_LIVE_REVIEWER_TESTS=1 to authorize live reviewer calls")
+    if os.environ.get("POC_CLAUDE_ENSEMBLE_LIVE_REVIEWER_TESTS") != "1":
+        print("not run: set POC_CLAUDE_ENSEMBLE_LIVE_REVIEWER_TESTS=1 to authorize live reviewer calls")
         return 2
 
     repository = os.environ.get("REVIEWER_SMOKE_REPOSITORY", "")

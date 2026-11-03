@@ -8,7 +8,7 @@ Endpoints
                      -> {"ok": true, "model": ..., "dimensions": ..., "embeddings": [[...], ...]}
 
 The default backend remains ONNX Runtime CPU FP32. OpenVINO CPU/GPU are
-explicit opt-ins through ENSEMBLE_EMBED_BACKEND. GPU selection fails closed
+explicit opt-ins through POC_CLAUDE_ENSEMBLE_EMBED_BACKEND. GPU selection fails closed
 rather than silently falling back to CPU.
 """
 import json
@@ -38,9 +38,9 @@ def _load():
     _load_error = None
     try:
         _embedder = Embedder(
-            threads=int(os.environ.get("ENSEMBLE_EMBED_THREADS", "8")),
-            backend=os.environ.get("ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
-            performance_hint=os.environ.get("ENSEMBLE_OPENVINO_PERFORMANCE_HINT"),
+            threads=int(os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_THREADS", "8")),
+            backend=os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
+            performance_hint=os.environ.get("POC_CLAUDE_ENSEMBLE_OPENVINO_PERFORMANCE_HINT"),
         )
     except Exception as exc:
         _load_error = str(exc)
@@ -49,7 +49,7 @@ def _load():
 def _runtime_metadata():
     backend = getattr(
         _embedder, "backend",
-        os.environ.get("ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
+        os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"),
     )
     return {
         "backend": backend,
@@ -165,8 +165,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_EMBED_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_EMBED_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_PORT", str(DEFAULT_PORT)))
     _load()
     server = create_server(host, port)
     try:

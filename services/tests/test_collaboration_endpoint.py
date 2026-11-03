@@ -30,8 +30,8 @@ def request(server, payload, token=None):
 
 
 def run_request(monkeypatch, tmp_path, payload, token=None):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
-    monkeypatch.setenv("ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
     server = create_server("127.0.0.1", 0, graph_url="", memory_url="")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -44,23 +44,23 @@ def run_request(monkeypatch, tmp_path, payload, token=None):
 
 
 def test_collaboration_is_disabled_without_server_token(monkeypatch, tmp_path):
-    monkeypatch.delenv("ENSEMBLE_COLLABORATION_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", raising=False)
     status, body = run_request(monkeypatch, tmp_path, {"task": "test task"})
     assert status == 503
     assert "disabled" in body["error"]
 
 
 def test_collaboration_rejects_missing_bearer_token(monkeypatch, tmp_path):
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
     status, body = run_request(monkeypatch, tmp_path, {"task": "test task"})
     assert status == 401
     assert body["error_code"] == "unauthorized"
 
 
 def test_collaboration_blocks_external_reviewers_without_opt_in(monkeypatch, tmp_path):
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_REVIEWERS", "grok")
-    monkeypatch.delenv("ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", raising=False)
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS", "grok")
+    monkeypatch.delenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", raising=False)
     status, body = run_request(monkeypatch, tmp_path, {"task": "test task"}, token="test-secret")
     assert status == 403
     assert body["error_code"] == "forbidden"
@@ -68,8 +68,8 @@ def test_collaboration_blocks_external_reviewers_without_opt_in(monkeypatch, tmp
 
 
 def test_collaboration_rejects_empty_task_before_provider_dispatch(monkeypatch, tmp_path):
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", "true")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", "true")
     status, body = run_request(
         monkeypatch,
         tmp_path,
@@ -88,14 +88,14 @@ def test_collaboration_rest_route_uses_strict_claude_code_provider(
     """Exercise the real REST route and orchestrator; mock only CLI I/O."""
     import providers.claude_code as claude_code_module
 
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_SOLVERS", "sonnet")
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_ARBITER", "opus")
-    monkeypatch.setenv("ENSEMBLE_COLLABORATION_REVIEWERS", "")
-    monkeypatch.delenv("ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", raising=False)
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
-    monkeypatch.setenv("ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
-    monkeypatch.setenv("ENSEMBLE_DECISION_PROVENANCE_FILE", str(tmp_path / "decisions.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", "test-secret")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS", "sonnet")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_ARBITER", "opus")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS", "")
+    monkeypatch.delenv("POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", raising=False)
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_DECISION_PROVENANCE_FILE", str(tmp_path / "decisions.jsonl"))
 
     adjudication = json.dumps({
         "selected_candidate": "r1-sonnet",

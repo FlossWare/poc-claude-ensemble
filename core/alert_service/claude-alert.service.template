@@ -19,7 +19,7 @@ EnvironmentFile=-%h/.config/claude-ensemble/environment
 # Environment
 Environment="PATH=%h/.local/bin:%REPO_PATH%/tools:%REPO_PATH%:/usr/local/bin:/usr/bin"
 Environment="PYTHONUNBUFFERED=1"
-Environment="ENSEMBLE_REPO_ROOT=%REPO_PATH%"
+Environment="POC_CLAUDE_ENSEMBLE_REPO_ROOT=%REPO_PATH%"
 
 # Resource limits
 MemoryLimit=256M

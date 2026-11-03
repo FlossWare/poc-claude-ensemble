@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="claude-ensemble.service"
 SERVICE_TEMPLATE="$REPO_ROOT/server/claude-ensemble.service.template"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
-SYSTEMD_DIR="${ENSEMBLE_USER_UNIT_DIR:-${HOME}/.config/systemd/user}"
+SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-${HOME}/.config/systemd/user}"
 SERVICE_FILE="$SYSTEMD_DIR/$SERVICE_NAME"
 
 if [[ ! -f "$SERVICE_TEMPLATE" ]]; then
@@ -20,7 +20,7 @@ chmod 0644 "$SERVICE_FILE"
 
 "$SYSTEMCTL_BIN" --user daemon-reload
 "$SYSTEMCTL_BIN" --user enable "$SERVICE_NAME"
-if [[ "${ENSEMBLE_DEFER_SERVICE_START:-0}" == "1" ]]; then
+if [[ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-0}" == "1" ]]; then
   echo "REST gateway installed and enabled; start deferred to the top-level installer."
   exit 0
 fi
@@ -40,8 +40,8 @@ import time
 import urllib.error
 import urllib.request
 
-url = __import__("os").environ.get("ENSEMBLE_READINESS_URL", "http://127.0.0.1:8080/api/v1/ready")
-timeout = float(__import__("os").environ.get("ENSEMBLE_READINESS_TIMEOUT_SECONDS", "20"))
+url = __import__("os").environ.get("POC_CLAUDE_ENSEMBLE_READINESS_URL", "http://127.0.0.1:8080/api/v1/ready")
+timeout = float(__import__("os").environ.get("POC_CLAUDE_ENSEMBLE_READINESS_TIMEOUT_SECONDS", "20"))
 deadline = time.monotonic() + timeout
 last_error = "readiness endpoint did not become ready"
 while time.monotonic() < deadline:

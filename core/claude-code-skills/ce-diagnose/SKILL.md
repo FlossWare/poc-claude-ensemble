@@ -9,8 +9,8 @@ Use this skill to run the existing diagnostic tooling and explain its evidence. 
 
 ## Establish the active checkout and profile
 
-1. Resolve the selected Claude Code profile from `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`.
-2. Locate CE via `ENSEMBLE_REPO_ROOT`; otherwise inspect `systemctl --user cat claude-ensemble.service` and verify the candidate checkout has `tools/ce`, `scripts/ce-diagnose.py`, and a Git remote for `FlossWare/claude-ensemble`.
+1. Resolve the selected Claude Code profile from `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`.
+2. Locate CE via `POC_CLAUDE_ENSEMBLE_REPO_ROOT`; otherwise inspect `systemctl --user cat claude-ensemble.service` and verify the candidate checkout has `tools/ce`, `scripts/ce-diagnose.py`, and a Git remote for `FlossWare/claude-ensemble`.
 3. Never run diagnosis from an unverified stale checkout or assume the default URL when an override is configured.
 
 ## Run diagnostics in increasing scope

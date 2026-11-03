@@ -12,9 +12,9 @@ if [[ -L "$FLOSSWARE_HOME" ]]; then
   exit 1
 fi
 
-ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/claude-ensemble}"
-SYSTEMCTL_BIN="${ENSEMBLE_SYSTEMCTL_BIN:-systemctl}"
-UNIT_DIR="${ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
+ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/claude-ensemble}"
+SYSTEMCTL_BIN="${POC_CLAUDE_ENSEMBLE_SYSTEMCTL_BIN:-systemctl}"
+UNIT_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
 case "$ROOT" in "~") ROOT="$HOME";; "~/"*) ROOT="$HOME/${ROOT#\~/}";; esac
 ROOT="${ROOT%/}"
 command -v python3 >/dev/null 2>&1 || {
@@ -82,10 +82,10 @@ preflight_units() {
   )
   temp="$(mktemp -d "${TMPDIR:-/tmp}/ce-unit-preflight.XXXXXX")" || die "could not create unit preflight directory"
   for installer in "${installers[@]}"; do
-    if ! SYSTEMCTL_BIN=true ENSEMBLE_STANDALONE_INSTALL=1 \
-      ENSEMBLE_USER_UNIT_DIR="$temp" \
-      ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ROOT/shared/claude-code" \
-      ENSEMBLE_DEFER_SERVICE_START=1 \
+    if ! SYSTEMCTL_BIN=true POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL=1 \
+      POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR="$temp" \
+      POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ROOT/shared/claude-code" \
+      POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1 \
       bash "$RELEASES/$version/$installer"; then
       rm -rf -- "$temp"
       die "unit preflight failed while running $installer"
@@ -114,17 +114,17 @@ start_services() {
   # Re-run the canonical installer through the stable logical path after
   # switching current. Its service installers then render units against current,
   # while all mutable Claude configuration remains in shared/.
-  ENSEMBLE_STANDALONE_INSTALL=1 \
-    ENSEMBLE_INSTALL_ROOT="$ROOT" \
-    ENSEMBLE_USER_UNIT_DIR="$UNIT_DIR" \
-    ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ROOT/shared/claude-code" \
-    ENSEMBLE_MEMORY_DIR="$ROOT/shared/data/memory" \
-    ENSEMBLE_LEARNING_DIR="$ROOT/shared/data/learning" \
-    ENSEMBLE_THOMPSON_STATE_FILE="$ROOT/shared/data/thompson-sampling-state.json" \
-    ENSEMBLE_GRAPH_STORE="$ROOT/shared/data/graph.json" \
-    ENSEMBLE_LOG_DIR="$ROOT/shared/logs" \
-    ENSEMBLE_RUNTIME_DIR="$ROOT/shared/runtime" \
-    ENSEMBLE_DEFER_SERVICE_START=1 \
+  POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL=1 \
+    POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$ROOT" \
+    POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR="$UNIT_DIR" \
+    POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ROOT/shared/claude-code" \
+    POC_CLAUDE_ENSEMBLE_MEMORY_DIR="$ROOT/shared/data/memory" \
+    POC_CLAUDE_ENSEMBLE_LEARNING_DIR="$ROOT/shared/data/learning" \
+    POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE="$ROOT/shared/data/thompson-sampling-state.json" \
+    POC_CLAUDE_ENSEMBLE_GRAPH_STORE="$ROOT/shared/data/graph.json" \
+    POC_CLAUDE_ENSEMBLE_LOG_DIR="$ROOT/shared/logs" \
+    POC_CLAUDE_ENSEMBLE_RUNTIME_DIR="$ROOT/shared/runtime" \
+    POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1 \
     bash "$CURRENT/install.sh" "$CURRENT"
   # Keep managed deployment state out of the development profile and global config.
   mkdir -p "$ROOT/shared/config" "$ROOT/shared/data/memory" "$ROOT/shared/data/learning" \
@@ -156,7 +156,7 @@ import time
 import urllib.error
 import urllib.request
 
-url = __import__("os").environ.get("ENSEMBLE_READY_URL", "http://127.0.0.1:8080/api/v1/ready")
+url = __import__("os").environ.get("POC_CLAUDE_ENSEMBLE_READY_URL", "http://127.0.0.1:8080/api/v1/ready")
 deadline = time.monotonic() + 20
 last_error = "readiness endpoint did not become ready"
 while time.monotonic() < deadline:

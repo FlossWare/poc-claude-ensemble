@@ -12,10 +12,10 @@ class RagConfigCliTests(unittest.TestCase):
     def run_cli(self, home, profile=None, *args):
         env = dict(os.environ)
         env["HOME"] = str(home)
-        env.pop("ENSEMBLE_CLAUDE_CODE_CONFIG_DIR", None)
+        env.pop("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR", None)
         env.pop("CLAUDE_CONFIG_DIR", None)
         if profile is not None:
-            env["ENSEMBLE_CLAUDE_CODE_CONFIG_DIR"] = str(profile)
+            env["POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR"] = str(profile)
         return subprocess.run(
             ["python3", str(SCRIPT), *args],
             env=env,

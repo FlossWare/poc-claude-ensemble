@@ -44,7 +44,7 @@ The default human-readable view emphasizes failures, warnings, and skipped check
 
 The counts above are illustrative, not an expected result. Each check has a stable code, status, detail, remediation, and duration. Status is one of `pass`, `fail`, `warn`, or `skip`. Severity is `error`, `warning`, or `info`. The process exits nonzero when at least one check fails; warnings and skipped checks remain visible but do not alone make it fail.
 
-Doctor checks the Claude Code executable, explicitly selected profile and managed hook configuration, provider identity for that profile, the CE gateway unit where systemd is available, and configured Memory/gateway/capability health endpoints. It does not print credentials. It never implicitly inspects the ordinary `~/.claude` profile: set `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR` to select a profile explicitly. `ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER` controls the expected provider; the default is `vertex`.
+Doctor checks the Claude Code executable, explicitly selected profile and managed hook configuration, provider identity for that profile, the CE gateway unit where systemd is available, and configured Memory/gateway/capability health endpoints. It does not print credentials. It never implicitly inspects the ordinary `~/.claude` profile: set `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR` to select a profile explicitly. `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER` controls the expected provider; the default is `vertex`.
 
 ## Service dependency graph
 
@@ -76,7 +76,7 @@ Supported service selectors are `gateway`, `memory`, `graph`, `decision`, `learn
 - `--prompt-context-smoke` requires emitted context and at least one Knowledge result. It does not prove Claude Code delivered the context to a model.
 - `--session-end-smoke` also runs SessionEnd capture. This appends one synthetic metadata-only event to production Memory, so it requires the additional explicit `--allow-memory-write` flag.
 
-Hook selection is isolated from unrelated Claude profiles. Lookup order is `CLAUDE_HOOK_DIR`, then the `hooks/` directory under `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`, then the standalone CE profile at `~/.FlossWare/claude-ensemble/shared/claude-code/hooks`. Use `--hook-dir` only when intentionally testing a different profile.
+Hook selection is isolated from unrelated Claude profiles. Lookup order is `CLAUDE_HOOK_DIR`, then the `hooks/` directory under `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`, then the standalone CE profile at `~/.FlossWare/claude-ensemble/shared/claude-code/hooks`. Use `--hook-dir` only when intentionally testing a different profile.
 
 The diagnose JSON report has this shape:
 
@@ -132,10 +132,10 @@ CE supports two execution environments:
 
 - **Installed Mode (systemd user service):**
   - **Memory REST URL:** `FLOSSWARE_MEMORY_URL` or `http://127.0.0.1:8767`
-  - **Memory Data Directory:** `${ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/claude-ensemble/shared/data/memory}`
+  - **Memory Data Directory:** `${POC_CLAUDE_ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/claude-ensemble/shared/data/memory}`
 - **Development Mode (`tools/ce dev`):**
   - **Memory REST URL:** Exported via `eval "$(tools/ce dev env)"` -> `FLOSSWARE_MEMORY_URL="http://127.0.0.1:18767"`
-  - **Memory Data Directory:** `${ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/claude-ensemble-state/data/memory}`
+  - **Memory Data Directory:** `${POC_CLAUDE_ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/claude-ensemble-state/data/memory}`
 
 To verify the active endpoint and storage directory in any shell prior to seeding or cleanup:
 ```bash
@@ -143,8 +143,8 @@ To verify the active endpoint and storage directory in any shell prior to seedin
 echo "${FLOSSWARE_MEMORY_URL:-http://127.0.0.1:8767}"
 
 # Verify Memory Storage Directory for target mode
-if [ -n "$ENSEMBLE_MEMORY_DIR" ]; then
-  MEM_DIR="$ENSEMBLE_MEMORY_DIR"
+if [ -n "$POC_CLAUDE_ENSEMBLE_MEMORY_DIR" ]; then
+  MEM_DIR="$POC_CLAUDE_ENSEMBLE_MEMORY_DIR"
 elif [ -d "$HOME/.FlossWare/claude-ensemble-state/data/memory" ]; then
   MEM_DIR="$HOME/.FlossWare/claude-ensemble-state/data/memory"
 else
@@ -153,7 +153,7 @@ fi
 echo "Target Memory Directory: $MEM_DIR"
 ```
 
-Never assume the development state directory is correct when testing an installed CE deployment. Always respect `ENSEMBLE_MEMORY_DIR` if set.
+Never assume the development state directory is correct when testing an installed CE deployment. Always respect `POC_CLAUDE_ENSEMBLE_MEMORY_DIR` if set.
 
 ### Safe Curl Acceptance Procedures
 

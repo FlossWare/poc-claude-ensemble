@@ -29,7 +29,7 @@ def default_hook_dir() -> str:
     configured = os.environ.get("CLAUDE_HOOK_DIR")
     if configured:
         return str(Path(configured).expanduser())
-    profile = os.environ.get("ENSEMBLE_CLAUDE_CODE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
+    profile = os.environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
     if profile:
         return str(Path(profile).expanduser() / "hooks")
     return str(Path.home() / ".FlossWare" / "claude-ensemble" / "shared" / "claude-code" / "hooks")
@@ -330,7 +330,7 @@ def main() -> int:
     if not 0.1 <= args.timeout <= 10:
         parser.error("--timeout must be between 0.1 and 10 seconds")
 
-    gateway = os.environ.get("ENSEMBLE_GATEWAY_URL", DEFAULT_GATEWAY).rstrip("/")
+    gateway = os.environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", DEFAULT_GATEWAY).rstrip("/")
     correlation_id = str(uuid.uuid4())
     results: list[dict[str, Any]] = []
 
@@ -347,7 +347,7 @@ def main() -> int:
 
     if selected("gateway"):
         http_step("gateway.liveness", "/api/v1/health",
-                  remediation="Check claude-ensemble.service and ENSEMBLE_GATEWAY_URL.")
+                  remediation="Check claude-ensemble.service and POC_CLAUDE_ENSEMBLE_GATEWAY_URL.")
         http_step("gateway.readiness", "/api/v1/ready",
                   remediation="Inspect the readiness response for Graph and Memory failures.")
 
@@ -373,13 +373,13 @@ def main() -> int:
 
     if selected("learning"):
         http_step("learning.health", "/api/v1/learning/health",
-                  remediation="Check claude-learning.service, ENSEMBLE_LEARNING_URL, and the service HTTP port.")
+                  remediation="Check claude-learning.service, POC_CLAUDE_ENSEMBLE_LEARNING_URL, and the service HTTP port.")
         http_step("learning.ping", "/api/v1/learning/ping",
                   remediation="Check the Learning REST adapter and its configured gateway URL.")
 
     if selected("thompson"):
         http_step("thompson.health", "/api/v1/thompson/health",
-                  remediation="Check claude-thompson.service, ENSEMBLE_THOMPSON_URL, and the service HTTP port.")
+                  remediation="Check claude-thompson.service, POC_CLAUDE_ENSEMBLE_THOMPSON_URL, and the service HTTP port.")
         http_step("thompson.ping", "/api/v1/thompson/ping",
                   remediation="Check the Thompson REST adapter and its configured gateway URL.")
 

@@ -9,7 +9,7 @@ Inspect genetic-algorithm (GA) tuning evidence without confusing optimizer outpu
 
 ## 1. Verify environment and implementation
 
-1. Resolve the selected Claude Code profile and verify the active CE checkout using `ENSEMBLE_REPO_ROOT` or the configured service definition and Git remote.
+1. Resolve the selected Claude Code profile and verify the active CE checkout using `POC_CLAUDE_ENSEMBLE_REPO_ROOT` or the configured service definition and Git remote.
 2. Inspect the current GA README, configuration, implementation, and dashboard before running a command. Confirm the actual dashboard path and available flags from the checked-out source or `--help`; do not guess paths.
 3. Run `bash tools/ce diagnose --deep --json` if service health or Learning integration is relevant. Capture the exit status and output.
 

@@ -18,7 +18,7 @@ def request(server, method, path, payload=None):
         return exc.code, json.loads(exc.read())
 
 def test_experiment_evaluation_endpoint(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE", str(tmp_path / "experiments.jsonl"))
     server = create_server("127.0.0.1", 0, graph_url="", memory_url="")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

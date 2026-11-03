@@ -23,7 +23,7 @@ CORE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 if os.path.isdir(os.path.join(CORE, "shared")) and CORE not in sys.path:
     sys.path.insert(0, CORE)
 
-LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
+LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
 WORKERS = ["rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"]
 ARBITER = "claude-haiku-5-5"
 MAX_TOKENS = 4000

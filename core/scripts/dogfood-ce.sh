@@ -6,8 +6,8 @@ REPO_DIR="${CE_REPO_DIR:-$HOME/Development/github/FlossWare/claude-ensemble}"
 WORK_DIR="${CE_DOGFOOD_DIR:-$HOME/.local/state/claude-ensemble-dogfood}"
 MCP_HOST="${MCP_HOST:-127.0.0.1}"
 MCP_PORT="${MCP_PORT:-8790}"
-HTTP_HOST="${ENSEMBLE_HTTP_HOST:-127.0.0.1}"
-HTTP_PORT="${ENSEMBLE_HTTP_PORT:-8080}"
+HTTP_HOST="${POC_CLAUDE_ENSEMBLE_HTTP_HOST:-127.0.0.1}"
+HTTP_PORT="${POC_CLAUDE_ENSEMBLE_HTTP_PORT:-8080}"
 MCP_LOG="$WORK_DIR/reviewer-mcp.log"
 SERVER_LOG="$WORK_DIR/ensemble-server.log"
 TEST_LOG="$WORK_DIR/tests.log"
@@ -68,26 +68,26 @@ python -m pip install --upgrade pip >/dev/null
 python -c 'import pytest' >/dev/null 2>&1 || python -m pip install pytest
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 export REVIEWER_MCP_URL="http://$MCP_HOST:$MCP_PORT/mcp"
-if [[ -z "${ENSEMBLE_COLLABORATION_AUTH_TOKEN:-}" ]]; then
-  export ENSEMBLE_COLLABORATION_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+if [[ -z "${POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN:-}" ]]; then
+  export POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 fi
-export ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true
-export ENSEMBLE_COLLABORATION_MAX_ROUNDS=2
-export ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS=4
-export ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS=8
-export ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS=2
-export ENSEMBLE_COLLABORATION_SOLVERS="sonnet,haiku"
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ROUNDS=2
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS=4
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS=8
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS=2
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS="sonnet,haiku"
 
 if [[ -n "${XAI_API_KEY:-}" && -n "${PERPLEXITY_API_KEY:-}" ]]; then
-  export ENSEMBLE_COLLABORATION_REVIEWERS="grok,perplexity"
+  export POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS="grok,perplexity"
   REVIEWERS_JSON='["grok", "perplexity"]'
   echo "External reviewers: grok, perplexity"
 else
-  export ENSEMBLE_COLLABORATION_REVIEWERS=""
+  export POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS=""
   REVIEWERS_JSON='[]'
   echo "External reviewer API keys unavailable; running core collaboration dogfood without external reviewers."
 fi
-export ENSEMBLE_COLLABORATION_ARBITER="opus"
+export POC_CLAUDE_ENSEMBLE_COLLABORATION_ARBITER="opus"
 
 echo "=== Repository tests ==="
 {
@@ -142,7 +142,7 @@ JSON
 sed -i "s/__REVIEWERS_JSON__/$REVIEWERS_JSON/" "$WORK_DIR/collaboration-request.json"
 
 echo "=== Real collaboration run ==="
-code="$(curl -sS -o "$RESULT" -w '%{http_code}' -X POST "http://$HTTP_HOST:$HTTP_PORT/api/v1/collaboration/run" -H 'Content-Type: application/json' -H "Authorization: Bearer $ENSEMBLE_COLLABORATION_AUTH_TOKEN" --data-binary "@$WORK_DIR/collaboration-request.json")"
+code="$(curl -sS -o "$RESULT" -w '%{http_code}' -X POST "http://$HTTP_HOST:$HTTP_PORT/api/v1/collaboration/run" -H 'Content-Type: application/json' -H "Authorization: Bearer $POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN" --data-binary "@$WORK_DIR/collaboration-request.json")"
 echo "HTTP status: $code"
 python -m json.tool "$RESULT"
 if [[ "$code" == 200 ]]; then

@@ -1,6 +1,6 @@
 """Optional real Claude Code integration test.
 
-Run with ENSEMBLE_CLAUDE_INTEGRATION=1 on a machine with authenticated Claude Code.
+Run with POC_CLAUDE_ENSEMBLE_CLAUDE_INTEGRATION=1 on a machine with authenticated Claude Code.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from arbitration.api_client import MultiModelClient
 
 
 @pytest.mark.skipif(
-    os.environ.get("ENSEMBLE_CLAUDE_INTEGRATION") != "1",
+    os.environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_INTEGRATION") != "1",
     reason="real Claude Code integration is opt-in",
 )
 def test_real_claude_code_execution() -> None:
@@ -24,7 +24,7 @@ def test_real_claude_code_execution() -> None:
     # Exercise the real compatibility facade and registry, not just the low-level
     # adapter. This is the same routing path used by CE orchestration.
     response = MultiModelClient().call_model_response(
-        model=os.environ.get("ENSEMBLE_CLAUDE_MODEL", "sonnet"),
+        model=os.environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_MODEL", "sonnet"),
         prompt="Reply with exactly the word READY.",
         timeout=120,
     )

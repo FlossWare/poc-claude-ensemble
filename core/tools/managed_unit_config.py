@@ -8,19 +8,19 @@ from pathlib import Path
 
 UNITS = {
     "claude-memory.service": {
-        "ENSEMBLE_MEMORY_DIR": "data/memory",
-        "ENSEMBLE_MEMORY_SOCKET": "runtime/memory.sock",
+        "POC_CLAUDE_ENSEMBLE_MEMORY_DIR": "data/memory",
+        "POC_CLAUDE_ENSEMBLE_MEMORY_SOCKET": "runtime/memory.sock",
     },
     "claude-thompson.service": {
-        "ENSEMBLE_THOMPSON_STATE_FILE": "data/thompson-sampling-state.json",
-        "ENSEMBLE_THOMPSON_SOCKET": "runtime/thompson.sock",
+        "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE": "data/thompson-sampling-state.json",
+        "POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET": "runtime/thompson.sock",
     },
     "claude-learning.service": {
-        "ENSEMBLE_LEARNING_DIR": "data/learning",
-        "ENSEMBLE_LEARNING_SOCKET": "runtime/learning.sock",
+        "POC_CLAUDE_ENSEMBLE_LEARNING_DIR": "data/learning",
+        "POC_CLAUDE_ENSEMBLE_LEARNING_SOCKET": "runtime/learning.sock",
     },
     "claude-graph.service": {
-        "ENSEMBLE_GRAPH_STORE": "data/graph.json",
+        "POC_CLAUDE_ENSEMBLE_GRAPH_STORE": "data/graph.json",
     },
     "claude-ensemble.service": {},
 }
@@ -43,10 +43,10 @@ def _escape_path(value: str | Path) -> str:
 def configure(unit_dir: Path, root: Path, current: Path, source_root: Path | None) -> None:
     environment_file = root / "shared/config/environment"
     common = {
-        "ENSEMBLE_LOG_DIR": root / "shared/logs",
-        "ENSEMBLE_RUNTIME_DIR": root / "shared/runtime",
-        "ENSEMBLE_REPO_ROOT": current,
-        "ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": root / "shared/claude-code",
+        "POC_CLAUDE_ENSEMBLE_LOG_DIR": root / "shared/logs",
+        "POC_CLAUDE_ENSEMBLE_RUNTIME_DIR": root / "shared/runtime",
+        "POC_CLAUDE_ENSEMBLE_REPO_ROOT": current,
+        "POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": root / "shared/claude-code",
         # Native Claude Code processes inherit this variable; the CE-prefixed
         # variable is retained for CE components that consume its contract.
         "CLAUDE_CONFIG_DIR": root / "shared/claude-code",
@@ -84,10 +84,10 @@ def configure(unit_dir: Path, root: Path, current: Path, source_root: Path | Non
 def validate(unit_dir: Path, root: Path, current: Path) -> None:
     environment_file = f"EnvironmentFile=-{_escape_path(root / 'shared/config/environment')}"
     required_common = (
-        f'Environment="ENSEMBLE_LOG_DIR={_escape_env(root / "shared/logs")}"',
-        f'Environment="ENSEMBLE_RUNTIME_DIR={_escape_env(root / "shared/runtime")}"',
-        f'Environment="ENSEMBLE_REPO_ROOT={_escape_env(current)}"',
-        f'Environment="ENSEMBLE_CLAUDE_CODE_CONFIG_DIR={_escape_env(root / "shared/claude-code")}"',
+        f'Environment="POC_CLAUDE_ENSEMBLE_LOG_DIR={_escape_env(root / "shared/logs")}"',
+        f'Environment="POC_CLAUDE_ENSEMBLE_RUNTIME_DIR={_escape_env(root / "shared/runtime")}"',
+        f'Environment="POC_CLAUDE_ENSEMBLE_REPO_ROOT={_escape_env(current)}"',
+        f'Environment="POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR={_escape_env(root / "shared/claude-code")}"',
         f'Environment="CLAUDE_CONFIG_DIR={_escape_env(root / "shared/claude-code")}"',
         environment_file,
     )

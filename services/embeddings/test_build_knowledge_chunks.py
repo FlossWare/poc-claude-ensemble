@@ -306,10 +306,10 @@ class EmbedBatchSettingTests(unittest.TestCase):
         import subprocess
         code = "import build_knowledge_chunks as bk; print(bk.EMBED_BATCH)"
         here = os.path.dirname(os.path.abspath(__file__))
-        env = {k: v for k, v in os.environ.items() if k != "ENSEMBLE_KNOWLEDGE_EMBED_BATCH"}
+        env = {k: v for k, v in os.environ.items() if k != "POC_CLAUDE_ENSEMBLE_KNOWLEDGE_EMBED_BATCH"}
         default = subprocess.run([sys.executable, "-c", code], cwd=here, env=env,
                                  capture_output=True, text=True, check=True).stdout.strip()
-        env["ENSEMBLE_KNOWLEDGE_EMBED_BATCH"] = "32"
+        env["POC_CLAUDE_ENSEMBLE_KNOWLEDGE_EMBED_BATCH"] = "32"
         overridden = subprocess.run([sys.executable, "-c", code], cwd=here, env=env,
                                     capture_output=True, text=True, check=True).stdout.strip()
         self.assertEqual((default, overridden), ("64", "32"))

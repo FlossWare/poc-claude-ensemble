@@ -28,7 +28,7 @@ The default store is:
 
 `~/.local/share/claude-ensemble/graph.json`
 
-Set `ENSEMBLE_GRAPH_STORE` to use another location.
+Set `POC_CLAUDE_ENSEMBLE_GRAPH_STORE` to use another location.
 
 Mutations are serialized under an in-process reentrant lock and persisted by writing a temporary file, flushing it with `fsync`, and atomically replacing the store. A new process reconstructs the graph from that file.
 
@@ -36,9 +36,9 @@ Automatically generated node and edge IDs are SHA-256 identifiers over canonical
 
 ## Configuration
 
-- `ENSEMBLE_GRAPH_HOST`, default `127.0.0.1`
-- `ENSEMBLE_GRAPH_PORT`, default `8766`
-- `ENSEMBLE_GRAPH_STORE`, default `~/.local/share/claude-ensemble/graph.json`
+- `POC_CLAUDE_ENSEMBLE_GRAPH_HOST`, default `127.0.0.1`
+- `POC_CLAUDE_ENSEMBLE_GRAPH_PORT`, default `8766`
+- `POC_CLAUDE_ENSEMBLE_GRAPH_STORE`, default `~/.local/share/claude-ensemble/graph.json`
 
 The service is loopback-only. Remote federation and authentication are intentionally outside this issue. Systemd installer/lifecycle integration is provided by `claude-graph.service.template` and `install.sh`. The service is independently owned by systemd and must not create or supervise sibling processes.
 

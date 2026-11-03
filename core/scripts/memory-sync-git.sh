@@ -4,9 +4,9 @@
 
 set -e
 
-ENSEMBLE_ROOT="${ENSEMBLE_ROOT:-$HOME/Development/FlossWare/claude-ensemble}"
+POC_CLAUDE_ENSEMBLE_ROOT="${POC_CLAUDE_ENSEMBLE_ROOT:-$HOME/Development/FlossWare/claude-ensemble}"
 MEMORY_SOURCE="$HOME/.claude/projects/memory"
-MEMORY_DEST="$ENSEMBLE_ROOT/memory"
+MEMORY_DEST="$POC_CLAUDE_ENSEMBLE_ROOT/memory"
 
 if [ ! -d "$MEMORY_SOURCE" ]; then
     echo "✗ Memory directory not found: $MEMORY_SOURCE"
@@ -22,7 +22,7 @@ find "$MEMORY_SOURCE" -maxdepth 1 -name "*.md" -type f | while read file; do
 done
 
 # Commit if there are changes
-cd "$ENSEMBLE_ROOT"
+cd "$POC_CLAUDE_ENSEMBLE_ROOT"
 if git diff --quiet memory/ 2>/dev/null; then
     echo "✓ Memory already in sync"
 else

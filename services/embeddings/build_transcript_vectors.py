@@ -18,8 +18,8 @@ import urllib.request
 
 HOME = os.path.expanduser("~")
 TRANSCRIPTS_DB = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/shared/data/transcripts/transcripts.db")
-EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
-VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
+EMBEDDING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
+VECTOR_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
 COLLECTION = "transcript_text"
 LOG = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/state/logs/embed-transcripts.log")
 BATCH = 64

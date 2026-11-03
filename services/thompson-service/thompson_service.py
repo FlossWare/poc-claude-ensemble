@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SOCKET_PATH = socket_path('ENSEMBLE_THOMPSON_SOCKET', '/tmp/claude-thompson.sock')
-HTTP_PORT = int(os.environ.get('ENSEMBLE_THOMPSON_HTTP_PORT', '8769'))
+SOCKET_PATH = socket_path('POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET', '/tmp/claude-thompson.sock')
+HTTP_PORT = int(os.environ.get('POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT', '8769'))
 STATE_FILE = thompson_state_file()
 
 

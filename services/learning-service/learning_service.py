@@ -45,8 +45,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 LEARNING_DIR = learning_dir()
-SOCKET_PATH = socket_path('ENSEMBLE_LEARNING_SOCKET', '/tmp/claude-learning.sock')
-HTTP_PORT = int(os.environ.get('ENSEMBLE_LEARNING_HTTP_PORT', '8768'))
+SOCKET_PATH = socket_path('POC_CLAUDE_ENSEMBLE_LEARNING_SOCKET', '/tmp/claude-learning.sock')
+HTTP_PORT = int(os.environ.get('POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT', '8768'))
 
 
 

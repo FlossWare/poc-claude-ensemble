@@ -16,7 +16,7 @@ fi
 VERSION="$1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SOURCE_DIR="${2:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
-ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
+ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
 case "$ROOT" in "~") ROOT="$HOME";; "~/"*) ROOT="$HOME/${ROOT#\~/}";; esac
 ROOT="${ROOT%/}"
 

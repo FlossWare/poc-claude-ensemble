@@ -29,7 +29,7 @@ Edit the file with your preferred editor. Do not paste real credentials into cha
 
 ## Supported CE session initialization
 
-The current `scripts/ensemble-init.sh` reads `ENSEMBLE_CREDENTIALS_FILE` (default: `~/.FlossWare/secrets.env`) when that script is sourced. Its parser accepts exported assignments with literal values, optionally single- or double-quoted. It does not execute the file as shell code. Unsupported lines are ignored with a warning.
+The current `scripts/ensemble-init.sh` reads `POC_CLAUDE_ENSEMBLE_CREDENTIALS_FILE` (default: `~/.FlossWare/secrets.env`) when that script is sourced. Its parser accepts exported assignments with literal values, optionally single- or double-quoted. It does not execute the file as shell code. Unsupported lines are ignored with a warning.
 
 For example, these are supported:
 
@@ -73,8 +73,8 @@ A successful check proves only that the variable is present in that process. It 
 
 - Check file existence and permissions without reading its contents:
   ```bash
-  test -r "${ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}" && echo 'credentials file is readable'
-  stat -c '%a %n' "${ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}" 2>/dev/null || stat -f '%Lp %N' "${ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}"
+  test -r "${POC_CLAUDE_ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}" && echo 'credentials file is readable'
+  stat -c '%a %n' "${POC_CLAUDE_ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}" 2>/dev/null || stat -f '%Lp %N' "${POC_CLAUDE_ENSEMBLE_CREDENTIALS_FILE:-$HOME/.FlossWare/secrets.env}"
   ```
 - Check whether a variable is present using the presence-only snippet above. Do not use `echo $TOKEN`, `printenv TOKEN`, `env`, or other commands that display credential values.
 - If CE's initialization parser reports an unsupported entry, simplify that entry to a literal exported assignment or use an approved secret manager.

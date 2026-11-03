@@ -28,7 +28,7 @@ class GATuningDashboard:
                 results_dir = Path(configured)
             else:
                 deploy_root = Path(os.environ.get(
-                    "ENSEMBLE_INSTALL_ROOT",
+                    "POC_CLAUDE_ENSEMBLE_INSTALL_ROOT",
                     Path.home() / ".FlossWare" / "claude-ensemble",
                 ))
                 deployed_results = deploy_root / "shared" / "data" / "ga-tuning" / "results"

@@ -14,7 +14,7 @@ import numpy as np
 from tokenizers import Tokenizer
 
 MODEL_DIR = os.path.expanduser(os.environ.get(
-    "ENSEMBLE_EMBEDDING_MODEL_DIR",
+    "POC_CLAUDE_ENSEMBLE_EMBEDDING_MODEL_DIR",
     "~/.FlossWare/models/embeddings/nomic-ai/nomic-embed-text-v1.5/"
     "e9b6763023c676ca8431644204f50c2b100d9aab",
 ))
@@ -80,7 +80,7 @@ class Embedder:
     @staticmethod
     def _resolve_backend(backend: str | None) -> str:
         selected = (backend or os.environ.get(
-            "ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"
+            "POC_CLAUDE_ENSEMBLE_EMBED_BACKEND", "onnxruntime-cpu"
         )).strip().lower()
         if selected not in BACKENDS:
             raise ValueError(
@@ -108,7 +108,7 @@ class Embedder:
     @staticmethod
     def _resolve_openvino_hint(performance_hint: str | None) -> str:
         hint = (performance_hint or os.environ.get(
-            "ENSEMBLE_OPENVINO_PERFORMANCE_HINT", "THROUGHPUT"
+            "POC_CLAUDE_ENSEMBLE_OPENVINO_PERFORMANCE_HINT", "THROUGHPUT"
         )).strip().upper()
         if hint not in OPENVINO_HINTS:
             raise ValueError(f"unsupported OpenVINO performance hint: {hint!r}")

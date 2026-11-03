@@ -31,7 +31,7 @@ class ManagedInstallRecoveryTests(unittest.TestCase):
         self.hooks.mkdir(parents=True)
         self.env = os.environ.copy()
         self.env["HOME"] = str(self.home)
-        self.env["ENSEMBLE_CLAUDE_CODE_CONFIG_DIR"] = str(self.profile)
+        self.env["POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR"] = str(self.profile)
         self.env.pop("CLAUDE_CONFIG_DIR", None)
         self.env.pop("FLOSSWARE_CLAUDE_CONFIG_STATE_DIR", None)
 

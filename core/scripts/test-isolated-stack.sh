@@ -14,9 +14,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-PYTHON="${ENSEMBLE_TEST_PYTHON:-python3}"
-if [[ -n "${ENSEMBLE_TEST_VENV:-}" ]]; then
-  PYTHON="$ENSEMBLE_TEST_VENV/bin/python"
+PYTHON="${POC_CLAUDE_ENSEMBLE_TEST_PYTHON:-python3}"
+if [[ -n "${POC_CLAUDE_ENSEMBLE_TEST_VENV:-}" ]]; then
+  PYTHON="$POC_CLAUDE_ENSEMBLE_TEST_VENV/bin/python"
   [[ -x "$PYTHON" ]] || { echo "FAIL: Python executable not found: $PYTHON" >&2; exit 2; }
 else
   command -v "$PYTHON" >/dev/null 2>&1 || { echo "FAIL: Python executable not found: $PYTHON" >&2; exit 2; }
@@ -37,32 +37,32 @@ PYPORTS
 )
 
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export ENSEMBLE_RUNTIME_DIR="$TMP/runtime"
-export ENSEMBLE_LOG_DIR="$TMP/logs"
-export ENSEMBLE_MEMORY_DIR="$TMP/data/memory"
-export ENSEMBLE_LEARNING_DIR="$TMP/data/learning"
-export ENSEMBLE_MEMORY_SOCKET="$TMP/runtime/memory.sock"
-export ENSEMBLE_LEARNING_SOCKET="$TMP/runtime/learning.sock"
-export ENSEMBLE_THOMPSON_SOCKET="$TMP/runtime/thompson.sock"
-export ENSEMBLE_THOMPSON_STATE_FILE="$TMP/data/thompson-state.json"
-export ENSEMBLE_GRAPH_STORE="$TMP/data/graph.json"
-export ENSEMBLE_METRICS_FILE="$TMP/data/metrics.jsonl"
-export ENSEMBLE_DECISION_PROVENANCE_FILE="$TMP/data/provenance.jsonl"
-export ENSEMBLE_EXPERIMENT_FILE="$TMP/data/experiments.json"
-export ENSEMBLE_MEMORY_HTTP_HOST=127.0.0.1
-export ENSEMBLE_MEMORY_HTTP_PORT="$MEMORY_PORT"
-export ENSEMBLE_GRAPH_HOST=127.0.0.1
-export ENSEMBLE_GRAPH_PORT="$GRAPH_PORT"
-export ENSEMBLE_LEARNING_HTTP_PORT="$LEARNING_PORT"
-export ENSEMBLE_THOMPSON_HTTP_PORT="$THOMPSON_PORT"
-export ENSEMBLE_HTTP_HOST=127.0.0.1
-export ENSEMBLE_HTTP_PORT="$GATEWAY_PORT"
-export ENSEMBLE_MEMORY_URL="http://127.0.0.1:$MEMORY_PORT"
-export FLOSSWARE_MEMORY_URL="$ENSEMBLE_MEMORY_URL"
-export ENSEMBLE_GRAPH_URL="http://127.0.0.1:$GRAPH_PORT"
-export FLOSSWARE_GRAPH_URL="$ENSEMBLE_GRAPH_URL"
-export ENSEMBLE_LEARNING_URL="http://127.0.0.1:$LEARNING_PORT"
-export ENSEMBLE_THOMPSON_URL="http://127.0.0.1:$THOMPSON_PORT"
+export POC_CLAUDE_ENSEMBLE_RUNTIME_DIR="$TMP/runtime"
+export POC_CLAUDE_ENSEMBLE_LOG_DIR="$TMP/logs"
+export POC_CLAUDE_ENSEMBLE_MEMORY_DIR="$TMP/data/memory"
+export POC_CLAUDE_ENSEMBLE_LEARNING_DIR="$TMP/data/learning"
+export POC_CLAUDE_ENSEMBLE_MEMORY_SOCKET="$TMP/runtime/memory.sock"
+export POC_CLAUDE_ENSEMBLE_LEARNING_SOCKET="$TMP/runtime/learning.sock"
+export POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET="$TMP/runtime/thompson.sock"
+export POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE="$TMP/data/thompson-state.json"
+export POC_CLAUDE_ENSEMBLE_GRAPH_STORE="$TMP/data/graph.json"
+export POC_CLAUDE_ENSEMBLE_METRICS_FILE="$TMP/data/metrics.jsonl"
+export POC_CLAUDE_ENSEMBLE_DECISION_PROVENANCE_FILE="$TMP/data/provenance.jsonl"
+export POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE="$TMP/data/experiments.json"
+export POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_HOST=127.0.0.1
+export POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT="$MEMORY_PORT"
+export POC_CLAUDE_ENSEMBLE_GRAPH_HOST=127.0.0.1
+export POC_CLAUDE_ENSEMBLE_GRAPH_PORT="$GRAPH_PORT"
+export POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT="$LEARNING_PORT"
+export POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT="$THOMPSON_PORT"
+export POC_CLAUDE_ENSEMBLE_HTTP_HOST=127.0.0.1
+export POC_CLAUDE_ENSEMBLE_HTTP_PORT="$GATEWAY_PORT"
+export POC_CLAUDE_ENSEMBLE_MEMORY_URL="http://127.0.0.1:$MEMORY_PORT"
+export FLOSSWARE_MEMORY_URL="$POC_CLAUDE_ENSEMBLE_MEMORY_URL"
+export POC_CLAUDE_ENSEMBLE_GRAPH_URL="http://127.0.0.1:$GRAPH_PORT"
+export FLOSSWARE_GRAPH_URL="$POC_CLAUDE_ENSEMBLE_GRAPH_URL"
+export POC_CLAUDE_ENSEMBLE_LEARNING_URL="http://127.0.0.1:$LEARNING_PORT"
+export POC_CLAUDE_ENSEMBLE_THOMPSON_URL="http://127.0.0.1:$THOMPSON_PORT"
 
 mkdir -p "$TMP/runtime" "$TMP/logs" "$TMP/data/memory" "$TMP/data/learning"
 chmod 700 "$TMP" "$TMP/runtime" "$TMP/data"
@@ -103,10 +103,10 @@ wait_http() {
   done
   return 1
 }
-wait_http "$ENSEMBLE_MEMORY_URL/health" || fail_with_logs "Memory service did not become healthy"
-wait_http "$ENSEMBLE_GRAPH_URL/health" || fail_with_logs "Graph service did not become healthy"
-wait_http "$ENSEMBLE_LEARNING_URL/health" || fail_with_logs "Learning service did not become healthy"
-wait_http "$ENSEMBLE_THOMPSON_URL/health" || fail_with_logs "Thompson service did not become healthy"
+wait_http "$POC_CLAUDE_ENSEMBLE_MEMORY_URL/health" || fail_with_logs "Memory service did not become healthy"
+wait_http "$POC_CLAUDE_ENSEMBLE_GRAPH_URL/health" || fail_with_logs "Graph service did not become healthy"
+wait_http "$POC_CLAUDE_ENSEMBLE_LEARNING_URL/health" || fail_with_logs "Learning service did not become healthy"
+wait_http "$POC_CLAUDE_ENSEMBLE_THOMPSON_URL/health" || fail_with_logs "Thompson service did not become healthy"
 wait_http "http://127.0.0.1:$GATEWAY_PORT/api/v1/ready" || fail_with_logs "gateway readiness failed"
 
 READY="$TMP/ready.json"

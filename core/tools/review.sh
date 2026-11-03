@@ -147,7 +147,7 @@ echo ""
 # Invoke arbitration workflow with multi-tier review
 case "$ARTIFACT_TYPE" in
   "Pull Request"|"Code File"|"Python Code"|"JavaScript Code"|"Go Code")
-    python3 "$ENSEMBLE_ROOT/tools/arbitrate.py" code-review "$TARGET" \
+    python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/arbitrate.py" code-review "$TARGET" \
       --phases "$PHASE_COUNT" \
       --tiers "$REVIEW_TIERS" 2>&1
     ;;
@@ -191,4 +191,4 @@ echo ""
 echo "✓ Review ($REVIEW_TIERS tier(s)) saved to memory"
 echo "✓ Searchable: query-memory.py semantic-search 'review $ARTIFACT_NAME'"
 echo "✓ View insights: memory-synthesis.py"
-echo "✓ Cost logged to: $ENSEMBLE_COST_LOG"
+echo "✓ Cost logged to: $POC_CLAUDE_ENSEMBLE_COST_LOG"

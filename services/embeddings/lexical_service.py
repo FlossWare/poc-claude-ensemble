@@ -16,7 +16,7 @@ Endpoints
   POST /search     {"query": "...", "top_k": n} -> ranked candidates with source info
   POST /documents  {"session": {...}, "messages": [...]} -> incremental, idempotent insert
 
-Depends on the Tokenization service (ENSEMBLE_TOKENIZATION_URL). When it is unavailable,
+Depends on the Tokenization service (POC_CLAUDE_ENSEMBLE_TOKENIZATION_URL). When it is unavailable,
 search and document writes return 503 rather than an unanalyzed result.
 """
 
@@ -33,7 +33,7 @@ import knowledge_lexical
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8772
-DB_PATH = os.environ.get("ENSEMBLE_LEXICAL_DB", os.path.expanduser(
+DB_PATH = os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_DB", os.path.expanduser(
     "~/.FlossWare/poc-claude-ensemble/data/sqlite/transcripts.db"))
 MAX_BODY_BYTES = 65_536
 MAX_DOCUMENT_BODY_BYTES = 8 * 1_048_576
@@ -41,7 +41,7 @@ MAX_QUERY_CHARS = 2_000
 MAX_TOP_K = 500
 MAX_MESSAGES_PER_DOCUMENT = 500
 MAX_MESSAGE_CHARS = 200_000
-TOKENIZATION_URL = os.environ.get("ENSEMBLE_TOKENIZATION_URL", "http://127.0.0.1:8776")
+TOKENIZATION_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_TOKENIZATION_URL", "http://127.0.0.1:8776")
 TOKENIZE_PROFILE = "lexical-v1"
 KNOWLEDGE_DB_PATH = knowledge_lexical.DB_PATH
 TOKENIZE_TIMEOUT = 10
@@ -284,8 +284,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_LEXICAL_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_LEXICAL_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_PORT", str(DEFAULT_PORT)))
     server = create_server(host, port)
     try:
         server.serve_forever()

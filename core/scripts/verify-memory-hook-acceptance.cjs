@@ -21,14 +21,14 @@ const os = require('os');
 const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
-const profileDir = process.env.ENSEMBLE_CLAUDE_CODE_CONFIG_DIR
+const profileDir = process.env.POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR
   || process.env.CLAUDE_CONFIG_DIR
   || path.join(os.homedir(), '.FlossWare', 'claude-ensemble', 'shared', 'claude-code');
 // Acceptance must exercise the installed hook, not silently fall back to the
 // repository copy and accidentally pass when installation is broken.
 const hookPath = process.env.FLOSSWARE_HOOK_PATH || path.join(profileDir, 'hooks', 'memory-search-on-prompt.js');
 
-const memoryUrl = process.env.FLOSSWARE_MEMORY_URL || process.env.ENSEMBLE_MEMORY_URL || 'http://127.0.0.1:8767';
+const memoryUrl = process.env.FLOSSWARE_MEMORY_URL || process.env.POC_CLAUDE_ENSEMBLE_MEMORY_URL || 'http://127.0.0.1:8767';
 
 let queryPrompt = 'architecture decision';
 let expectedMemory = process.env.EXPECTED_MEMORY_CONTENT || 'Acceptance Test Memory';

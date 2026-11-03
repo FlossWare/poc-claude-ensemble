@@ -4,7 +4,7 @@
 
 ## Layout
 
-The default root is `~/.FlossWare/claude-ensemble`. Set `ENSEMBLE_INSTALL_ROOT` to choose another directory beneath your home directory.
+The default root is `~/.FlossWare/claude-ensemble`. Set `POC_CLAUDE_ENSEMBLE_INSTALL_ROOT` to choose another directory beneath your home directory.
 
 ```text
 ~/.FlossWare/claude-ensemble/
@@ -51,19 +51,19 @@ Use staging-only mode first when testing a release on a host with running CE ser
 
 ```bash
 TEST_ROOT="$HOME/.FlossWare/ce-staging-test"
-ENSEMBLE_INSTALL_ROOT="$TEST_ROOT" \
-ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$TEST_ROOT" \
+POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash tools/install-ce-versioned.sh 0.1 /path/to/clean/claude-ensemble
 ```
 
-Staging-only mode requires an explicit `ENSEMBLE_INSTALL_ROOT` beneath `HOME` and a new or empty target root. It does not import the legacy CE profile, does not require an active systemd user manager, does not write host service unit files, does not create or switch `current`, and does not activate services. It copies the release, checks structural containment, and preflights all seven generated service units in a disposable directory with systemd commands replaced by a no-op. The preflight checks stable `current` paths and ensures service configuration, persistent data, logs, sockets, and runtime paths resolve under `shared/`. It then writes a manifest with validation status `staged` and exits. The developer-checkout symlink `claude-global-skills` (which points into a Red Hat checkout) is deliberately omitted from standalone releases; it is host-specific and must not be shipped or followed. Other unexpected external symlinks still fail validation. A failed structural validation removes the newly staged release and exits nonzero.
+Staging-only mode requires an explicit `POC_CLAUDE_ENSEMBLE_INSTALL_ROOT` beneath `HOME` and a new or empty target root. It does not import the legacy CE profile, does not require an active systemd user manager, does not write host service unit files, does not create or switch `current`, and does not activate services. It copies the release, checks structural containment, and preflights all seven generated service units in a disposable directory with systemd commands replaced by a no-op. The preflight checks stable `current` paths and ensures service configuration, persistent data, logs, sockets, and runtime paths resolve under `shared/`. It then writes a manifest with validation status `staged` and exits. The developer-checkout symlink `claude-global-skills` (which points into a Red Hat checkout) is deliberately omitted from standalone releases; it is host-specific and must not be shipped or followed. Other unexpected external symlinks still fail validation. A failed structural validation removes the newly staged release and exits nonzero.
 
 The test root must be separate from the live deployment. Inspect the staged release and manifest before running the normal installer against the actual deployment root. Staging validates the generated unit contract but is not proof that services start or that the gateway is healthy.
 
 To rerun the generated-unit preflight explicitly against a staged release:
 
 ```bash
-ENSEMBLE_INSTALL_ROOT="$TEST_ROOT" \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$TEST_ROOT" \
   bash "$TEST_ROOT/releases/0.1/tools/ce-deployment" validate 0.1
 ```
 

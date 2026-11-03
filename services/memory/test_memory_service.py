@@ -21,7 +21,7 @@ SERVICE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(SERVICE_DIR))
 # The ledger root is fixed at import time; tests must never write the live ledger.
-os.environ.setdefault("ENSEMBLE_LEDGER_ROOT", tempfile.mkdtemp(prefix="memory-test-ledger-"))
+os.environ.setdefault("POC_CLAUDE_ENSEMBLE_LEDGER_ROOT", tempfile.mkdtemp(prefix="memory-test-ledger-"))
 from execution.context import ExecutionContext, ExecutionResult, ExecutionStatus  # noqa: E402
 from memory_client import MemoryClient  # noqa: E402
 
@@ -926,10 +926,10 @@ class MemoryServiceSecurityTest(unittest.TestCase):
             env["HOME"] = str(home)
             env["XDG_RUNTIME_DIR"] = str(runtime)
             env["PYTHONUNBUFFERED"] = "1"
-            env["ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
-            env["ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
-            env["ENSEMBLE_LOG_DIR"] = str(root / "logs")
-            env["ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
+            env["POC_CLAUDE_ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
+            env["POC_CLAUDE_ENSEMBLE_LOG_DIR"] = str(root / "logs")
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
 
             process = subprocess.Popen(
                 [sys.executable, str(SERVICE)],
@@ -1002,10 +1002,10 @@ class MemoryServiceContextTest(unittest.TestCase):
             env["HOME"] = str(home)
             env["XDG_RUNTIME_DIR"] = str(runtime)
             env["PYTHONUNBUFFERED"] = "1"
-            env["ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
-            env["ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
-            env["ENSEMBLE_LOG_DIR"] = str(root / "logs")
-            env["ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
+            env["POC_CLAUDE_ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
+            env["POC_CLAUDE_ENSEMBLE_LOG_DIR"] = str(root / "logs")
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
 
             process = subprocess.Popen(
                 [sys.executable, str(SERVICE)],
@@ -1161,10 +1161,10 @@ class MemoryServiceContextTest(unittest.TestCase):
             env["HOME"] = str(home)
             env["XDG_RUNTIME_DIR"] = str(runtime)
             env["PYTHONUNBUFFERED"] = "1"
-            env["ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
-            env["ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
-            env["ENSEMBLE_LOG_DIR"] = str(root / "logs")
-            env["ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
+            env["POC_CLAUDE_ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
+            env["POC_CLAUDE_ENSEMBLE_LOG_DIR"] = str(root / "logs")
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
 
             process = subprocess.Popen(
                 [sys.executable, str(SERVICE)],
@@ -1247,10 +1247,10 @@ class MemoryServiceContextTest(unittest.TestCase):
             env["HOME"] = str(home)
             env["XDG_RUNTIME_DIR"] = str(runtime)
             env["PYTHONUNBUFFERED"] = "1"
-            env["ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
-            env["ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
-            env["ENSEMBLE_LOG_DIR"] = str(root / "logs")
-            env["ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_DIR"] = str(root / "memory")
+            env["POC_CLAUDE_ENSEMBLE_LEDGER_ROOT"] = str(root / "ledger")
+            env["POC_CLAUDE_ENSEMBLE_LOG_DIR"] = str(root / "logs")
+            env["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"] = "0"
 
             process = subprocess.Popen(
                 [sys.executable, str(SERVICE)],
@@ -1530,7 +1530,7 @@ class MemoryIndexReadinessTest(unittest.TestCase):
     def test_non_finite_warmup_timeout_is_rejected(self):
         for value in ("nan", "inf", "-inf", "0", "-1"):
             with self.subTest(value=value), patch.dict(
-                os.environ, {"ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS": value}
+                os.environ, {"POC_CLAUDE_ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS": value}
             ):
                 from memory_service import MemoryService
 

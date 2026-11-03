@@ -6,32 +6,32 @@
 # Claude Code; do not load credentials from files or execute background reload loops.
 
 # Only run heavy initialization once per session
-if [ -n "$ENSEMBLE_INITIALIZED" ]; then
+if [ -n "$POC_CLAUDE_ENSEMBLE_INITIALIZED" ]; then
   return 0
 fi
-export ENSEMBLE_INITIALIZED=1
+export POC_CLAUDE_ENSEMBLE_INITIALIZED=1
 
-export ENSEMBLE_ROOT="${ENSEMBLE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export ENSEMBLE_COST_LOG="${ENSEMBLE_COST_LOG:-$HOME/.FlossWare/poc-claude-ensemble/shared/logs/cost.log}"
-export ENSEMBLE_MEMORY_DIR="${ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/poc-claude-ensemble/shared/data/memory}"
+export POC_CLAUDE_ENSEMBLE_ROOT="${POC_CLAUDE_ENSEMBLE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export POC_CLAUDE_ENSEMBLE_COST_LOG="${POC_CLAUDE_ENSEMBLE_COST_LOG:-$HOME/.FlossWare/poc-claude-ensemble/shared/logs/cost.log}"
+export POC_CLAUDE_ENSEMBLE_MEMORY_DIR="${POC_CLAUDE_ENSEMBLE_MEMORY_DIR:-$HOME/.FlossWare/poc-claude-ensemble/shared/data/memory}"
 
 # Ensure memory dir exists
-mkdir -p "$ENSEMBLE_MEMORY_DIR"
+mkdir -p "$POC_CLAUDE_ENSEMBLE_MEMORY_DIR"
 
 # Function to reload toolkit (use when ensemble-init.sh is updated)
 source-session-command() {
   echo "Reloading toolkit..."
-  source "$ENSEMBLE_ROOT/scripts/ensemble-init.sh"
+  source "$POC_CLAUDE_ENSEMBLE_ROOT/scripts/ensemble-init.sh"
   echo "✓ Toolkit reloaded - credentials and all updates active"
 }
 
 # Function to check for session commands (use anytime to poll for updates)
 check-session-commands() {
-  if [ -f "$ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md" ]; then
+  if [ -f "$POC_CLAUDE_ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md" ]; then
     echo "📋 SESSION COMMANDS:"
-    head -5 "$ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md"
+    head -5 "$POC_CLAUDE_ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md"
     echo ""
-    if grep -q "URGENT" "$ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md" 2>/dev/null; then
+    if grep -q "URGENT" "$POC_CLAUDE_ENSEMBLE_MEMORY_DIR/SESSION_COMMANDS.md" 2>/dev/null; then
       echo "⚠️  URGENT - Run: source-session-command"
     fi
   else
@@ -48,7 +48,7 @@ messenger_publish() {
     return 1
   fi
   CLAUDE_MESSENGER_SOCKET="${CLAUDE_MESSENGER_SOCKET:-$XDG_RUNTIME_DIR/claude-messenger/claude-messenger.sock}" \
-    PYTHONPATH="$ENSEMBLE_ROOT/session-messaging${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="$POC_CLAUDE_ENSEMBLE_ROOT/session-messaging${PYTHONPATH:+:$PYTHONPATH}" \
     python3 -c 'import json, sys; from messenger_client import MessengerClient; print(MessengerClient().publish(sys.argv[1], json.loads(sys.argv[2])))' "$topic" "$data"
 }
 
@@ -59,25 +59,25 @@ messenger_subscribe() {
     return 1
   fi
   CLAUDE_MESSENGER_SOCKET="${CLAUDE_MESSENGER_SOCKET:-$XDG_RUNTIME_DIR/claude-messenger/claude-messenger.sock}" \
-    PYTHONPATH="$ENSEMBLE_ROOT/session-messaging${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="$POC_CLAUDE_ENSEMBLE_ROOT/session-messaging${PYTHONPATH:+:$PYTHONPATH}" \
     python3 -c 'import sys; from messenger_client import MessengerClient; [print(message, flush=True) for message in MessengerClient().subscribe(sys.argv[1])]' "$topic"
 }
 
 # Add toolkit to PATH
-export PATH="$ENSEMBLE_ROOT/tools:$PATH"
+export PATH="$POC_CLAUDE_ENSEMBLE_ROOT/tools:$PATH"
 
 # Initialize cost tracking
-mkdir -p "$(dirname "$ENSEMBLE_COST_LOG")"
-touch "$ENSEMBLE_COST_LOG"
+mkdir -p "$(dirname "$POC_CLAUDE_ENSEMBLE_COST_LOG")"
+touch "$POC_CLAUDE_ENSEMBLE_COST_LOG"
 
 # Shell functions for easy memory access
 query_memory() {
-  python3 "$ENSEMBLE_ROOT/tools/query-memory.py" "$@"
+  python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/query-memory.py" "$@"
 }
 
 mem_list() {
   echo "=== Project Memory Files ==="
-  python3 "$ENSEMBLE_ROOT/tools/query-memory.py" list
+  python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/query-memory.py" list
 }
 
 mem_read() {
@@ -85,7 +85,7 @@ mem_read() {
     echo "Usage: mem_read <name>"
     return 1
   fi
-  python3 "$ENSEMBLE_ROOT/tools/query-memory.py" read "$1"
+  python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/query-memory.py" read "$1"
 }
 
 mem_search() {
@@ -93,7 +93,7 @@ mem_search() {
     echo "Usage: mem_search <keyword>"
     return 1
   fi
-  python3 "$ENSEMBLE_ROOT/tools/query-memory.py" search "$1"
+  python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/query-memory.py" search "$1"
 }
 
 # Capture discovered patterns/tools during session (not just at startup)
@@ -117,7 +117,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-ensemble_root = os.getenv("ENSEMBLE_ROOT", "")
+ensemble_root = os.getenv("POC_CLAUDE_ENSEMBLE_ROOT", "")
 if not ensemble_root:
     sys.exit(1)
 sys.path.insert(0, str(Path(ensemble_root) / "memory-service"))
@@ -155,7 +155,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-ensemble_root = os.getenv("ENSEMBLE_ROOT", "")
+ensemble_root = os.getenv("POC_CLAUDE_ENSEMBLE_ROOT", "")
 if not ensemble_root:
     sys.exit(1)
 sys.path.insert(0, str(Path(ensemble_root) / "memory-service"))
@@ -194,7 +194,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-ensemble_root = os.getenv("ENSEMBLE_ROOT", "")
+ensemble_root = os.getenv("POC_CLAUDE_ENSEMBLE_ROOT", "")
 if not ensemble_root:
     sys.exit(1)
 sys.path.insert(0, str(Path(ensemble_root) / "memory-service"))
@@ -217,7 +217,7 @@ PY
 
 # Function: Log API usage to cost tracking
 log_ensemble_cost() {
-  mkdir -p "$(dirname "$ENSEMBLE_COST_LOG")"
+  mkdir -p "$(dirname "$POC_CLAUDE_ENSEMBLE_COST_LOG")"
   local model=$1
   local input_tokens=$2
   local output_tokens=$3
@@ -250,7 +250,7 @@ entry = {
     "total_cost_usd": cost,
     "workflow_id": workflow,
 }
-with open(os.environ["ENSEMBLE_COST_LOG"], "a", encoding="utf-8") as handle:
+with open(os.environ["POC_CLAUDE_ENSEMBLE_COST_LOG"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps(entry, allow_nan=False) + "\n")
 PY
 }
@@ -268,15 +268,15 @@ PY
 }
 
 # Connect to Memory Service (central memory authority for all sessions)
-python3 "$ENSEMBLE_ROOT/memory-service/memory_client.py" 2>&1 | grep -E "✓|✗" || true
+python3 "$POC_CLAUDE_ENSEMBLE_ROOT/memory-service/memory_client.py" 2>&1 | grep -E "✓|✗" || true
 
 # Initialize Autonomous Learning (Thompson self-improvement)
-python3 "$ENSEMBLE_ROOT/tools/autonomous-learner.py" 2>&1 | grep "✓\|✗" || true
+python3 "$POC_CLAUDE_ENSEMBLE_ROOT/tools/autonomous-learner.py" 2>&1 | grep "✓\|✗" || true
 
 echo "✓ Claude Ensemble Toolkit initialized"
 echo "  Tools: caching, compression, cost_tracking, ga_tuning, thompson_router, arbitration"
-echo "  Cost logging: $ENSEMBLE_COST_LOG"
-echo "  Memory: $ENSEMBLE_MEMORY_DIR"
+echo "  Cost logging: $POC_CLAUDE_ENSEMBLE_COST_LOG"
+echo "  Memory: $POC_CLAUDE_ENSEMBLE_MEMORY_DIR"
 echo "  Arbitration: multi-phase orchestrator for critical decisions"
 echo "  Autonomous learning: Thompson continuously improving from real tasks"
 
@@ -286,7 +286,7 @@ import os
 import sys
 from pathlib import Path
 
-ensemble_root = os.getenv('ENSEMBLE_ROOT', '')
+ensemble_root = os.getenv('POC_CLAUDE_ENSEMBLE_ROOT', '')
 if not ensemble_root:
     pass
 else:
@@ -397,7 +397,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-ensemble_root = os.getenv('ENSEMBLE_ROOT', '')
+ensemble_root = os.getenv('POC_CLAUDE_ENSEMBLE_ROOT', '')
 if not ensemble_root:
     sys.exit(0)
 
@@ -439,7 +439,7 @@ try:
 ## Available Commands
 {chr(10).join(f'- {cmd}' for cmd in commands if cmd != '__pycache__')}
 
-All sessions read from: $ENSEMBLE_ROOT
+All sessions read from: $POC_CLAUDE_ENSEMBLE_ROOT
 Memory is auto-synced across all sessions.
 """
         client.write('toolkit_state', toolkit_state)
@@ -455,7 +455,7 @@ import sys
 import os
 from pathlib import Path
 
-ensemble_root = os.getenv('ENSEMBLE_ROOT', '')
+ensemble_root = os.getenv('POC_CLAUDE_ENSEMBLE_ROOT', '')
 if not ensemble_root:
     sys.exit(0)
 

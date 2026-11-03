@@ -29,7 +29,7 @@ class OperationalMemoryWriterTest(unittest.TestCase):
         self.assertIn('"model": "haiku"', document)
         self.assertIn('"tokens": 1000', document)
 
-    @patch.dict("os.environ", {"ENSEMBLE_MEMORY_GATEWAY_URL": ""})
+    @patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_MEMORY_GATEWAY_URL": ""})
     @patch("shared.operational_memory.urllib.request.urlopen")
     def test_write_event_posts_to_canonical_memory_endpoint(self, urlopen):
         class Response:

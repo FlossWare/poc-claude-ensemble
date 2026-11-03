@@ -52,7 +52,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 ALERT_DIR = alert_dir()
-SOCKET_PATH = socket_path('ENSEMBLE_ALERT_SOCKET', '/tmp/claude-alert.sock')
+SOCKET_PATH = socket_path('POC_CLAUDE_ENSEMBLE_ALERT_SOCKET', '/tmp/claude-alert.sock')
 
 
 class AlertStore:
@@ -350,7 +350,7 @@ class AlertService:
         self.last_check_time = None
         try:
             self.check_interval_seconds = max(
-                1.0, float(os.environ.get("ENSEMBLE_ALERT_CHECK_INTERVAL_SECONDS", "1800"))
+                1.0, float(os.environ.get("POC_CLAUDE_ENSEMBLE_ALERT_CHECK_INTERVAL_SECONDS", "1800"))
             )
         except (TypeError, ValueError):
             self.check_interval_seconds = 30 * 60

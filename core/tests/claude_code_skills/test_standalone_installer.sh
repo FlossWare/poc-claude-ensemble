@@ -39,9 +39,9 @@ mkdir -p "$SOURCE/.git" "$SOURCE/tools"
 cat > "$SOURCE/install.sh" <<'INSTALL'
 #!/usr/bin/env bash
 [[ -f "$0" ]] || exit 2
-[[ "${ENSEMBLE_STANDALONE_INSTALL:-}" == "1" ]] || exit 3
-[[ "${ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-}" == "$HOME/.FlossWare/claude-ensemble-profile" ]] || exit 4
-[[ "${ENSEMBLE_DEFER_SERVICE_START:-}" == "1" ]] || exit 5
+[[ "${POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL:-}" == "1" ]] || exit 3
+[[ "${POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-}" == "$HOME/.FlossWare/claude-ensemble-profile" ]] || exit 4
+[[ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-}" == "1" ]] || exit 5
 # The standalone wrapper must not start any service before this installer exits.
 awk '
   /--user stop claude-ensemble.service/ { last_stop = NR }
@@ -61,13 +61,13 @@ bash "$ROOT/tools/install-ce-standalone.sh" "$SOURCE"
 
 # Re-running stages and replaces the independent deployment with the new source.
 printf '%s\n' 'v2' > "$SOURCE/payload.txt"
-ENSEMBLE_INSTALL_ROOT="$DEPLOY" bash "$ROOT/tools/install-ce-standalone.sh" "$SOURCE"
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$DEPLOY" bash "$ROOT/tools/install-ce-standalone.sh" "$SOURCE"
 [[ "$(cat "$DEPLOY/payload.txt")" == 'v2' ]]
 [[ ! -e "$DEPLOY/.git" ]]
 
 # A failed install restores the previous deployment rather than leaving a partial tree.
 printf '%s\n' '#!/usr/bin/env bash' 'exit 42' > "$SOURCE/install.sh"
-if ENSEMBLE_INSTALL_ROOT="$DEPLOY" bash "$ROOT/tools/install-ce-standalone.sh" "$SOURCE"; then
+if POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$DEPLOY" bash "$ROOT/tools/install-ce-standalone.sh" "$SOURCE"; then
   printf 'standalone installer unexpectedly accepted a failing deployment\n' >&2
   exit 1
 else

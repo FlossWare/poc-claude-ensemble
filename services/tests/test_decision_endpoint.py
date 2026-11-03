@@ -35,7 +35,7 @@ def start_server(tmp_path, graph_url=""):
 
 
 def test_decision_recommend_requires_task_type(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     server = start_server(tmp_path)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -51,7 +51,7 @@ def test_decision_recommend_requires_task_type(tmp_path, monkeypatch):
 
 
 def test_decision_graph_route_maps_unavailable_dependency(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     server = start_server(tmp_path, graph_url="http://127.0.0.1:1")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -66,7 +66,7 @@ def test_decision_graph_route_maps_unavailable_dependency(tmp_path, monkeypatch)
 
 
 def test_decision_recommend_rejects_get_method(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     server = start_server(tmp_path)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

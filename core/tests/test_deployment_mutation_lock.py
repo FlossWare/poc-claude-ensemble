@@ -60,9 +60,9 @@ def test_concurrent_uninstalls_are_serialized(tmp_path: Path) -> None:
     env.update(
         {
             "HOME": str(home),
-            "ENSEMBLE_INSTALL_ROOT": str(root),
-            "ENSEMBLE_USER_UNIT_DIR": str(unit_dir),
-            "ENSEMBLE_SYSTEMCTL_BIN": str(fake_systemctl),
+            "POC_CLAUDE_ENSEMBLE_INSTALL_ROOT": str(root),
+            "POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR": str(unit_dir),
+            "POC_CLAUDE_ENSEMBLE_SYSTEMCTL_BIN": str(fake_systemctl),
         }
     )
 

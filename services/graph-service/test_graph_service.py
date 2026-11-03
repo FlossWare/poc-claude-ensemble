@@ -174,9 +174,9 @@ def main():
     else:
         raise AssertionError("non-loopback Graph bind was accepted")
 
-    original_host = os.environ.get("ENSEMBLE_GRAPH_HOST")
+    original_host = os.environ.get("POC_CLAUDE_ENSEMBLE_GRAPH_HOST")
     try:
-        os.environ["ENSEMBLE_GRAPH_HOST"] = "0.0.0.0"
+        os.environ["POC_CLAUDE_ENSEMBLE_GRAPH_HOST"] = "0.0.0.0"
         try:
             from graph_service import _configured_host
             _configured_host()
@@ -186,9 +186,9 @@ def main():
             raise AssertionError("non-loopback environment override was accepted")
     finally:
         if original_host is None:
-            os.environ.pop("ENSEMBLE_GRAPH_HOST", None)
+            os.environ.pop("POC_CLAUDE_ENSEMBLE_GRAPH_HOST", None)
         else:
-            os.environ["ENSEMBLE_GRAPH_HOST"] = original_host
+            os.environ["POC_CLAUDE_ENSEMBLE_GRAPH_HOST"] = original_host
 
     print("graph service tests passed")
 

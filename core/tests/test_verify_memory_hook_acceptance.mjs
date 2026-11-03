@@ -186,7 +186,7 @@ try {
       args: commonArgs,
       env: {
         FLOSSWARE_HOOK_PATH: '',
-        ENSEMBLE_CLAUDE_CODE_CONFIG_DIR: missingProfile,
+        POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR: missingProfile,
       },
     });
     assert.equal(resMissingHook.code, 2, `Expected exit 2 for missing installed hook, got ${resMissingHook.code}`);

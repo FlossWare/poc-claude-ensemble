@@ -10,7 +10,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
+ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"
 case "$ROOT" in "~") ROOT="$HOME";; "~/"*) ROOT="$HOME/${ROOT#\~/}";; esac
 ROOT="${ROOT%/}"
 

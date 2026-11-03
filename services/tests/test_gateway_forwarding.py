@@ -95,7 +95,7 @@ def stop(server, thread):
 
 
 def test_gateway_forwards_method_path_query_body_and_health(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     base = f"http://127.0.0.1:{downstream.server_port}"
@@ -138,7 +138,7 @@ def test_gateway_forwards_method_path_query_body_and_health(tmp_path, monkeypatc
 
 
 def test_gateway_health_routes_return_correct_service_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph = ThreadingHTTPServer(("127.0.0.1", 0), GraphHealthHandler)
     memory = ThreadingHTTPServer(("127.0.0.1", 0), MemoryHealthHandler)
     graph_thread = start(graph)
@@ -165,7 +165,7 @@ def test_gateway_health_routes_return_correct_service_identity(tmp_path, monkeyp
 
 
 def test_nested_gateways_preserve_graph_and_memory_health_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph = ThreadingHTTPServer(("127.0.0.1", 0), GraphHealthHandler)
     memory = ThreadingHTTPServer(("127.0.0.1", 0), MemoryHealthHandler)
     graph_thread = start(graph)
@@ -193,7 +193,7 @@ def test_nested_gateways_preserve_graph_and_memory_health_identity(tmp_path, mon
 
 
 def test_gateway_preserves_downstream_http_status_and_error_payload(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     gateway = create_server(
@@ -216,7 +216,7 @@ def test_gateway_preserves_downstream_http_status_and_error_payload(tmp_path, mo
 
 
 def test_gateway_forwards_through_nested_ensemble_gateway(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     concrete_url = f"http://127.0.0.1:{downstream.server_port}"
@@ -242,11 +242,11 @@ def test_gateway_forwards_through_nested_ensemble_gateway(tmp_path, monkeypatch)
 
 
 def test_gateway_uses_service_url_environment_configuration(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     monkeypatch.setenv(
-        "ENSEMBLE_GRAPH_URL", f"http://127.0.0.1:{downstream.server_port}"
+        "POC_CLAUDE_ENSEMBLE_GRAPH_URL", f"http://127.0.0.1:{downstream.server_port}"
     )
     gateway = create_server("127.0.0.1", 0)
     gateway_thread = start(gateway)
@@ -260,7 +260,7 @@ def test_gateway_uses_service_url_environment_configuration(tmp_path, monkeypatc
 
 
 def test_gateway_reports_unavailable_downstream_service(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     gateway = create_server("127.0.0.1", 0, graph_url="http://127.0.0.1:1", memory_url="")
     thread = start(gateway)
     try:
@@ -273,7 +273,7 @@ def test_gateway_reports_unavailable_downstream_service(tmp_path, monkeypatch):
 
 
 def test_gateway_forwards_delete_method_path_query_and_response(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     gateway = create_server(
@@ -297,7 +297,7 @@ def test_gateway_forwards_delete_method_path_query_and_response(tmp_path, monkey
 
 
 def test_nested_gateway_preserves_downstream_http_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     downstream = ThreadingHTTPServer(("127.0.0.1", 0), StubServiceHandler)
     downstream_thread = start(downstream)
     concrete_url = f"http://127.0.0.1:{downstream.server_port}"

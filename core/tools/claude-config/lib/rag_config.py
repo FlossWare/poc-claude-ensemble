@@ -16,9 +16,9 @@ RANGES = {
 }
 
 def selected_config_path():
-    selected = os.environ.get("ENSEMBLE_CLAUDE_CODE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
+    selected = os.environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
     if not selected:
-        raise ValueError("select a dedicated profile with ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (or CLAUDE_CONFIG_DIR); refusing to use ~/.claude")
+        raise ValueError("select a dedicated profile with POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (or CLAUDE_CONFIG_DIR); refusing to use ~/.claude")
     profile = Path(selected).expanduser()
     if profile.is_symlink():
         raise ValueError("refusing to use a symlinked Claude profile directory")

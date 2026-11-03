@@ -48,7 +48,7 @@ class DiagnoseTests(unittest.TestCase):
                 str(Path.home() / ".FlossWare" / "claude-ensemble" / "shared" / "claude-code" / "hooks"),
                 diagnose.default_hook_dir(),
             )
-        with patch.dict("os.environ", {"ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": "~/ce-profile"}, clear=True):
+        with patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR": "~/ce-profile"}, clear=True):
             self.assertEqual(str(Path.home() / "ce-profile" / "hooks"), diagnose.default_hook_dir())
         with patch.dict("os.environ", {"CLAUDE_HOOK_DIR": "~/explicit-hooks"}, clear=True):
             self.assertEqual(str(Path.home() / "explicit-hooks"), diagnose.default_hook_dir())

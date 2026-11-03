@@ -54,7 +54,7 @@ service.thompson_client = None
 service.start()
 """
         env = os.environ.copy()
-        env["ENSEMBLE_LEARNING_HTTP_PORT"] = str(port)
+        env["POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT"] = str(port)
         process = subprocess.Popen(
             [sys.executable, "-c", wrapper],
             cwd=ROOT,

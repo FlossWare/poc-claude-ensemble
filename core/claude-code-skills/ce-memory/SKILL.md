@@ -9,8 +9,8 @@ Treat Memory and Knowledge as distinct sources. Do not invent a shared schema or
 
 ## 1. Establish the active environment
 
-1. Resolve the selected Claude Code profile from `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`.
-2. Locate the active CE checkout using `ENSEMBLE_REPO_ROOT` or the running user service definition. Verify the repository identity before using scripts.
+1. Resolve the selected Claude Code profile from `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`.
+2. Locate the active CE checkout using `POC_CLAUDE_ENSEMBLE_REPO_ROOT` or the running user service definition. Verify the repository identity before using scripts.
 3. Check the gateway and Memory health endpoints using the active configuration. Defaults, when not overridden, are gateway `http://127.0.0.1:8080` and Memory `http://127.0.0.1:8767`.
 4. Inspect the installed prompt hook and the matching CE source/docs to identify the exact read-only Memory and Knowledge retrieval interfaces. Use the documented request method, payload, and response schema. Do not guess endpoints or send write requests while answering a retrieval question.
 

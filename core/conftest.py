@@ -9,9 +9,9 @@ import socket
 import tempfile
 
 _TEST_ROOT = tempfile.mkdtemp(prefix="ce-core-test-")
-os.environ.setdefault("ENSEMBLE_SELECTION_LEDGER", os.path.join(_TEST_ROOT, "selections.jsonl"))
+os.environ.setdefault("POC_CLAUDE_ENSEMBLE_SELECTION_LEDGER", os.path.join(_TEST_ROOT, "selections.jsonl"))
 with socket.socket() as _probe:
     _probe.bind(("127.0.0.1", 0))
-    os.environ.setdefault("ENSEMBLE_THOMPSON_URL", f"http://127.0.0.1:{_probe.getsockname()[1]}")
+    os.environ.setdefault("POC_CLAUDE_ENSEMBLE_THOMPSON_URL", f"http://127.0.0.1:{_probe.getsockname()[1]}")
 
-os.environ.setdefault("ENSEMBLE_REVIEW_LEDGER", os.path.join(_TEST_ROOT, "reviews.jsonl"))
+os.environ.setdefault("POC_CLAUDE_ENSEMBLE_REVIEW_LEDGER", os.path.join(_TEST_ROOT, "reviews.jsonl"))

@@ -59,7 +59,7 @@ SOURCE="$HOME/.FlossWare/ce-source"
 STAGE="$HOME/.FlossWare/ce-staging-test"
 git clone https://github.com/FlossWare/claude-ensemble.git "$SOURCE"
 test ! -e "$STAGE"
-ENSEMBLE_INSTALL_ROOT="$STAGE" ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$STAGE" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash "$SOURCE/install-standalone.sh" 0.1 "$SOURCE"
 ```
 
@@ -118,7 +118,7 @@ The versioned installer:
 The `/ce-review` skill runs the worker/arbiter code review without Jira; `/ce-jira-review` adds Jira acceptance criteria; `/ce-solve` investigates and implements a coding fix; `/ce-status` reports profile and service status; `/ce-diagnose` runs deeper diagnostics; `/ce-memory` distinguishes Memory from durable Knowledge; `/ce-learning` inspects learning and Thompson outcomes; and `/ce-ga` inspects genetic-algorithm tuning evidence. Diagnostic skills default to read-only. `/ce-solve` may edit the current repository but does not commit, push, merge, deploy, or perform destructive operations without authorization. All skills use the authenticated Claude Code runtime and must not send proprietary source to external reviewer providers. To install the full set into an explicitly selected CE profile, run:
 
 ```bash
-ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
+POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
   bash tools/install-ce-skills.sh
 ```
 
@@ -161,7 +161,7 @@ To exercise the installed `UserPromptSubmit` hook against live Memory/Graph serv
 bash tools/ce diagnose --hook-smoke --json
 ```
 
-Hook lookup follows `CLAUDE_HOOK_DIR`, then the explicitly selected `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`. With none configured, it uses the standalone CE profile at `~/.FlossWare/claude-ensemble/shared/claude-code/hooks`. It does **not** silently inspect ordinary `~/.claude/hooks`; pass `--hook-dir` explicitly when intentionally testing another profile.
+Hook lookup follows `CLAUDE_HOOK_DIR`, then the explicitly selected `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`. With none configured, it uses the standalone CE profile at `~/.FlossWare/claude-ensemble/shared/claude-code/hooks`. It does **not** silently inspect ordinary `~/.claude/hooks`; pass `--hook-dir` explicitly when intentionally testing another profile.
 
 To also exercise installed SessionEnd capture, explicitly authorize one uniquely identified metadata-only event in production Memory:
 
@@ -258,7 +258,7 @@ Example:
 
 The reviewer MCP service must be running for external reviewer legs. Jules proposal review additionally requires `REVIEWER_MCP_REPOSITORY` to name an allowlisted repository and optionally `REVIEWER_MCP_BRANCH` to select its branch. Credentials remain environment-only.
 
-The collaboration REST endpoint is deliberately protected by a deployment-owned policy. Configure `ENSEMBLE_COLLABORATION_AUTH_TOKEN` before enabling it. Caller-selected solvers, arbiter, and reviewers must be present in the server-owned allowlists `ENSEMBLE_COLLABORATION_SOLVERS`, `ENSEMBLE_COLLABORATION_ARBITER`, and `ENSEMBLE_COLLABORATION_REVIEWERS`. External reviewer transmission also requires explicit `ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true`. Server-side ceilings are controlled by `ENSEMBLE_COLLABORATION_MAX_ROUNDS`, `ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS`, `ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS`, and `ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS`; request values can only lower those ceilings. The default external reviewer allowlist is empty, so arbitrary callers cannot cause candidate/context data to leave the gateway.
+The collaboration REST endpoint is deliberately protected by a deployment-owned policy. Configure `POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN` before enabling it. Caller-selected solvers, arbiter, and reviewers must be present in the server-owned allowlists `POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS`, `POC_CLAUDE_ENSEMBLE_COLLABORATION_ARBITER`, and `POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS`. External reviewer transmission also requires explicit `POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true`. Server-side ceilings are controlled by `POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ROUNDS`, `POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS`, `POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS`, and `POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS`; request values can only lower those ceilings. The default external reviewer allowlist is empty, so arbitrary callers cannot cause candidate/context data to leave the gateway.
 
 This layer is an orchestration capability, not a replacement for Claude Code. Reviewer transport remains in `reviewer-mcp/`; arbitration and collaboration state remain in CE's orchestration layer.
 
@@ -276,15 +276,15 @@ Claude Ensemble has one client-facing REST boundary at `127.0.0.1:8080` by defau
 - `/api/v1/capabilities/health` exposes observed operational health from existing credentials, Thompson outcomes, and cost records. A state of `unknown` means there is not enough observed history to establish operational health.
 - `/api/v1/experiments/evaluate` evaluates a small baseline-versus-variant experiment and stores its versioned JSONL result; `/api/v1/experiments/{id}` retrieves the latest result. Evaluation is deterministic: each metric votes for baseline or variant according to its higher/lower direction, metric ties score no vote, and the overall winner is the unweighted majority of non-tied metric winners.
 - `/api/v1/metrics` exposes the append-only operational metrics stream; `/api/v1/metrics/aggregate` provides small service/model/status aggregates. The canonical record is dependency-free JSONL and can be exported to CSV for spreadsheets or pandas. Model invocation records are emitted by the existing provider client when a metrics store is configured.
-- Other services may be registered with `ENSEMBLE_<SERVICE>_URL` without changing the public contract.
+- Other services may be registered with `POC_CLAUDE_ENSEMBLE_<SERVICE>_URL` without changing the public contract.
 
 Each service URL may point either to the concrete service or to another Claude Ensemble REST gateway. If the configured target identifies itself as a Claude Ensemble gateway through `/api/v1/health`, the local gateway transparently forwards the full `/api/v1/<service>/*` contract to that remote instance. This means multiple Ensemble instances can cooperate without a separate federation protocol.
 
 For example:
 
 ```bash
-export ENSEMBLE_GRAPH_URL=http://farawayhost:8080
-export ENSEMBLE_MEMORY_URL=http://localhost:8767
+export POC_CLAUDE_ENSEMBLE_GRAPH_URL=http://farawayhost:8080
+export POC_CLAUDE_ENSEMBLE_MEMORY_URL=http://localhost:8767
 ```
 
 Clients still use:
@@ -455,24 +455,24 @@ configured with environment variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `ENSEMBLE_ROOT` | Repository root used by shell initialization | Repository containing `scripts/ensemble-init.sh` |
-| `ENSEMBLE_CREDENTIALS_FILE` | Optional credentials file | `~/.FlossWare/secrets.env` |
-| `ENSEMBLE_MEMORY_DIR` | Persistent CE memory directory | `~/.FlossWare/claude-ensemble-state/data/memory` for source-checkout installs |
-| `ENSEMBLE_LOG_DIR` | CE service log directory | `~/.FlossWare/claude-ensemble-state/logs` for source-checkout installs |
-| `ENSEMBLE_RUNTIME_DIR` | Runtime directory for configurable service sockets | XDG runtime/cache location |
-| `ENSEMBLE_REPO_ROOT` | Repository/release root used by CE services | Current working directory |
-| `ENSEMBLE_LEARNING_DIR` | Learning state directory | `~/.FlossWare/claude-ensemble-state/data/learning` for source-checkout installs |
-| `ENSEMBLE_*_SOCKET` | Per-service Unix socket override | Existing service socket |
+| `POC_CLAUDE_ENSEMBLE_ROOT` | Repository root used by shell initialization | Repository containing `scripts/ensemble-init.sh` |
+| `POC_CLAUDE_ENSEMBLE_CREDENTIALS_FILE` | Optional credentials file | `~/.FlossWare/secrets.env` |
+| `POC_CLAUDE_ENSEMBLE_MEMORY_DIR` | Persistent CE memory directory | `~/.FlossWare/claude-ensemble-state/data/memory` for source-checkout installs |
+| `POC_CLAUDE_ENSEMBLE_LOG_DIR` | CE service log directory | `~/.FlossWare/claude-ensemble-state/logs` for source-checkout installs |
+| `POC_CLAUDE_ENSEMBLE_RUNTIME_DIR` | Runtime directory for configurable service sockets | XDG runtime/cache location |
+| `POC_CLAUDE_ENSEMBLE_REPO_ROOT` | Repository/release root used by CE services | Current working directory |
+| `POC_CLAUDE_ENSEMBLE_LEARNING_DIR` | Learning state directory | `~/.FlossWare/claude-ensemble-state/data/learning` for source-checkout installs |
+| `POC_CLAUDE_ENSEMBLE_*_SOCKET` | Per-service Unix socket override | Existing service socket |
 
 Both versioned and source-checkout installers manage the gateway and four core services. The memory client degrades gracefully when the daemon is unavailable. No Red Hat GitLab host, credential file, or repository path is required by the core runtime.
 
 Example:
 
 ```bash
-export ENSEMBLE_ROOT="$HOME/src/claude-ensemble"
-export ENSEMBLE_MEMORY_DIR="$HOME/.local/share/claude-ensemble/memory"
-export ENSEMBLE_LOG_DIR="$HOME/.local/state/claude-ensemble"
-export ENSEMBLE_REPO_ROOT="$HOME/src/my-project"
+export POC_CLAUDE_ENSEMBLE_ROOT="$HOME/src/claude-ensemble"
+export POC_CLAUDE_ENSEMBLE_MEMORY_DIR="$HOME/.local/share/claude-ensemble/memory"
+export POC_CLAUDE_ENSEMBLE_LOG_DIR="$HOME/.local/state/claude-ensemble"
+export POC_CLAUDE_ENSEMBLE_REPO_ROOT="$HOME/src/my-project"
 ```
 
 On systems without systemd, use the CLI tools and standalone components directly rather

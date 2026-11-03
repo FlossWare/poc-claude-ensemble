@@ -54,7 +54,7 @@ def get_json(server, path):
 
 
 def test_concrete_graph_and_memory_health_return_their_own_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph_paths = []
     memory_paths = []
     graph = ThreadingHTTPServer(
@@ -93,7 +93,7 @@ def test_concrete_graph_and_memory_health_return_their_own_identity(tmp_path, mo
 
 
 def test_memory_readiness_route_reaches_concrete_ready_endpoint(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     memory_paths = []
     memory = ThreadingHTTPServer(
         ("127.0.0.1", 0), service_handler("memory", memory_paths)
@@ -115,7 +115,7 @@ def test_memory_readiness_route_reaches_concrete_ready_endpoint(tmp_path, monkey
 
 
 def test_nested_gateway_health_route_reaches_the_concrete_service(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph_paths = []
     graph = ThreadingHTTPServer(
         ("127.0.0.1", 0), service_handler("graph", graph_paths)
@@ -142,7 +142,7 @@ def test_nested_gateway_health_route_reaches_the_concrete_service(tmp_path, monk
 
 
 def test_gateway_liveness_is_distinct_from_downstream_readiness(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph_paths = []
     graph = ThreadingHTTPServer(
         ("127.0.0.1", 0), service_handler("graph", graph_paths)
@@ -172,7 +172,7 @@ def test_gateway_liveness_is_distinct_from_downstream_readiness(tmp_path, monkey
 
 
 def test_gateway_readiness_stays_503_while_memory_is_warming(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph_paths = []
     memory_paths = []
 
@@ -234,7 +234,7 @@ def test_gateway_readiness_stays_503_while_memory_is_warming(tmp_path, monkeypat
 
 
 def test_readiness_rejects_a_cross_wired_dependency_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_METRICS_FILE", str(tmp_path / "metrics.jsonl"))
     graph_paths = []
     graph = ThreadingHTTPServer(
         ("127.0.0.1", 0), service_handler("graph", graph_paths)

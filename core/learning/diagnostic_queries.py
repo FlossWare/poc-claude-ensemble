@@ -12,8 +12,8 @@ def _post(base,path,payload):
 
 class DiagnosticQueries:
     def __init__(self,graph_service_url=None,memory_service_url=None):
-        self.graph_service_url=graph_service_url or os.environ.get("ENSEMBLE_GRAPH_URL","http://127.0.0.1:8766")
-        self.memory_service_url=memory_service_url or os.environ.get("ENSEMBLE_MEMORY_URL","http://127.0.0.1:8767")
+        self.graph_service_url=graph_service_url or os.environ.get("POC_CLAUDE_ENSEMBLE_GRAPH_URL","http://127.0.0.1:8766")
+        self.memory_service_url=memory_service_url or os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_URL","http://127.0.0.1:8767")
     def semantic_search(self,query,limit=10):
         results=_post(self.memory_service_url,"/memory/search",{"query":query,"limit":limit}).get("results",[])
         return {"ok":True,"error":None,"data":{"query":query,"count":len(results),"results":results},"sample_count":len(results)}

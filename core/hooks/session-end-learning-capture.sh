@@ -6,16 +6,16 @@
 #
 # The memory service handles indexing, deduplication, and persistence.
 
-if [ -z "${ENSEMBLE_ROOT:-}" ]; then
+if [ -z "${POC_CLAUDE_ENSEMBLE_ROOT:-}" ]; then
     if [ -L "$HOME/.claude/ensemble-init.sh" ]; then
-        ENSEMBLE_ROOT="$(cd "$(dirname "$(readlink -f "$HOME/.claude/ensemble-init.sh")")/.." && pwd)"
+        POC_CLAUDE_ENSEMBLE_ROOT="$(cd "$(dirname "$(readlink -f "$HOME/.claude/ensemble-init.sh")")/.." && pwd)"
     elif [ -d "$HOME/.FlossWare/poc-claude-ensemble/current/memory-service" ]; then
-        ENSEMBLE_ROOT="$HOME/.FlossWare/poc-claude-ensemble/current"
+        POC_CLAUDE_ENSEMBLE_ROOT="$HOME/.FlossWare/poc-claude-ensemble/current"
     elif [ -d "$HOME/Development/github/FlossWare/claude-ensemble/memory-service" ]; then
         # Compatibility fallback for existing source-checkout installs.
-        ENSEMBLE_ROOT="$HOME/Development/github/FlossWare/claude-ensemble"
+        POC_CLAUDE_ENSEMBLE_ROOT="$HOME/Development/github/FlossWare/claude-ensemble"
     else
-        ENSEMBLE_ROOT=""
+        POC_CLAUDE_ENSEMBLE_ROOT=""
     fi
 fi
 SESSION_LEARNING_LOG="${SESSION_LEARNING_LOG:-.claude-session-learning.log}"
@@ -29,7 +29,7 @@ import os
 import sys
 from pathlib import Path
 
-ensemble_root = os.getenv('ENSEMBLE_ROOT', '')
+ensemble_root = os.getenv('POC_CLAUDE_ENSEMBLE_ROOT', '')
 if not ensemble_root:
     sys.exit(0)
 

@@ -21,7 +21,7 @@ from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SERVICE_URL = os.environ.get('ENSEMBLE_THOMPSON_URL', 'http://127.0.0.1:8769').rstrip('/')
+DEFAULT_SERVICE_URL = os.environ.get('POC_CLAUDE_ENSEMBLE_THOMPSON_URL', 'http://127.0.0.1:8769').rstrip('/')
 
 
 class CircuitState(Enum):

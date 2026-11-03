@@ -112,7 +112,7 @@ def _credential_available(registry: Any, provider: str) -> bool:
 
 
 def _capabilities_for(model: str) -> tuple[str, ...]:
-    configured = os.environ.get("ENSEMBLE_MODEL_CAPABILITIES")
+    configured = os.environ.get("POC_CLAUDE_ENSEMBLE_MODEL_CAPABILITIES")
     if configured:
         try:
             raw = json.loads(configured)

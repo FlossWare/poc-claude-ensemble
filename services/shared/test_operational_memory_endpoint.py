@@ -48,7 +48,7 @@ class OperationalMemoryEndpointTests(unittest.TestCase):
 
     @patch.dict(
         os.environ,
-        {"ENSEMBLE_MEMORY_GATEWAY_URL": "http://127.0.0.1:9876/custom-memory"},
+        {"POC_CLAUDE_ENSEMBLE_MEMORY_GATEWAY_URL": "http://127.0.0.1:9876/custom-memory"},
         clear=True,
     )
     def test_environment_override_remains_a_base_url(self):

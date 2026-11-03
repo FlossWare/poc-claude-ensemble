@@ -11,11 +11,11 @@ path. It does **not** validate the active Claude Code runtime and is not part of
 required CI.
 
 Only run it intentionally when testing that legacy integration. It may make paid
-API calls and requires both `ENSEMBLE_LIVE_CACHE_TESTS=1` and
+API calls and requires both `POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1` and
 `ANTHROPIC_API_KEY`:
 
 ```bash
-ENSEMBLE_LIVE_CACHE_TESTS=1 python caching/manual_anthropic_api_validation.py
+POC_CLAUDE_ENSEMBLE_LIVE_CACHE_TESTS=1 python caching/manual_anthropic_api_validation.py
 ```
 
 Do not add this script to the required test inventory. For active-runtime acceptance,

@@ -26,7 +26,7 @@ Claude configuration directory. The CLI inherits the service process
 environment unless an explicit provider environment is supplied.
 
 Before sending a prompt, the adapter runs `claude auth status` and requires
-`apiProvider` to match `ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER`. If status cannot
+`apiProvider` to match `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER`. If status cannot
 be read or does not match, the prompt is not sent. The adapter also checks the
 provider metadata reported in the response. The default expectation is
 `vertex`; set an explicit value only when the target data is authorized for

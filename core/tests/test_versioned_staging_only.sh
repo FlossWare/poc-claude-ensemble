@@ -41,7 +41,7 @@ git -C "$SOURCE" -c user.name="CE staging test" -c user.email="ce-staging-test@e
 # a development checkout or another redirected location.
 mkdir -p "$WORK/redirected"
 ln -s "$WORK/redirected" "$HOME/.FlossWare"
-if ENSEMBLE_INSTALL_ROOT="$HOME/.FlossWare/staging-target" ENSEMBLE_STAGING_ONLY=1 \
+if POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$HOME/.FlossWare/staging-target" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
     bash "$REPO_ROOT/tools/install-ce-versioned.sh" 0.1 "$SOURCE" >"$WORK/symlink.out" 2>&1; then
   echo "FAIL: installer accepted a symlinked ~/.FlossWare" >&2
   exit 1
@@ -56,7 +56,7 @@ mkdir -p "$HOME/.FlossWare/claude-ensemble-profile"
 printf 'legacy-profile-sentinel\n' > "$HOME/.FlossWare/claude-ensemble-profile/sentinel"
 
 ROOT="$HOME/.FlossWare/staging-target"
-ENSEMBLE_INSTALL_ROOT="$ROOT" ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$ROOT" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash "$REPO_ROOT/tools/install-ce-versioned.sh" 0.1 "$SOURCE"
 
 [[ -d "$ROOT/releases/0.1" ]] || { echo "FAIL: release was not staged" >&2; exit 1; }
@@ -88,14 +88,14 @@ PY
 # ~/.FlossWare does on some hosts). Internal release links must still validate.
 mkdir -p "$HOME/Development/FlossWare"
 DEV_ROOT="$HOME/Development/FlossWare/staging-target"
-ENSEMBLE_INSTALL_ROOT="$DEV_ROOT" ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$DEV_ROOT" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash "$REPO_ROOT/tools/install-ce-versioned.sh" 0.1 "$SOURCE"
 [[ -f "$DEV_ROOT/deployment.json" ]] || {
   echo "FAIL: staging failed when target resolved beneath HOME/Development" >&2; exit 1;
 }
 
 # Staging must fail closed instead of reusing a non-empty root.
-if ENSEMBLE_INSTALL_ROOT="$ROOT" ENSEMBLE_STAGING_ONLY=1 \
+if POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$ROOT" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
     bash "$REPO_ROOT/tools/install-ce-versioned.sh" 0.2 "$SOURCE" >"$WORK/reuse.out" 2>&1; then
   echo "FAIL: staging accepted a non-empty target root" >&2
   exit 1
@@ -120,7 +120,7 @@ BAD_SOURCE_STATUS_FILE="$WORK/bad-source.status"
 cat > "$WORK/run-bad-source.sh" <<'WRAPPER'
 #!/usr/bin/env bash
 set +e
-ENSEMBLE_INSTALL_ROOT="$1" ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$1" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash "$2/tools/install-ce-versioned.sh" 0.1 "$3" >"$4" 2>&1
 status=$?
 printf '%s\n' "$status" > "$5"

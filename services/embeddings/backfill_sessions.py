@@ -16,8 +16,8 @@ import time
 import urllib.error
 import urllib.request
 
-HYBRID_URL = os.environ.get("ENSEMBLE_HYBRID_URL", "http://127.0.0.1:8773")
-STATE = os.path.expanduser(os.environ.get("ENSEMBLE_INGEST_STATE",
+HYBRID_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_HYBRID_URL", "http://127.0.0.1:8773")
+STATE = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_INGEST_STATE",
                                           "~/.FlossWare/poc-claude-ensemble/state/ingest-state.json"))
 DEFAULT_ROOT = os.path.expanduser("~/.claude/projects")
 WAIT_SECONDS = 900

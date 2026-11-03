@@ -12,7 +12,7 @@ Solve the requested engineering task in the current working repository. Use the 
 1. Identify the current repository root, branch, working-tree status, and the user's requested outcome.
 2. Read relevant project instructions and inspect existing changes before editing. Preserve unrelated user work; never reset, stash, checkout, clean, or overwrite user changes to make the task easier.
 3. If the request is underspecified in a way that blocks a safe implementation, ask one focused question. Otherwise state a short plan and proceed.
-4. Locate the active CE checkout using `ENSEMBLE_REPO_ROOT` or the configured CE service and verify its Git remote before invoking CE tooling.
+4. Locate the active CE checkout using `POC_CLAUDE_ENSEMBLE_REPO_ROOT` or the configured CE service and verify its Git remote before invoking CE tooling.
 
 ## 2. Investigate before editing
 

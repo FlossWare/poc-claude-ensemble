@@ -29,12 +29,12 @@ class LearningThompsonPipelineTests(unittest.TestCase):
             learning_port = free_port()
             thompson_port = free_port()
             env.update({
-                "ENSEMBLE_LOG_DIR": str(root / "logs"),
-                "ENSEMBLE_LEARNING_HTTP_PORT": str(learning_port),
-                "ENSEMBLE_THOMPSON_HTTP_PORT": str(thompson_port),
-                "ENSEMBLE_LEARNING_DIR": str(root / "learning"),
-                "ENSEMBLE_RUNTIME_DIR": str(root / "runtime"),
-                "ENSEMBLE_THOMPSON_STATE_FILE": str(root / "thompson-state.json"),
+                "POC_CLAUDE_ENSEMBLE_LOG_DIR": str(root / "logs"),
+                "POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT": str(learning_port),
+                "POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT": str(thompson_port),
+                "POC_CLAUDE_ENSEMBLE_LEARNING_DIR": str(root / "learning"),
+                "POC_CLAUDE_ENSEMBLE_RUNTIME_DIR": str(root / "runtime"),
+                "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE": str(root / "thompson-state.json"),
             })
             script = r'''
 import json
@@ -67,7 +67,7 @@ state_path = tmp / "thompson-state.json"
 thompson = ThompsonService(socket_path, state_path)
 thompson_thread = threading.Thread(target=thompson.start, daemon=True)
 thompson_thread.start()
-thompson_url = "http://127.0.0.1:" + os.environ["ENSEMBLE_THOMPSON_HTTP_PORT"]
+thompson_url = "http://127.0.0.1:" + os.environ["POC_CLAUDE_ENSEMBLE_THOMPSON_HTTP_PORT"]
 deadline = time.monotonic() + 3
 while time.monotonic() < deadline:
     try:
@@ -83,7 +83,7 @@ learning = LearningService(tmp / "unused-learning.sock", tmp / "learning", memor
 learning.thompson_client = ThompsonClient(service_url=thompson_url, timeout=1)
 learning_thread = threading.Thread(target=learning.start, daemon=True)
 learning_thread.start()
-learning_url = "http://127.0.0.1:" + os.environ["ENSEMBLE_LEARNING_HTTP_PORT"]
+learning_url = "http://127.0.0.1:" + os.environ["POC_CLAUDE_ENSEMBLE_LEARNING_HTTP_PORT"]
 deadline = time.monotonic() + 3
 while time.monotonic() < deadline:
     try:

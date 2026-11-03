@@ -67,10 +67,10 @@ Published events are delivered to matching current subscribers only and are not 
     cd session-messaging
     python3 -m unittest -v
 
-Install the user service (the template uses @ENSEMBLE_ROOT@ as an install-time placeholder):
+Install the user service (the template uses @POC_CLAUDE_ENSEMBLE_ROOT@ as an install-time placeholder):
 
     mkdir -p ~/.config/systemd/user
-    sed "s|@ENSEMBLE_ROOT@|$HOME/Development/FlossWare/claude-ensemble|g" claude-messenger.service.template > ~/.config/systemd/user/claude-messenger.service
+    sed "s|@POC_CLAUDE_ENSEMBLE_ROOT@|$HOME/Development/FlossWare/claude-ensemble|g" claude-messenger.service.template > ~/.config/systemd/user/claude-messenger.service
     systemctl --user daemon-reload
     systemctl --user enable --now claude-messenger.service
 

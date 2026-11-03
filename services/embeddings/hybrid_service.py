@@ -38,29 +38,29 @@ _POOL = ThreadPoolExecutor(max_workers=8)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8773
-EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
-VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
-LEXICAL_URL = os.environ.get("ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
+EMBEDDING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
+VECTOR_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
+LEXICAL_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
 # Knowledge (books, RFCs, papers) is searched beside transcripts, never merged into their ranking.
 KNOWLEDGE_COLLECTION = "knowledge_chunks"
-KNOWLEDGE_SEARCH = os.environ.get("ENSEMBLE_KNOWLEDGE_SEARCH", "1") == "1"
+KNOWLEDGE_SEARCH = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_SEARCH", "1") == "1"
 KNOWLEDGE_TOP = 10
 KNOWLEDGE_TEXT_CHARS = 2000
-GRAPH_URL = os.environ.get("ENSEMBLE_GRAPH_URL", "http://127.0.0.1:8766")
-RERANK_URL = os.environ.get("ENSEMBLE_RERANK_URL", "http://127.0.0.1:8774")
-RANKING_URL = os.environ.get("ENSEMBLE_RANKING_URL", "http://127.0.0.1:8780")
-EXTRACTION_URL = os.environ.get("ENSEMBLE_EXTRACTION_URL", "http://127.0.0.1:8778")
-INTENT_URL = os.environ.get("ENSEMBLE_INTENT_URL", "http://127.0.0.1:8779")
-INDEX_SERVICE_URL = os.environ.get("ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777")
-CHUNKING_URL = os.environ.get("ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
-RERANK_ENABLED = os.environ.get("ENSEMBLE_RERANK_ENABLED", "0") == "1"   # off until a labeled evaluation shows a benefit
+GRAPH_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_GRAPH_URL", "http://127.0.0.1:8766")
+RERANK_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_URL", "http://127.0.0.1:8774")
+RANKING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_RANKING_URL", "http://127.0.0.1:8780")
+EXTRACTION_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_EXTRACTION_URL", "http://127.0.0.1:8778")
+INTENT_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_INTENT_URL", "http://127.0.0.1:8779")
+INDEX_SERVICE_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777")
+CHUNKING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
+RERANK_ENABLED = os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_ENABLED", "0") == "1"   # off until a labeled evaluation shows a benefit
 RERANK_TOP = 30          # cross-encoder scores only the top fused candidates
 # A query embedding waits behind a builder batch of up to 64 texts (about 40 s on CPU), so it needs more
 # than DEP_TIMEOUT. The reranker scores 30 passages in about 2 s when idle and slower under load.
-EMBED_QUERY_TIMEOUT = int(os.environ.get("ENSEMBLE_EMBED_QUERY_TIMEOUT", "150"))
-RERANK_TIMEOUT = int(os.environ.get("ENSEMBLE_RERANK_TIMEOUT", "30"))   # past this, fall back to fused order
+EMBED_QUERY_TIMEOUT = int(os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_QUERY_TIMEOUT", "150"))
+RERANK_TIMEOUT = int(os.environ.get("POC_CLAUDE_ENSEMBLE_RERANK_TIMEOUT", "30"))   # past this, fall back to fused order
 TRANSCRIPT_ROOTS = [os.path.expanduser(p) for p in os.environ.get(
-    "ENSEMBLE_TRANSCRIPT_ROOTS", "~/.claude/projects:~/2026-09_16-57-09_claude/projects").split(":")]
+    "POC_CLAUDE_ENSEMBLE_TRANSCRIPT_ROOTS", "~/.claude/projects:~/2026-09_16-57-09_claude/projects").split(":")]
 INGEST_EMBED_BATCH = 64     # matches the embedding service's per-request cap
 EMBED_CHARS = 4000          # the model reads at most 512 tokens; longer text is never embedded
 INGEST_TIMEOUT = 600
@@ -129,7 +129,7 @@ def exact_weight(query):
     return IDENTIFIER_EXACT_WEIGHT if re.search(r"\d", query) else 1.0
 
 
-SEARCH_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SEARCH_LEDGER", "~/.FlossWare/ledger/searches/searches.jsonl"))
+SEARCH_LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_SEARCH_LEDGER", "~/.FlossWare/ledger/searches/searches.jsonl"))
 SEARCH_LOG_TOP = 5          # results stored per search
 SEARCH_LOG_CHARS = 160      # characters of each result stored
 
@@ -152,7 +152,7 @@ def log_search(query, top_k, rerank, result, latency_ms):
         pass
 
 
-PROMPT_LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_PROMPT_LEDGER", "~/.FlossWare/ledger/prompts/prompts.jsonl"))
+PROMPT_LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_PROMPT_LEDGER", "~/.FlossWare/ledger/prompts/prompts.jsonl"))
 MAX_PROMPT_BODY_BYTES = 262_144
 MAX_PROMPT_CHARS = 65_536
 _LEDGER_LOCK = threading.Lock()   # the duplicate check and the append must be one step
@@ -675,7 +675,7 @@ def ingest_session(transcript_path, start=0, known_first_ts=None, record_outcome
 
 _SEARCH_CACHE = OrderedDict()   # (normalized query, top_k) -> (stored_at, result)
 _SEARCH_CACHE_LOCK = threading.Lock()
-_SEARCH_CACHE_TTL = float(os.environ.get("ENSEMBLE_HYBRID_CACHE_TTL", "60"))
+_SEARCH_CACHE_TTL = float(os.environ.get("POC_CLAUDE_ENSEMBLE_HYBRID_CACHE_TTL", "60"))
 _SEARCH_CACHE_MAX = 256
 
 
@@ -816,8 +816,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_HYBRID_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_HYBRID_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_HYBRID_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_HYBRID_PORT", str(DEFAULT_PORT)))
     server = create_server(host, port)
     try:
         server.serve_forever()

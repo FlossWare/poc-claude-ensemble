@@ -112,7 +112,7 @@ def provider_health(
         return "fail", "auth status did not identify the upstream provider"
     actual_provider = actual.strip().lower()
     if not isinstance(expected_provider, str) or not expected_provider.strip():
-        return "fail", "expected provider is blank; set ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER to a valid provider"
+        return "fail", "expected provider is blank; set POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER to a valid provider"
     expected = expected_provider.strip().lower()
     # Claude Code's native Anthropic route is labelled "firstParty" by auth status.
     if actual_provider == "firstparty":
@@ -160,7 +160,7 @@ def main(config: DoctorConfig | None = None) -> int:
     # Only inspect Claude profile files when a dedicated profile is explicitly selected.
     # The default ~/.claude may be managed by a separate work environment (for example Vertex).
     profile_value = (
-        environ.get("ENSEMBLE_CLAUDE_CODE_CONFIG_DIR")
+        environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR")
         or environ.get("CLAUDE_CONFIG_DIR")
     )
     claude_home: Path | None = None
@@ -185,7 +185,7 @@ def main(config: DoctorConfig | None = None) -> int:
     session_hook = claude_home / "hooks" / "session-end-memory-capture.js" if claude_home is not None else None
     manifest = claude_home / ".flossware-claude-config" / "manifest.json" if claude_home is not None else None
     memory_url = environ.get("FLOSSWARE_MEMORY_URL", DEFAULT_MEMORY_URL).rstrip("/")
-    gateway_url = environ.get("ENSEMBLE_GATEWAY_URL", DEFAULT_GATEWAY_URL).rstrip("/")
+    gateway_url = environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", DEFAULT_GATEWAY_URL).rstrip("/")
 
     claude = shutil.which("claude")
     if claude:
@@ -265,7 +265,7 @@ def main(config: DoctorConfig | None = None) -> int:
                   "settings validator is missing from this checkout")
 
     provider_profile = profile_value
-    expected_provider = environ.get("ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "vertex")
+    expected_provider = environ.get("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "vertex")
     (provider_status, provider_detail), provider_duration = timed_call(
         lambda: provider_health(claude, provider_profile, expected_provider, environ=environ, home=config.home)
     )
@@ -298,7 +298,7 @@ def main(config: DoctorConfig | None = None) -> int:
         ("MEMORY_HEALTH", "Memory REST health", f"{memory_url}/health",
          "Check the Memory service and FLOSSWARE_MEMORY_URL. Prompt hooks are designed to fail open."),
         ("GATEWAY_HEALTH", "Gateway REST health", f"{gateway_url}/api/v1/health",
-         "Check claude-ensemble.service, gateway logs, and ENSEMBLE_GATEWAY_URL."),
+         "Check claude-ensemble.service, gateway logs, and POC_CLAUDE_ENSEMBLE_GATEWAY_URL."),
         ("GATEWAY_CAPABILITIES", "Gateway capability health", f"{gateway_url}/api/v1/capabilities/health",
          "Check the gateway capability registry and configured provider setup."),
     ):

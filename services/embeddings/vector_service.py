@@ -282,8 +282,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_VECTOR_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_VECTOR_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_VECTOR_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_VECTOR_PORT", str(DEFAULT_PORT)))
     server = create_server(host, port)
     try:
         server.serve_forever()

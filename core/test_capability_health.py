@@ -159,7 +159,7 @@ def test_health_uses_shared_runtime_thompson_path(tmp_path, monkeypatch) -> None
         "calls": 4, "successes": 3, "failures": 1,
         "total_latency_ms": 800, "total_cost": 0.4,
     }}}))
-    monkeypatch.setenv("ENSEMBLE_THOMPSON_STATE_FILE", str(state))
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE", str(state))
     entry = CapabilityHealthView(FakeRegistry(), models=("sonnet",)).health()["models"][0]
     assert entry["calls"] == 4
     assert entry["successes"] == 3

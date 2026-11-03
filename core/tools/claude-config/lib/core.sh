@@ -7,7 +7,7 @@ CC_VERSION="0.2"
 # Profile-scoped operations must explicitly select a dedicated CE profile.
 # Never silently fall back to ~/.claude, which may be managed by work tooling.
 CC_PROFILE_EXPLICIT="false"
-CC_PROFILE_VALUE="${ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-}}"
+CC_PROFILE_VALUE="${POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-}}"
 if [ -n "$CC_PROFILE_VALUE" ]; then
   CC_PROFILE_EXPLICIT="true"
   CC_CLAUDE_HOME="$CC_PROFILE_VALUE"
@@ -63,7 +63,7 @@ cleanup(){
 ok(){ printf '✓ %s\n' "$*"; }; warn(){ printf '⚠ %s\n' "$*" >&2; }; err(){ printf '✗ %s\n' "$*" >&2; }; die(){ err "$*"; exit 1; }
 ensure_state(){ mkdir -p "$CC_STATE_DIR" "$CC_BACKUP_DIR"; }
 ensure_safe_targets(){
-  [ "$CC_PROFILE_EXPLICIT" = true ] || die "no dedicated Claude profile configured; set ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (or CLAUDE_CONFIG_DIR); refusing to inspect or modify ~/.claude"
+  [ "$CC_PROFILE_EXPLICIT" = true ] || die "no dedicated Claude profile configured; set POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (or CLAUDE_CONFIG_DIR); refusing to inspect or modify ~/.claude"
   local default_profile selected_profile state_profile
   default_profile="$(python3 - "$HOME/.claude" <<'PY'
 import os,sys
@@ -105,7 +105,7 @@ sha256_file(){
 }
 detect(){
   local json_mode="false" claude="" memory_url="${FLOSSWARE_MEMORY_URL:-http://127.0.0.1:8767}"
-  local gateway_url="${ENSEMBLE_GATEWAY_URL:-http://127.0.0.1:8080}"
+  local gateway_url="${POC_CLAUDE_ENSEMBLE_GATEWAY_URL:-http://127.0.0.1:8080}"
   local gateway_unit_status="inactive" gateway_http_status="unreachable"
   [ "$#" -gt 0 ] && json_mode="$1"
   command -v claude >/dev/null 2>&1 && claude="$(claude --version 2>/dev/null | head -1 || true)"
@@ -175,7 +175,7 @@ verify(){
     done
   else err "FlossWare manifest missing"; failed=1; fi
   local memory_url="${FLOSSWARE_MEMORY_URL:-http://127.0.0.1:8767}"
-  local gateway_url="${ENSEMBLE_GATEWAY_URL:-http://127.0.0.1:8080}"
+  local gateway_url="${POC_CLAUDE_ENSEMBLE_GATEWAY_URL:-http://127.0.0.1:8080}"
   if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$memory_url/health" >/dev/null 2>&1; then ok "Memory REST is reachable"; else warn "Memory REST is unavailable (hook will fail open)"; fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet claude-ensemble.service; then ok "Gateway unit is active"; else warn "Gateway unit is inactive or systemd user manager is unavailable"; fi
   if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$gateway_url/api/v1/health" >/dev/null 2>&1; then ok "Gateway REST is reachable"; else warn "Gateway REST is unavailable: $gateway_url/api/v1/health"; fi

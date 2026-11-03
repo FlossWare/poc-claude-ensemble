@@ -29,7 +29,7 @@ class OperationalMemoryWriter:
     def __init__(self, base_url: str | None = None, *, timeout: float = 2.0) -> None:
         self.base_url = (
             base_url
-            or os.environ.get("ENSEMBLE_MEMORY_GATEWAY_URL")
+            or os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_GATEWAY_URL")
             or DEFAULT_MEMORY_GATEWAY_URL
         ).rstrip("/")
         self.timeout = timeout

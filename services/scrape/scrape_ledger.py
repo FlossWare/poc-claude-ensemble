@@ -10,7 +10,7 @@ import os
 import time
 
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
-LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_SCRAPE_LEDGER", "~/.FlossWare/ledger/scrape/fetches.jsonl"))
+LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_SCRAPE_LEDGER", "~/.FlossWare/ledger/scrape/fetches.jsonl"))
 SOURCES = ["patents", "rfc", "research", "research_paper", "books"]
 
 

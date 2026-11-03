@@ -7,7 +7,7 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE_NAME="claude-messenger"
 SERVICE_TEMPLATE="$REPO_ROOT/session-messaging/${SERVICE_NAME}.service.template"
-SERVICE_DIR="${ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
+SERVICE_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 
 if [ ! -f "$SERVICE_TEMPLATE" ]; then
@@ -26,7 +26,7 @@ echo "Reloading systemd configuration..."
 
 echo "Enabling $SERVICE_NAME service (auto-start)..."
 "$SYSTEMCTL_BIN" --user enable "${SERVICE_NAME}.service"
-if [ "${ENSEMBLE_DEFER_SERVICE_START:-0}" = "1" ]; then
+if [ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-0}" = "1" ]; then
     echo "$SERVICE_NAME installed and enabled; start deferred to the top-level installer."
     exit 0
 fi

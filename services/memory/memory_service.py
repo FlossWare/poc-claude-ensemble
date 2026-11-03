@@ -37,7 +37,7 @@ MEMORY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def get_runtime_dir() -> Path:
     """Return and harden the configured runtime directory."""
-    configured = os.environ.get("ENSEMBLE_RUNTIME_DIR")
+    configured = os.environ.get("POC_CLAUDE_ENSEMBLE_RUNTIME_DIR")
     if configured:
         runtime_dir = Path(configured).expanduser()
     else:
@@ -68,13 +68,13 @@ def validate_memory_name(name: str) -> str:
 
 MEMORY_DIR = memory_dir()
 # Stores that are source-of-truth ledgers live under the shared ledger root, not the memory directory.
-LEDGER_ROOT = Path(os.path.expanduser(os.environ.get("ENSEMBLE_LEDGER_ROOT", "~/.FlossWare/ledger")))
+LEDGER_ROOT = Path(os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_LEDGER_ROOT", "~/.FlossWare/ledger")))
 LEDGER_STORES = {
     "session_events": (LEDGER_ROOT / "session-events" / "session-events.jsonl",
                        {"schema_version": 1, "producer": "claude-code", "kind": "session_end"}),
 }
 SOCKET_PATH = socket_path(
-    "ENSEMBLE_MEMORY_SOCKET", str(runtime_dir() / "memory.sock")
+    "POC_CLAUDE_ENSEMBLE_MEMORY_SOCKET", str(runtime_dir() / "memory.sock")
 )
 LOG_DIR = log_dir()
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1074,7 +1074,7 @@ class MemoryService:
         self._index_timeout_logged = False
         try:
             self._index_warmup_timeout_seconds = float(
-                os.environ.get("ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS", "30")
+                os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS", "30")
             )
             if (
                 not math.isfinite(self._index_warmup_timeout_seconds)
@@ -1083,7 +1083,7 @@ class MemoryService:
                 raise ValueError
         except ValueError as exc:
             raise ValueError(
-                "ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS must be a finite positive number"
+                "POC_CLAUDE_ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS must be a finite positive number"
             ) from exc
 
     def search_index_status(self) -> Dict[str, Any]:
@@ -1224,8 +1224,8 @@ class MemoryService:
             self._index_error = None
             self._index_timeout_logged = False
 
-        http_host=os.environ.get("ENSEMBLE_MEMORY_HTTP_HOST","127.0.0.1")
-        http_port=int(os.environ.get("ENSEMBLE_MEMORY_HTTP_PORT","8767"))
+        http_host=os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_HOST","127.0.0.1")
+        http_port=int(os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT","8767"))
         self.http_server=create_http_server(self,http_host,http_port)
         self.http_port=self.http_server.server_port
         self.http_thread=threading.Thread(target=self.http_server.serve_forever,daemon=True)

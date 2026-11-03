@@ -32,7 +32,7 @@ fi
 REPO_PATH="$(cd "$REPO_PATH" && pwd)"
 # Never modify the ordinary ~/.claude profile by default. Standalone deployment
 # passes its own shared profile explicitly; source-checkout installs get an isolated profile.
-CLAUDE_HOME="${ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.FlossWare/claude-ensemble-profile}"
+CLAUDE_HOME="${POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR:-$HOME/.FlossWare/claude-ensemble-profile}"
 case "$CLAUDE_HOME" in "~") CLAUDE_HOME="$HOME" ;; "~/"*) CLAUDE_HOME="$HOME/${CLAUDE_HOME#\~/}" ;; esac
 MEMORY_SERVICE_DIR="$REPO_PATH/memory-service"
 
@@ -76,15 +76,15 @@ done
 
 # Snapshot the selected profile, existing CE deployment state, and managed units
 # before the first configuration or service mutation. If backup fails, stop here.
-bash "$REPO_PATH/tools/backup-ce-state.sh" "pre-runtime-install" "${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}" "$CLAUDE_HOME"
+bash "$REPO_PATH/tools/backup-ce-state.sh" "pre-runtime-install" "${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}" "$CLAUDE_HOME"
 
 # Migrate existing service state by copying missing files only. The original
 # ~/.claude data remains untouched and the backup above captures it first.
-STATE_ROOT="${ENSEMBLE_CE_DEV_STATE:-$HOME/.FlossWare/claude-ensemble-state}"
-MEMORY_STATE="${ENSEMBLE_MEMORY_DIR:-$STATE_ROOT/data/memory}"
-LEARNING_STATE="${ENSEMBLE_LEARNING_DIR:-$STATE_ROOT/data/learning}"
-GRAPH_STATE="${ENSEMBLE_GRAPH_STORE:-$STATE_ROOT/data/graph.json}"
-THOMPSON_STATE="${ENSEMBLE_THOMPSON_STATE_FILE:-$LEARNING_STATE/thompson-sampling-state.json}"
+STATE_ROOT="${POC_CLAUDE_ENSEMBLE_CE_DEV_STATE:-$HOME/.FlossWare/claude-ensemble-state}"
+MEMORY_STATE="${POC_CLAUDE_ENSEMBLE_MEMORY_DIR:-$STATE_ROOT/data/memory}"
+LEARNING_STATE="${POC_CLAUDE_ENSEMBLE_LEARNING_DIR:-$STATE_ROOT/data/learning}"
+GRAPH_STATE="${POC_CLAUDE_ENSEMBLE_GRAPH_STORE:-$STATE_ROOT/data/graph.json}"
+THOMPSON_STATE="${POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE:-$LEARNING_STATE/thompson-sampling-state.json}"
 migrate_legacy_directory() {
     local source="$1" target="$2"
     [[ -d "$source" ]] || return 0
@@ -262,12 +262,12 @@ if [ -L "$CLAUDE_HOME/skills" ] || [ -L "$CLAUDE_HOME/skills/ce-jira-review" ]; 
     echo "   ! Preserved symlinked skills location; install CE Jira review skill manually after reviewing the target."
 elif [ -e "$CE_SKILL_DEST" ] || [ -L "$CE_SKILL_DEST" ]; then
     if [ -f "$CE_SKILL_DEST" ] && cmp -s "$CE_SKILL_SOURCE" "$CE_SKILL_DEST"; then
-        ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILL_INSTALLER"
+        POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILL_INSTALLER"
     else
         echo "   ! Preserved existing custom skill at $CE_SKILL_DEST; no content was changed."
     fi
 elif [ -f "$CE_SKILL_INSTALLER" ] && [ -f "$CE_SKILL_SOURCE" ]; then
-    ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILL_INSTALLER"
+    POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILL_INSTALLER"
 else
     echo "ERROR: CE Jira review skill installer or source is missing." >&2
     exit 1
@@ -283,12 +283,12 @@ if [ -L "$CLAUDE_HOME/skills" ] || [ -L "$CLAUDE_HOME/skills/ce-review" ]; then
     echo "   ! Preserved symlinked skills location; install /ce-review manually after reviewing the target."
 elif [ -e "$CE_REVIEW_DEST" ] || [ -L "$CE_REVIEW_DEST" ]; then
     if [ -f "$CE_REVIEW_DEST" ] && [ ! -L "$CE_REVIEW_DEST" ] && cmp -s "$CE_REVIEW_SOURCE" "$CE_REVIEW_DEST"; then
-        ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_REVIEW_INSTALLER"
+        POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_REVIEW_INSTALLER"
     else
         echo "   ! Preserved existing custom skill at $CE_REVIEW_DEST; no content was changed."
     fi
 elif [ -f "$CE_REVIEW_INSTALLER" ] && [ -f "$CE_REVIEW_SOURCE" ]; then
-    ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_REVIEW_INSTALLER"
+    POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_REVIEW_INSTALLER"
 else
     echo "ERROR: CE code review skill installer or source is missing." >&2
     exit 1
@@ -301,7 +301,7 @@ echo ""
 echo "4f. Installing CE slash-command skills..."
 CE_SKILLS_INSTALLER="$REPO_PATH/tools/install-ce-skills.sh"
 if [ -f "$CE_SKILLS_INSTALLER" ]; then
-    ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILLS_INSTALLER"
+    POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_CONFIG_DIR="$CLAUDE_HOME" bash "$CE_SKILLS_INSTALLER"
 else
     echo "ERROR: CE skills installer is missing: $CE_SKILLS_INSTALLER" >&2
     exit 1
@@ -327,7 +327,7 @@ install_managed_copy "$CLAUDE_HOME/memory-client.py" "$MEMORY_SOURCE" "memory-cl
 echo ""
 echo "7. Installing and starting systemd user services..."
 # Retire the legacy CE-only Alert/Messenger units on source-checkout upgrades too.
-SYSTEMD_DIR="${ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
+SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
 for legacy_unit in claude-alert.service claude-messenger.service; do
     systemctl --user stop "$legacy_unit" >/dev/null 2>&1 || true
     systemctl --user disable "$legacy_unit" >/dev/null 2>&1 || true
@@ -353,7 +353,7 @@ done
 
 # Verify the entire managed service set unless the standalone installer has
 # explicitly deferred startup until the full installation and symlink audit finish.
-if [[ "${ENSEMBLE_DEFER_SERVICE_START:-0}" != "1" ]]; then
+if [[ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-0}" != "1" ]]; then
     for unit in \
         claude-memory.service \
         claude-thompson.service \
@@ -405,12 +405,12 @@ fi
 # A managed release must not create or mutate a global credentials file outside
 # its deployment. Its service units optionally read shared/config/environment;
 # credential provisioning is deliberately separate from release activation.
-if [[ "${ENSEMBLE_STANDALONE_INSTALL:-0}" == "1" ]]; then
-    if [[ -z "${ENSEMBLE_INSTALL_ROOT:-}" ]]; then
-        echo "ERROR: Standalone install requires ENSEMBLE_INSTALL_ROOT; refusing global credential fallback." >&2
+if [[ "${POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL:-0}" == "1" ]]; then
+    if [[ -z "${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-}" ]]; then
+        echo "ERROR: Standalone install requires POC_CLAUDE_ENSEMBLE_INSTALL_ROOT; refusing global credential fallback." >&2
         exit 1
     fi
-    CREDENTIALS_ENV="${ENSEMBLE_INSTALL_ROOT%/}/shared/config/environment"
+    CREDENTIALS_ENV="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT%/}/shared/config/environment"
     echo "   ℹ Standalone deployment: not creating ~/.FlossWare/secrets.env."
     echo "   ℹ Optional managed service environment file: $CREDENTIALS_ENV"
     echo "   ℹ Provision credentials separately; this installer does not copy or create secrets."
@@ -441,7 +441,7 @@ fi
 # Step 11: Add tools to PATH (shell init)
 echo ""
 echo "11. Adding tools to PATH..."
-if [[ "${ENSEMBLE_STANDALONE_INSTALL:-0}" == "1" ]]; then
+if [[ "${POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL:-0}" == "1" ]]; then
     echo "   ℹ Standalone deployment: leaving shell startup files unchanged."
 fi
 SHELL_RC=""
@@ -451,7 +451,7 @@ elif [ -f "$HOME/.zshrc" ]; then
     SHELL_RC="$HOME/.zshrc"
 fi
 
-if [ -n "$SHELL_RC" ] && [[ "${ENSEMBLE_STANDALONE_INSTALL:-0}" != "1" ]]; then
+if [ -n "$SHELL_RC" ] && [[ "${POC_CLAUDE_ENSEMBLE_STANDALONE_INSTALL:-0}" != "1" ]]; then
     EXPORT_LINE="export PATH=\"$REPO_PATH/tools:\$PATH\""
     # Use fixed-string matching for the current checkout path. Do not treat
     # any historical claude-ensemble path as equivalent: after a checkout move,

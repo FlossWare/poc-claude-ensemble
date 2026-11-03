@@ -113,8 +113,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_INTENT_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_INTENT_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_INTENT_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_INTENT_PORT", str(DEFAULT_PORT)))
     server = create_server(host, port)
     try:
         server.serve_forever()

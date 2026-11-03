@@ -9,7 +9,7 @@ Use this skill to inspect evidence from CE's Learning, Thompson, and GA subsyste
 
 ## 1. Verify the active checkout and service state
 
-1. Resolve the selected Claude Code profile and active CE checkout. Prefer `ENSEMBLE_REPO_ROOT`; otherwise inspect the user service definition and verify the Git remote.
+1. Resolve the selected Claude Code profile and active CE checkout. Prefer `POC_CLAUDE_ENSEMBLE_REPO_ROOT`; otherwise inspect the user service definition and verify the Git remote.
 2. Run `bash tools/ce diagnose --deep --json` from the verified checkout. Capture the exit status and full output.
 3. Inspect the checkout's README and command help before invoking dashboards or maintenance tools. The documented dashboard entry points include `thompson-dashboard.py`, `autonomous-learning-dashboard.py`, and `ga-tuning-dashboard.py`; confirm each is available with `command -v` or locate its actual implementation in the checkout. Never guess a script path.
 

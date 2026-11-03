@@ -20,7 +20,7 @@ Safety:
 - preserve existing Claude configuration
 - merge UserPromptSubmit hooks
 - resolve settings, hooks, manifest, backups, and lock under the selected Claude profile
-- require an explicit profile for profile-scoped operations, selected with ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (preferred for CE) or CLAUDE_CONFIG_DIR; without one, mutation and verification commands fail closed rather than inspect or modify ~/.claude
+- require an explicit profile for profile-scoped operations, selected with POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR (preferred for CE) or CLAUDE_CONFIG_DIR; without one, mutation and verification commands fail closed rather than inspect or modify ~/.claude
 - refuse symlinked hooks directories, settings files, or installer state directories to prevent writes escaping the selected profile
 - track managed files in <selected-profile>/.flossware-claude-config/manifest.json
 - back up before mutation
@@ -46,7 +46,7 @@ tools/claude-config/bin/claude-config rag-config set knowledge.max_queries=2 mem
 tools/claude-config/bin/claude-config rag-config reset
 ```
 
-Set `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` to the dedicated CE profile (or `CLAUDE_CONFIG_DIR`) before running these commands. The command refuses to fall back to `~/.claude`, rejects symlinked profile/state directories, validates every value, writes atomically, and keeps the config private. If a manually edited file is malformed or contains unsupported values, the hook reports a configuration error and skips retrieval rather than silently applying defaults. Missing configuration preserves existing behavior. Environment timeout overrides remain available for isolated test/deployment tuning.
+Set `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` to the dedicated CE profile (or `CLAUDE_CONFIG_DIR`) before running these commands. The command refuses to fall back to `~/.claude`, rejects symlinked profile/state directories, validates every value, writes atomically, and keeps the config private. If a manually edited file is malformed or contains unsupported values, the hook reports a configuration error and skips retrieval rather than silently applying defaults. Missing configuration preserves existing behavior. Environment timeout overrides remain available for isolated test/deployment tuning.
 
 Supported settings:
 
@@ -77,11 +77,11 @@ This indexes Markdown below the selected project root, skips common generated/ve
 
 Integration version: 0.2.
 
-The canonical REST gateway is installed as `claude-ensemble.service` and listens on loopback at `http://127.0.0.1:8080` by default. `claude-config doctor` reports configuration/runtime findings, including gateway deployment state, Memory health, gateway health, capability health, provider policy, and managed hook registration. Use `--verbose` to show passing checks or `--json` for machine-readable output. Override the gateway URL with `ENSEMBLE_GATEWAY_URL`; Memory uses `FLOSSWARE_MEMORY_URL`.
+The canonical REST gateway is installed as `claude-ensemble.service` and listens on loopback at `http://127.0.0.1:8080` by default. `claude-config doctor` reports configuration/runtime findings, including gateway deployment state, Memory health, gateway health, capability health, provider policy, and managed hook registration. Use `--verbose` to show passing checks or `--json` for machine-readable output. Override the gateway URL with `POC_CLAUDE_ENSEMBLE_GATEWAY_URL`; Memory uses `FLOSSWARE_MEMORY_URL`.
 
 **Doctor exit semantics:** exit code `1` means one or more checks have status `fail`; exit code `0` means no checks failed. Warnings (`warn`) and skipped checks (`skip`) are reported but do not change the exit code. Warnings commonly mean an optional service or systemd unit is unavailable, while failures identify a configured requirement that is not satisfied. In JSON output, inspect `ok`, `summary`, and each check's `status` and `remediation`. A skipped provider-policy check is informational and has no remediation because no dedicated CE profile was explicitly selected.
 
-To check CE profile configuration and provider policy without inspecting a separately managed default profile, set `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` to the dedicated CE profile directory (or set `CLAUDE_CONFIG_DIR` in the CE service environment) and optionally set `ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER` (defaults to `vertex`; a blank value is rejected). **Without an explicitly selected profile, all profile-scoped checks are skipped**: doctor does not stat, read, validate, or otherwise inspect the default `~/.claude` directory or its files. The check runs `claude auth status` only against the explicitly configured profile and never sends a model prompt. HTTP health checks read at most 64 KiB plus one detection byte; responses larger than 64 KiB fail with an explicit size-limit diagnostic rather than being parsed as truncated JSON.
+To check CE profile configuration and provider policy without inspecting a separately managed default profile, set `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` to the dedicated CE profile directory (or set `CLAUDE_CONFIG_DIR` in the CE service environment) and optionally set `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER` (defaults to `vertex`; a blank value is rejected). **Without an explicitly selected profile, all profile-scoped checks are skipped**: doctor does not stat, read, validate, or otherwise inspect the default `~/.claude` directory or its files. The check runs `claude auth status` only against the explicitly configured profile and never sends a model prompt. HTTP health checks read at most 64 KiB plus one detection byte; responses larger than 64 KiB fail with an explicit size-limit diagnostic rather than being parsed as truncated JSON.
 
 
 ## Workflow outcome integration

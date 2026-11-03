@@ -24,7 +24,7 @@ Use `journalctl --user -u UNIT -n 100 --no-pager` to inspect a specific unit. Di
 The versioned installer stores immutable releases under `~/.FlossWare/claude-ensemble/releases/`, selects the active release with `current`, and keeps mutable profile/configuration/data under `shared/`. Run staging-only validation before activation:
 
 ```bash
-ENSEMBLE_INSTALL_ROOT="$HOME/.FlossWare/ce-staging-test" ENSEMBLE_STAGING_ONLY=1 \
+POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$HOME/.FlossWare/ce-staging-test" POC_CLAUDE_ENSEMBLE_STAGING_ONLY=1 \
   bash tools/install-ce-versioned.sh 0.1 "$PWD"
 ```
 
@@ -56,7 +56,7 @@ eval "$(tools/ce dev env)"
 tools/ce dev run memory
 ```
 
-Use `tools/ce dev run thompson`, `tools/ce dev run learning`, `tools/ce dev run graph`, and `tools/ce dev run gateway` in separate terminals. The development mode uses loopback ports 18767 (Memory), 18766 (Graph), and 18080 (gateway) by default, avoiding the normal installed ports. Override them with `ENSEMBLE_CE_DEV_MEMORY_PORT`, `ENSEMBLE_CE_DEV_GRAPH_PORT`, or `ENSEMBLE_CE_DEV_GATEWAY_PORT` if needed.
+Use `tools/ce dev run thompson`, `tools/ce dev run learning`, `tools/ce dev run graph`, and `tools/ce dev run gateway` in separate terminals. The development mode uses loopback ports 18767 (Memory), 18766 (Graph), and 18080 (gateway) by default, avoiding the normal installed ports. Override them with `POC_CLAUDE_ENSEMBLE_CE_DEV_MEMORY_PORT`, `POC_CLAUDE_ENSEMBLE_CE_DEV_GRAPH_PORT`, or `POC_CLAUDE_ENSEMBLE_CE_DEV_GATEWAY_PORT` if needed.
 
 In each terminal, use Ctrl-C to stop its service. CE clients do not silently start a replacement daemon. If Memory is unavailable, `MemoryClient.append()` returns `False`; there is no automatic replay or flush. Start the missing service and retry the operation explicitly. Do not start a second process against the same state directory or ports.
 

@@ -26,8 +26,8 @@ from urllib.parse import unquote, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8781
-INDEX_URL = os.environ.get("ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777")
-DB_PATH = os.environ.get("ENSEMBLE_KNOWLEDGE_DB", os.path.expanduser(
+INDEX_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777")
+DB_PATH = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_DB", os.path.expanduser(
     "~/.FlossWare/poc-claude-ensemble/data/sqlite/knowledge.sqlite3"))
 MAX_BODY_BYTES = 8 * 1_048_576
 MAX_CONTENT_CHARS = 4_000_000
@@ -214,8 +214,8 @@ def create_server(host, port):
 
 
 def main():
-    host = os.environ.get("ENSEMBLE_KNOWLEDGE_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("ENSEMBLE_KNOWLEDGE_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_PORT", str(DEFAULT_PORT)))
     server = create_server(host, port)
     try:
         server.serve_forever()

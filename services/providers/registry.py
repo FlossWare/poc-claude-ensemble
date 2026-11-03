@@ -32,11 +32,11 @@ class ProviderRegistry:
                 )
             self.providers[name] = provider
         self._configured_provider = os.environ.get(
-            "ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "vertex"
+            "POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "vertex"
         ).strip().lower()
         if not self._configured_provider:
             raise ValueError(
-                "ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER must not be blank"
+                "POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER must not be blank"
             )
 
     def _provider(self) -> ModelProvider:

@@ -182,7 +182,7 @@ def test_end_to_end_execution_workflow_persists_across_service_boundaries(tmp_pa
         _wait_for(lambda: thompson_client.get_state() is not None)
 
         # Use a free port: the live memory service may hold the default port.
-        os.environ["ENSEMBLE_MEMORY_HTTP_PORT"] = str(free_port())
+        os.environ["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"] = str(free_port())
         memory_service = MemoryService(memory_socket, memory_dir)
         memory_thread = threading.Thread(target=memory_service.start, daemon=True)
         memory_thread.start()

@@ -46,10 +46,10 @@ Memory and Messenger failures are reported to stderr without printing the event 
 
 ## Profile isolation and installation
 
-The managed hook installer honors `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`. For example:
+The managed hook installer honors `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`. For example:
 
 ```bash
-ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
+POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
   bash tools/install-ce-skills.sh
 ```
 
@@ -67,7 +67,7 @@ bash tools/ce diagnose --hook-smoke --json
 bash tools/ce diagnose --prompt-context-smoke --json
 ```
 
-The prompt-context smoke test runs the selected installed hook against configured services. It does not invoke Claude or prove that a model received the context. Hook lookup uses `CLAUDE_HOOK_DIR`, then the explicitly selected `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`, and otherwise the standalone CE profile's `shared/claude-code/hooks` directory.
+The prompt-context smoke test runs the selected installed hook against configured services. It does not invoke Claude or prove that a model received the context. Hook lookup uses `CLAUDE_HOOK_DIR`, then the explicitly selected `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` or `CLAUDE_CONFIG_DIR`, and otherwise the standalone CE profile's `shared/claude-code/hooks` directory.
 
 See [the diagnostics contract](../docs/DIAGNOSTICS.md) for JSON schemas, exit semantics, and side-effect boundaries.
 

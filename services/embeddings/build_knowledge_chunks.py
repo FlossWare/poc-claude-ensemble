@@ -26,16 +26,16 @@ HOME = os.path.expanduser("~")
 RAW = "/exports/claude-orchestrator/scraped-data/raw"
 LEDGER = os.path.join(HOME, ".FlossWare/ledger/scrape/fetches.jsonl")
 LOG = os.path.join(HOME, ".FlossWare/poc-claude-ensemble/state/logs/embed-knowledge-chunks.log")
-EMBEDDING_URL = os.environ.get("ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
-VECTOR_URL = os.environ.get("ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
-LEXICAL_URL = os.environ.get("ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
-CHUNKING_URL = os.environ.get("ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
-KNOWLEDGE_URL = os.environ.get("ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781")
+EMBEDDING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
+VECTOR_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_VECTOR_URL", "http://127.0.0.1:8771")
+LEXICAL_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_URL", "http://127.0.0.1:8772")
+CHUNKING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
+KNOWLEDGE_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781")
 COLLECTION = "knowledge_chunks"
 CHUNK_PROFILE = "window-v1"
 PROFILES = {"chunking": "window-v1@1", "embedding": "nomic-embed-text-v1.5@fp32", "vector": "knowledge_chunks@1"}
 SOURCES = ("rfc", "patents", "research_paper", "research", "books")
-EMBED_BATCH = int(os.environ.get("ENSEMBLE_KNOWLEDGE_EMBED_BATCH", "64"))  # texts per embedding request; the service caps at 64
+EMBED_BATCH = int(os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_EMBED_BATCH", "64"))  # texts per embedding request; the service caps at 64
 TIMEOUT = 600
 
 

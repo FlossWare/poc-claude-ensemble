@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parents[1]
 class GATuningDeploymentPathTests(unittest.TestCase):
     def test_scheduler_keeps_persistent_state_out_of_checkout_and_default_claude_profile(self):
         script = (REPO / "tools" / "ga-tuning-schedule.sh").read_text(encoding="utf-8")
-        self.assertIn('DEPLOY_ROOT="${ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"', script)
+        self.assertIn('DEPLOY_ROOT="${POC_CLAUDE_ENSEMBLE_INSTALL_ROOT:-$HOME/.FlossWare/poc-claude-ensemble}"', script)
         self.assertIn('DATA_DIR="$DEPLOY_ROOT/shared/data/ga-tuning"', script)
         self.assertIn('LOG_DIR="$DEPLOY_ROOT/shared/logs"', script)
         self.assertIn('SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$DEPLOY_ROOT/shared/claude-code/settings.json}"', script)

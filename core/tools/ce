@@ -14,9 +14,9 @@ EOF
 }
 
 dev_paths() {
-  CE_PROFILE="${ENSEMBLE_CE_DEV_PROFILE:-$HOME/.FlossWare/claude-ensemble-profile}"
-  CE_STATE="${ENSEMBLE_CE_DEV_STATE:-$HOME/.FlossWare/claude-ensemble-state}"
-  CE_VENV="${ENSEMBLE_CE_DEV_VENV:-$HOME/.FlossWare/venvs/claude-ensemble}"
+  CE_PROFILE="${POC_CLAUDE_ENSEMBLE_CE_DEV_PROFILE:-$HOME/.FlossWare/claude-ensemble-profile}"
+  CE_STATE="${POC_CLAUDE_ENSEMBLE_CE_DEV_STATE:-$HOME/.FlossWare/claude-ensemble-state}"
+  CE_VENV="${POC_CLAUDE_ENSEMBLE_CE_DEV_VENV:-$HOME/.FlossWare/venvs/claude-ensemble}"
   [[ ! -L "$CE_PROFILE" ]] || { echo "ERROR: CE profile path must not be a symlink: $CE_PROFILE" >&2; return 2; }
   [[ ! -L "$CE_STATE" ]] || { echo "ERROR: CE state root must not be a symlink: $CE_STATE" >&2; return 2; }
   [[ ! -L "$CE_VENV" ]] || { echo "ERROR: CE virtualenv path must not be a symlink: $CE_VENV" >&2; return 2; }
@@ -25,33 +25,33 @@ dev_paths() {
 dev_exports() {
   dev_paths
   local memory_port graph_port gateway_port
-  memory_port="${ENSEMBLE_CE_DEV_MEMORY_PORT:-18767}"
-  graph_port="${ENSEMBLE_CE_DEV_GRAPH_PORT:-18766}"
-  gateway_port="${ENSEMBLE_CE_DEV_GATEWAY_PORT:-18080}"
-  printf 'export ENSEMBLE_REPO_ROOT=%q\n' "$ROOT"
-  printf 'export ENSEMBLE_RUNTIME_DIR=%q\n' "$CE_STATE/runtime"
-  printf 'export ENSEMBLE_LOG_DIR=%q\n' "$CE_STATE/logs"
-  printf 'export ENSEMBLE_CLAUDE_CODE_CONFIG_DIR=%q\n' "$CE_PROFILE"
+  memory_port="${POC_CLAUDE_ENSEMBLE_CE_DEV_MEMORY_PORT:-18767}"
+  graph_port="${POC_CLAUDE_ENSEMBLE_CE_DEV_GRAPH_PORT:-18766}"
+  gateway_port="${POC_CLAUDE_ENSEMBLE_CE_DEV_GATEWAY_PORT:-18080}"
+  printf 'export POC_CLAUDE_ENSEMBLE_REPO_ROOT=%q\n' "$ROOT"
+  printf 'export POC_CLAUDE_ENSEMBLE_RUNTIME_DIR=%q\n' "$CE_STATE/runtime"
+  printf 'export POC_CLAUDE_ENSEMBLE_LOG_DIR=%q\n' "$CE_STATE/logs"
+  printf 'export POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR=%q\n' "$CE_PROFILE"
   printf 'export CLAUDE_CONFIG_DIR=%q\n' "$CE_PROFILE"
   printf 'export CLAUDE_HOOK_DIR=%q\n' "$CE_PROFILE/hooks"
-  printf 'export ENSEMBLE_MEMORY_DIR=%q\n' "$CE_STATE/data/memory"
-  printf 'export ENSEMBLE_MEMORY_SOCKET=%q\n' "$CE_STATE/runtime/memory.sock"
-  printf 'export ENSEMBLE_MEMORY_HTTP_HOST=127.0.0.1\n'
-  printf 'export ENSEMBLE_MEMORY_HTTP_PORT=%q\n' "$memory_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_MEMORY_DIR=%q\n' "$CE_STATE/data/memory"
+  printf 'export POC_CLAUDE_ENSEMBLE_MEMORY_SOCKET=%q\n' "$CE_STATE/runtime/memory.sock"
+  printf 'export POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_HOST=127.0.0.1\n'
+  printf 'export POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT=%q\n' "$memory_port"
   printf 'export FLOSSWARE_MEMORY_URL=%q\n' "http://127.0.0.1:$memory_port"
-  printf 'export ENSEMBLE_MEMORY_URL=%q\n' "http://127.0.0.1:$memory_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_MEMORY_URL=%q\n' "http://127.0.0.1:$memory_port"
   printf 'export FLOSSWARE_GRAPH_URL=%q\n' "http://127.0.0.1:$graph_port"
-  printf 'export ENSEMBLE_GRAPH_URL=%q\n' "http://127.0.0.1:$graph_port"
-  printf 'export ENSEMBLE_GRAPH_STORE=%q\n' "$CE_STATE/data/graph.json"
-  printf 'export ENSEMBLE_GRAPH_HOST=127.0.0.1\n'
-  printf 'export ENSEMBLE_GRAPH_PORT=%q\n' "$graph_port"
-  printf 'export ENSEMBLE_LEARNING_DIR=%q\n' "$CE_STATE/data/learning"
-  printf 'export ENSEMBLE_LEARNING_SOCKET=%q\n' "$CE_STATE/runtime/learning.sock"
-  printf 'export ENSEMBLE_THOMPSON_STATE_FILE=%q\n' "$CE_STATE/data/thompson-sampling-state.json"
-  printf 'export ENSEMBLE_THOMPSON_SOCKET=%q\n' "$CE_STATE/runtime/thompson.sock"
-  printf 'export ENSEMBLE_HTTP_HOST=127.0.0.1\n'
-  printf 'export ENSEMBLE_HTTP_PORT=%q\n' "$gateway_port"
-  printf 'export ENSEMBLE_GATEWAY_URL=%q\n' "http://127.0.0.1:$gateway_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_GRAPH_URL=%q\n' "http://127.0.0.1:$graph_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_GRAPH_STORE=%q\n' "$CE_STATE/data/graph.json"
+  printf 'export POC_CLAUDE_ENSEMBLE_GRAPH_HOST=127.0.0.1\n'
+  printf 'export POC_CLAUDE_ENSEMBLE_GRAPH_PORT=%q\n' "$graph_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_LEARNING_DIR=%q\n' "$CE_STATE/data/learning"
+  printf 'export POC_CLAUDE_ENSEMBLE_LEARNING_SOCKET=%q\n' "$CE_STATE/runtime/learning.sock"
+  printf 'export POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE=%q\n' "$CE_STATE/data/thompson-sampling-state.json"
+  printf 'export POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET=%q\n' "$CE_STATE/runtime/thompson.sock"
+  printf 'export POC_CLAUDE_ENSEMBLE_HTTP_HOST=127.0.0.1\n'
+  printf 'export POC_CLAUDE_ENSEMBLE_HTTP_PORT=%q\n' "$gateway_port"
+  printf 'export POC_CLAUDE_ENSEMBLE_GATEWAY_URL=%q\n' "http://127.0.0.1:$gateway_port"
 }
 
 dev_setup() {
@@ -73,7 +73,7 @@ dev_setup() {
     python3 -m venv "$CE_VENV"
   fi
   "$CE_VENV/bin/python" -m pip install --disable-pip-version-check -r "$ROOT/requirements.txt"
-  ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CE_PROFILE" CLAUDE_CONFIG_DIR="$CE_PROFILE" \
+  POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CE_PROFILE" CLAUDE_CONFIG_DIR="$CE_PROFILE" \
     bash "$ROOT/tools/claude-config/bin/claude-config" install --non-interactive
   echo "CE development environment ready."
   echo "  Source: $ROOT"

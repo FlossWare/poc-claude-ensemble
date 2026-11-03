@@ -348,7 +348,7 @@ def _validate_loopback_host(host: str) -> None:
 
 def _configured_host(environ: dict[str, str] | None = None) -> str:
     values = os.environ if environ is None else environ
-    host = values.get("ENSEMBLE_GRAPH_HOST", DEFAULT_HOST)
+    host = values.get("POC_CLAUDE_ENSEMBLE_GRAPH_HOST", DEFAULT_HOST)
     _validate_loopback_host(host)
     return host
 
@@ -365,9 +365,9 @@ def main() -> None:
         host = _configured_host()
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    port = int(os.environ.get("ENSEMBLE_GRAPH_PORT", str(DEFAULT_PORT)))
+    port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_GRAPH_PORT", str(DEFAULT_PORT)))
     store_path = os.environ.get(
-        "ENSEMBLE_GRAPH_STORE",
+        "POC_CLAUDE_ENSEMBLE_GRAPH_STORE",
         str(Path.home() / ".local" / "share" / "claude-ensemble" / "graph.json"),
     )
     server = create_server(host, port, store_path)

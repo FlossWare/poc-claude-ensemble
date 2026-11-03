@@ -20,7 +20,7 @@ if grep -Fq '$HOME/.claude' "$INIT_SCRIPT" || grep -Fq "Path.home() / '.claude'"
   echo "shell initialization must not default state into normal ~/.claude" >&2
   exit 1
 fi
-if grep -Fq 'source "$ENSEMBLE_ROOT/scripts/ensemble-init.sh" 2>/dev/null' "$INIT_SCRIPT"; then
+if grep -Fq 'source "$POC_CLAUDE_ENSEMBLE_ROOT/scripts/ensemble-init.sh" 2>/dev/null' "$INIT_SCRIPT"; then
   echo "recursive shell initialization detected" >&2
   exit 1
 fi
@@ -30,7 +30,7 @@ export HOME="$TMP/home"
 export FLOSSWARE_MEMORY_URL="http://127.0.0.1:9"
 # Keep the disposable CE profile outside the default ~/.claude tree.
 CLAUDE_HOME="$HOME/ce-profile"
-export ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME"
+export POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME"
 mkdir -p "$CLAUDE_HOME"
 
 cat > "$CLAUDE_HOME/settings.json" <<'JSON'
@@ -325,7 +325,7 @@ cp "$TMP/valid-manifest.json" "$manifest"
 rm -rf "$CLAUDE_HOME"
 export HOME="$TMP/home with spaces"
 CLAUDE_HOME="$TMP/ce profile with spaces"
-export ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME"
+export POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$CLAUDE_HOME"
 mkdir -p "$CLAUDE_HOME"
 bash "$ROOT/install.sh" --non-interactive
 python3 - "$CLAUDE_HOME/settings.json" "$CLAUDE_HOME/hooks/memory-search-on-prompt.js" <<'PY'
@@ -399,7 +399,7 @@ default_settings="$default_profile/settings.json"
 default_before="$(sha256sum "$default_settings" | awk '{print $1}')"
 ce_profile="$TMP/dedicated CE profile"
 mkdir -p "$ce_profile"
-ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ce_profile" CLAUDE_CONFIG_DIR="$ce_profile" bash "$ROOT/install.sh" --non-interactive
+POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$ce_profile" CLAUDE_CONFIG_DIR="$ce_profile" bash "$ROOT/install.sh" --non-interactive
 test -f "$ce_profile/settings.json"
 test -f "$ce_profile/hooks/memory-search-on-prompt.js"
 test -f "$ce_profile/hooks/session-end-memory-capture.js"
@@ -414,7 +414,7 @@ mkdir -p "$unsafe_profile" "$outside_hooks"
 printf '%s\n' '{"permissions":{}}' > "$unsafe_profile/settings.json"
 ln -s "$outside_hooks" "$unsafe_profile/hooks"
 unsafe_settings_before="$(sha256sum "$unsafe_profile/settings.json" | awk '{print $1}')"
-if ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$unsafe_profile" CLAUDE_CONFIG_DIR="$unsafe_profile" bash "$ROOT/install.sh" --non-interactive; then
+if POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$unsafe_profile" CLAUDE_CONFIG_DIR="$unsafe_profile" bash "$ROOT/install.sh" --non-interactive; then
   echo "expected symlinked hooks-directory refusal" >&2
   exit 1
 fi
@@ -426,7 +426,7 @@ test ! -e "$outside_hooks/session-end-memory-capture.js"
 no_profile_home="$TMP/no-profile-home"
 mkdir -p "$no_profile_home/.claude"
 printf '%s\n' '{"sentinel":"must remain untouched"}' > "$no_profile_home/.claude/settings.json"
-if env -u ENSEMBLE_CLAUDE_CODE_CONFIG_DIR -u CLAUDE_CONFIG_DIR HOME="$no_profile_home" bash "$ROOT/install.sh" --non-interactive; then
+if env -u POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR -u CLAUDE_CONFIG_DIR HOME="$no_profile_home" bash "$ROOT/install.sh" --non-interactive; then
   echo "expected install without an explicit profile to fail" >&2
   exit 1
 fi
@@ -439,7 +439,7 @@ external_hooks="$TMP/external-hooks"
 mkdir -p "$linked_profile" "$external_hooks"
 printf '%s\n' '{"sentinel":"external hook target"}' > "$external_hooks/memory-search-on-prompt.js"
 ln -s "$external_hooks" "$linked_profile/hooks"
-if ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$linked_profile" HOME="$TMP/linked-home" bash "$ROOT/install.sh" --non-interactive --force; then
+if POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$linked_profile" HOME="$TMP/linked-home" bash "$ROOT/install.sh" --non-interactive --force; then
   echo "expected symlinked hooks directory to be refused" >&2
   exit 1
 fi

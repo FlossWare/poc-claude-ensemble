@@ -31,18 +31,18 @@ The ordinary `~/.claude/` directory is **not** the standalone CE profile. The st
 
 ### Explicitly selected profile for tools and skill installation
 
-Tools that install Claude Code skills/configuration accept `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`. For example:
+Tools that install Claude Code skills/configuration accept `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`. For example:
 
 ```bash
-ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
+POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR="$HOME/.config/claude-ensemble/acceptance-profile" \
   bash tools/install-ce-skills.sh
 ```
 
-The aggregate installer is idempotent and preserves conflicting user-owned skill files. This variable selects the target for that invocation only. The versioned deployment manager separately configures both `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` (the CE contract) and `CLAUDE_CONFIG_DIR` (the native Claude Code profile override) on each managed service. Arbitrary direct commands, unrelated scheduled jobs, and interactive shells do not inherit the service environment automatically.
+The aggregate installer is idempotent and preserves conflicting user-owned skill files. This variable selects the target for that invocation only. The versioned deployment manager separately configures both `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` (the CE contract) and `CLAUDE_CONFIG_DIR` (the native Claude Code profile override) on each managed service. Arbitrary direct commands, unrelated scheduled jobs, and interactive shells do not inherit the service environment automatically.
 
 ### Direct development/runtime installer
 
-The root `install.sh` is the runtime installer used by the deployment manager and can also be run against a source checkout for development. In direct mode, its profile target is `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` when set, otherwise `~/.FlossWare/claude-ensemble-profile`. The versioned standalone deployment instead uses `~/.FlossWare/claude-ensemble/shared/claude-code/`. Neither mode modifies ordinary `~/.claude/` by default. Before migrating, the installer backs up legacy service data and copies missing Memory, Learning, Thompson, and Graph state into the selected isolated state directory; the original legacy paths are left untouched, and existing destination files are never overwritten.
+The root `install.sh` is the runtime installer used by the deployment manager and can also be run against a source checkout for development. In direct mode, its profile target is `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` when set, otherwise `~/.FlossWare/claude-ensemble-profile`. The versioned standalone deployment instead uses `~/.FlossWare/claude-ensemble/shared/claude-code/`. Neither mode modifies ordinary `~/.claude/` by default. Before migrating, the installer backs up legacy service data and copies missing Memory, Learning, Thompson, and Graph state into the selected isolated state directory; the original legacy paths are left untouched, and existing destination files are never overwritten.
 
 Do not treat direct source-checkout installation and standalone deployment as interchangeable. The standalone workflow provides immutable releases, a stable active pointer, deployment manifests, health checks, and release rollback.
 
@@ -53,7 +53,7 @@ Before debugging authentication or provider selection, establish these facts for
 1. Which `claude` executable is found on that process's `PATH`.
 2. Which configuration/profile directory the process uses.
 3. Which user owns the process and which environment variables systemd passes to it.
-4. Whether the native `CLAUDE_CONFIG_DIR` and CE `ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` both point to the intended directory for that process.
+4. Whether the native `CLAUDE_CONFIG_DIR` and CE `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR` both point to the intended directory for that process.
 5. Whether authentication exists in that profile and is valid for the configured provider.
 6. Whether the service or scheduled job uses the same profile path as the interactive command.
 7. Whether `settings.json` contains only the expected CE-managed hooks/settings and preserves unrelated user settings.

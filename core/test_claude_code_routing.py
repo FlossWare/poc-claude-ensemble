@@ -36,7 +36,7 @@ def make_payload(upstream="vertex"):
 
 
 def test_registry_routes_only_configured_models(monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_CLAUDE_CODE_MODELS", "haiku,sonnet")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_MODELS", "haiku,sonnet")
     registry = ProviderRegistry()
 
     assert registry.resolve_model("haiku") == ("claude-code", "haiku")
@@ -77,7 +77,7 @@ def test_missing_provider_metadata_is_rejected(monkeypatch):
 
 
 def test_blank_expected_provider_is_rejected(monkeypatch):
-    monkeypatch.setenv("ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "")
+    monkeypatch.setenv("POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_EXPECTED_PROVIDER", "")
     with pytest.raises(ValueError, match="non-empty"):
         ClaudeCodeProvider()
 

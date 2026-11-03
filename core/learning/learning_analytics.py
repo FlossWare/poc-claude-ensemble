@@ -18,8 +18,8 @@ def _post(base: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 class LearningAnalytics:
     def __init__(self, graph_service_url: str|None=None, memory_service_url: str|None=None):
-        self.graph_service_url=graph_service_url or os.environ.get("ENSEMBLE_GRAPH_URL","http://127.0.0.1:8766")
-        self.memory_service_url=memory_service_url or os.environ.get("ENSEMBLE_MEMORY_URL","http://127.0.0.1:8767")
+        self.graph_service_url=graph_service_url or os.environ.get("POC_CLAUDE_ENSEMBLE_GRAPH_URL","http://127.0.0.1:8766")
+        self.memory_service_url=memory_service_url or os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_URL","http://127.0.0.1:8767")
 
     def best_models_for(self, task_type: str, scope: str|None=None, limit: int=5) -> dict[str,Any]:
         success=_post(self.graph_service_url,"/graph/query",{"type":"edges","from_type":"model","to_type":"task_type","relationship":"succeeded_on"}).get("edges",[])

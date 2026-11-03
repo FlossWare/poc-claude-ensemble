@@ -54,7 +54,7 @@ DEFAULT_COLLAB_MAX_REVIEW_CALLS = 18
 DEFAULT_COLLAB_MAX_ARBITER_CALLS = 6
 FORWARD_MARKER = "X-Ensemble-Forwarded"
 FORWARD_SAFE_HEADERS = {"content-type", "accept", "x-request-id", "x-correlation-id"}
-HEALTH_CACHE_TTL_SECONDS = float(os.environ.get("ENSEMBLE_HEALTH_CACHE_TTL", "30"))
+HEALTH_CACHE_TTL_SECONDS = float(os.environ.get("POC_CLAUDE_ENSEMBLE_HEALTH_CACHE_TTL", "30"))
 _health_cache: dict[str, tuple[float, bool]] = {}
 _health_cache_lock = threading.Lock()
 
@@ -90,10 +90,10 @@ class AuthenticationRequired(PermissionError):
 
 
 def _require_collaboration_auth(handler: BaseHTTPRequestHandler) -> None:
-    expected = os.environ.get("ENSEMBLE_COLLABORATION_AUTH_TOKEN", "")
+    expected = os.environ.get("POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN", "")
     if not expected:
         raise ServiceUnavailable(
-            "collaboration endpoint is disabled until ENSEMBLE_COLLABORATION_AUTH_TOKEN is configured"
+            "collaboration endpoint is disabled until POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN is configured"
         )
     supplied = handler.headers.get("Authorization", "")
     scheme, _, token = supplied.partition(" ")
@@ -308,7 +308,7 @@ class EnsembleApplication:
     """Single REST boundary over independently owned services."""
     def __init__(self, graph_url: str | None = None, memory_url: str | None = None):
         self.service_urls = {
-            service: os.environ.get(f"ENSEMBLE_{service.upper()}_URL", default)
+            service: os.environ.get(f"POC_CLAUDE_ENSEMBLE_{service.upper()}_URL", default)
             for service, default in DEFAULT_SERVICE_URLS.items()
         }
         if graph_url is not None:
@@ -321,15 +321,15 @@ class EnsembleApplication:
             sys.path.insert(0, learning_dir)
         from learning.decision_support_api import DecisionSupportAPI
         from arbitration.api_client import MultiModelClient
-        metrics_path = os.environ.get("ENSEMBLE_METRICS_FILE")
+        metrics_path = os.environ.get("POC_CLAUDE_ENSEMBLE_METRICS_FILE")
         self.metrics = MetricsStore(metrics_path)
         self.models = MultiModelClient(metrics_store=self.metrics)
         self.policy = Policy()
         self.capability_health = CapabilityHealthView(self.models.registry)
-        provenance_path = os.environ.get("ENSEMBLE_DECISION_PROVENANCE_FILE")
+        provenance_path = os.environ.get("POC_CLAUDE_ENSEMBLE_DECISION_PROVENANCE_FILE")
         self.provenance = DecisionProvenanceStore(provenance_path)
         self.memory_writer = OperationalMemoryWriter()
-        experiment_path = os.environ.get("ENSEMBLE_EXPERIMENT_FILE")
+        experiment_path = os.environ.get("POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE")
         self.experiments = ExperimentStore(experiment_path)
         self.decision = DecisionSupportAPI(
             graph_service_url=self.service_urls["graph"],
@@ -579,14 +579,14 @@ class EnsembleApplication:
         try:
             _require_collaboration_auth(handler)
             body = _json_body(handler)
-            configured_solvers = _env_csv("ENSEMBLE_COLLABORATION_SOLVERS", DEFAULT_COLLAB_SOLVERS)
-            configured_arbiter = os.environ.get("ENSEMBLE_COLLABORATION_ARBITER", DEFAULT_COLLAB_ARBITER)
-            configured_reviewers = _env_csv("ENSEMBLE_COLLABORATION_REVIEWERS", DEFAULT_COLLAB_REVIEWERS)
-            allow_external_data = os.environ.get("ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", "").lower() == "true"
-            max_rounds_cap = _env_positive_int("ENSEMBLE_COLLABORATION_MAX_ROUNDS", DEFAULT_COLLAB_MAX_ROUNDS)
-            max_solver_cap = _env_positive_int("ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS", DEFAULT_COLLAB_MAX_SOLVER_CALLS)
-            max_review_cap = _env_positive_int("ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS", DEFAULT_COLLAB_MAX_REVIEW_CALLS)
-            max_arbiter_cap = _env_positive_int("ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS", DEFAULT_COLLAB_MAX_ARBITER_CALLS)
+            configured_solvers = _env_csv("POC_CLAUDE_ENSEMBLE_COLLABORATION_SOLVERS", DEFAULT_COLLAB_SOLVERS)
+            configured_arbiter = os.environ.get("POC_CLAUDE_ENSEMBLE_COLLABORATION_ARBITER", DEFAULT_COLLAB_ARBITER)
+            configured_reviewers = _env_csv("POC_CLAUDE_ENSEMBLE_COLLABORATION_REVIEWERS", DEFAULT_COLLAB_REVIEWERS)
+            allow_external_data = os.environ.get("POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA", "").lower() == "true"
+            max_rounds_cap = _env_positive_int("POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ROUNDS", DEFAULT_COLLAB_MAX_ROUNDS)
+            max_solver_cap = _env_positive_int("POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_SOLVER_CALLS", DEFAULT_COLLAB_MAX_SOLVER_CALLS)
+            max_review_cap = _env_positive_int("POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_REVIEW_CALLS", DEFAULT_COLLAB_MAX_REVIEW_CALLS)
+            max_arbiter_cap = _env_positive_int("POC_CLAUDE_ENSEMBLE_COLLABORATION_MAX_ARBITER_CALLS", DEFAULT_COLLAB_MAX_ARBITER_CALLS)
 
             task = body.get("task")
             solvers = body.get("solvers", list(configured_solvers))
@@ -614,7 +614,7 @@ class EnsembleApplication:
                 raise PermissionError("requested reviewer is not allowed by server collaboration policy")
             if reviewers and not allow_external_data:
                 raise PermissionError(
-                    "external reviewers are disabled until ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true"
+                    "external reviewers are disabled until POC_CLAUDE_ENSEMBLE_COLLABORATION_ALLOW_EXTERNAL_DATA=true"
                 )
             if not isinstance(constraints, list) or not all(isinstance(x, str) for x in constraints):
                 raise ValueError("constraints must be an array of strings")
@@ -659,7 +659,7 @@ class EnsembleApplication:
             execution_id = handler.headers.get("X-Request-ID") or str(uuid.uuid4())
             selected = result.selected_candidate
             persist_full_text = os.environ.get(
-                "ENSEMBLE_COLLABORATION_PERSIST_FULL_TEXT", ""
+                "POC_CLAUDE_ENSEMBLE_COLLABORATION_PERSIST_FULL_TEXT", ""
             ).lower() == "true"
             safe_reviews = [
                 {
@@ -940,8 +940,8 @@ class EnsembleRequestHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    server = create_server(os.environ.get("ENSEMBLE_HTTP_HOST", DEFAULT_HOST),
-                           int(os.environ.get("ENSEMBLE_HTTP_PORT", str(DEFAULT_PORT))))
+    server = create_server(os.environ.get("POC_CLAUDE_ENSEMBLE_HTTP_HOST", DEFAULT_HOST),
+                           int(os.environ.get("POC_CLAUDE_ENSEMBLE_HTTP_PORT", str(DEFAULT_PORT))))
     LOG.info("Claude Ensemble REST gateway listening on http://%s:%s", *server.server_address)
     try: server.serve_forever()
     finally: server.server_close()

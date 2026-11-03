@@ -13,7 +13,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-LEDGER = os.path.expanduser(os.environ.get("ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
+LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
 MAX_TEXT = 4000
 
 
