@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.request
@@ -34,7 +35,7 @@ KNOWLEDGE_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_URL", "http://127.
 COLLECTION = "knowledge_chunks"
 CHUNK_PROFILE = "window-v1"
 PROFILES = {"chunking": "window-v1@1", "embedding": "nomic-embed-text-v1.5@fp32", "vector": "knowledge_chunks@1"}
-SOURCES = ("rfc", "patents", "research_paper", "research", "books")
+SOURCES = ("rfc", "patents", "research_paper", "research", "books", "prompts")
 EMBED_BATCH = int(os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_EMBED_BATCH", "64"))  # texts per embedding request; the service caps at 64
 TIMEOUT = 600
 
@@ -107,9 +108,48 @@ def read_record(row):
     return (record.get("title") or row.get("url") or ""), (record.get("content") or "")
 
 
+PROMPT_LEDGER = os.path.expanduser(os.environ.get(
+    "POC_CLAUDE_ENSEMBLE_PROMPT_LEDGER", "~/.FlossWare/ledger/prompts/prompts.jsonl"))
+# Prompts that look like they contain a credential are not indexed. The match is on the text only.
+SECRET_PATTERNS = re.compile(
+    r"(ATATT[0-9A-Za-z_\-]{20,}|AKIA[0-9A-Z]{16}|ghp_[0-9A-Za-z]{20,}|xox[bp]-[0-9A-Za-z-]{10,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?i:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,})")
+
+
+def prompt_documents():
+    """Yield the prompts captured in the prompt ledger, one document per prompt. Credential-looking prompts are skipped."""
+    if not os.path.exists(PROMPT_LEDGER):
+        return
+    with open(PROMPT_LEDGER, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                log("skipped malformed prompt ledger line")
+                continue
+            prompt = row.get("prompt")
+            if row.get("kind") != "prompt" or not isinstance(prompt, str) or not prompt.strip():
+                continue
+            if SECRET_PATTERNS.search(prompt):
+                log(f"skipped prompt {row.get('event_id')}: looks like a credential")
+                continue
+            try:
+                revision_sequence(row.get("timestamp"))
+            except ValueError:
+                log(f"skipped prompt {row.get('event_id')}: timestamp missing or invalid")
+                continue
+            stamp = str(row["timestamp"])[:10]
+            where = os.path.basename(str(row.get("cwd") or "").rstrip("/")) or "unknown project"
+            yield {"url": f"prompt://{row.get('event_id')}", "source": "prompts",
+                   "fetched_at": row["timestamp"], "title": f"Prompt {stamp} ({where})"[:300],
+                   "content": prompt}
+
+
 def documents(sources):
     """Yield every ledger document of the selected sources whose raw record can be read."""
     wanted = set(sources)
+    if "prompts" in wanted:
+        yield from prompt_documents()
     for row in ledger_rows():
         if row.get("source") not in wanted:
             continue
