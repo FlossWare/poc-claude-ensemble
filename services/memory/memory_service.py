@@ -371,7 +371,8 @@ class MemoryStore:
                 {
                     "record": record,
                     "execution_context": record_context.to_dict(),
-                    "relation": relation,                    "authoritative": False,
+                    "relation": relation,
+                    "authoritative": False,
                     "_rank": rank,
                     "_record_index": record_index,
                 }
@@ -420,7 +421,8 @@ class MemoryStore:
             raise ValueError("content must be a string")
         if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise ValueError("sha256 must be a lowercase SHA-256 digest")
-        actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()        if actual_sha != sha256:
+        actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if actual_sha != sha256:
             raise ValueError("sha256 does not match content")
         metadata = dict(metadata or {})
         scope = metadata.get("scope")
@@ -719,7 +721,8 @@ class MemoryStore:
         # Treat UUIDs, event IDs, and machine-like IDs containing digits plus
         # separators as keys. Dotted artifact types are keys when they have
         # multiple components; ordinary hyphenated prose remains searchable.
-        is_uuid = bool(            re.fullmatch(
+        is_uuid = bool(
+            re.fullmatch(
                 r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
                 normalized_query,
             )
@@ -819,7 +822,8 @@ class MemoryStore:
             current_chunk = []
             current_header = "intro"
             max_chunk_size = 2000
-            for i, line in enumerate(lines):                if line.startswith("#"):
+            for i, line in enumerate(lines):
+                if line.startswith("#"):
                     if current_chunk:
                         chunks.append(
                             {
@@ -1151,7 +1155,8 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None: return
 
 
-def create_http_server(service: "MemoryService", host: str, port: int) -> ThreadingHTTPServer:    if host not in {"127.0.0.1","::1","localhost"}: raise ValueError("Memory HTTP service only accepts loopback binds")
+def create_http_server(service: "MemoryService", host: str, port: int) -> ThreadingHTTPServer:
+    if host not in {"127.0.0.1","::1","localhost"}: raise ValueError("Memory HTTP service only accepts loopback binds")
     server=ThreadingHTTPServer((host,port),MemoryHTTPHandler)
     server.memory_service=service
     return server
@@ -1218,7 +1223,8 @@ class MemoryService:
                 logger.warning("%s", error)
         return {
             "state": state,
-            "indexed_files": indexed,            "expected_files": expected,
+            "indexed_files": indexed,
+            "expected_files": expected,
             "elapsed_seconds": round(elapsed, 3),
             "warmup_timeout_seconds": self._index_warmup_timeout_seconds,
             **({"error": error} if error else {}),
