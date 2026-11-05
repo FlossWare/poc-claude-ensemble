@@ -986,10 +986,16 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 filters = {key: values[0] for key, values in params.items() if key not in {"limit", "cursor"}}
                 since = filters.pop("since", None)
                 until = filters.pop("until", None)
-                for bound in (since, until):
-                    if bound is not None:
-                        datetime.fromisoformat(bound.replace("Z", "+00:00"))
-                if since and until and since > until:
+
+                def parse_timestamp(value: str) -> datetime:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return parsed.astimezone(timezone.utc)
+
+                since_time = parse_timestamp(since) if since else None
+                until_time = parse_timestamp(until) if until else None
+                if since_time and until_time and since_time > until_time:
                     raise ValueError("since must not be later than until")
 
                 records = service.store.read_history_entries()
@@ -1003,11 +1009,18 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                         continue
                     if "correlation_id" in filters and record.get("correlation_id") != filters["correlation_id"]:
                         continue
-                    timestamp = record.get("timestamp", record.get("captured_at"))
-                    if since and (not isinstance(timestamp, str) or timestamp < since):
-                        continue
-                    if until and (not isinstance(timestamp, str) or timestamp > until):
-                        continue
+                    if since_time or until_time:
+                        timestamp = record.get("timestamp", record.get("captured_at"))
+                        if timestamp is None:
+                            continue
+                        try:
+                            event_time = parse_timestamp(timestamp)
+                        except (TypeError, ValueError) as exc:
+                            raise RuntimeError("session history contains an invalid event timestamp") from exc
+                        if since_time and event_time < since_time:
+                            continue
+                        if until_time and event_time > until_time:
+                            continue
                     selected.append(record)
 
                 page = selected[offset:offset + limit]
