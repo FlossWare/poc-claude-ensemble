@@ -1706,11 +1706,45 @@ class MemoryHistoryRestTest(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError) as error:
                         get("/history/missing")
                     self.assertEqual(error.exception.code, 404)
+
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        get("/history/event-2?unexpected=true")
+                    self.assertEqual(error.exception.code, 400)
                 finally:
                     server.shutdown()
                     server.server_close()
                     thread.join(timeout=3)
             finally:
+                LEDGER_STORES["session_events"] = original_store
+
+
+    def test_history_entry_lookup_fails_closed_on_malformed_jsonl(self):
+        from memory_service import LEDGER_STORES, MemoryService, create_http_server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            original_store = LEDGER_STORES["session_events"]
+            history_path = root / "history" / "session-events.jsonl"
+            LEDGER_STORES["session_events"] = (history_path, original_store[1])
+            service = MemoryService(root / "memory.sock", root / "memory")
+            history_path.parent.mkdir(parents=True)
+            history_path.write_text('{"event_id":"valid"}\\n{not-json}\\n', encoding="utf-8")
+            server = create_http_server(service, "127.0.0.1", 0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/history/valid"
+                )
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request, timeout=3)
+                self.assertEqual(error.exception.code, 500)
+                payload = json.loads(error.exception.read().decode("utf-8"))
+                self.assertEqual(payload["error"], "history request failed")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
                 LEDGER_STORES["session_events"] = original_store
 
 
