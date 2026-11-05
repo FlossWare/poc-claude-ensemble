@@ -97,7 +97,8 @@ class MemorySearchRegressionTest(unittest.TestCase):
                     "event_type": "learning.artifact",
                     "payload": {
                         "artifact_type": artifact_type,
-                        "run_id": run_id,                    },
+                        "run_id": run_id,
+                    },
                 },
                 indent=2,
             )
@@ -196,7 +197,8 @@ class MemorySearchRegressionTest(unittest.TestCase):
                     "# Operational Event\\n\\nMemory event from SessionEnd collaboration.result; task quality remains unknown.",
                 )
             knowledge_path = root / "project" / "CLAUDE.md"
-            knowledge_path.parent.mkdir()            knowledge_content = (
+            knowledge_path.parent.mkdir()
+            knowledge_content = (
                 "# Lifecycle Contract\\n\\n"
                 "Memory is episodic experience; Knowledge is durable current facts. "
                 "SessionEnd captures metadata only and does not establish task quality."
@@ -296,6 +298,7 @@ class MemorySearchRegressionTest(unittest.TestCase):
 
     def test_run_id_matches_inside_composite_event_id(self):
         from memory_service import MemoryStore
+
         run_id = "integration-test-a51b9cf7-a58f-45bf-ad81-56999e1730e5"
         with tempfile.TemporaryDirectory() as temp_dir:
             store = MemoryStore(Path(temp_dir))
@@ -394,6 +397,7 @@ class MemorySearchRegressionTest(unittest.TestCase):
             (Path(temp_dir) / "beta.md").unlink()
             self.assertEqual(store.search_semantic("zebrafish migration"), [])
             self.assertNotIn("beta", store._search_index)
+
     def test_search_index_detects_same_size_rewrite_with_restored_mtime(self):
         """Review finding: (mtime, size) alone served stale vectors here."""
         from memory_service import MemoryStore
@@ -493,7 +497,8 @@ class MemorySearchRegressionTest(unittest.TestCase):
 
             self.assertTrue(all(not thread.is_alive() for thread in threads), "search thread did not finish")
             self.assertEqual(failures, [])
-            expected_chunk_vectors = sum(                max(1, len(store.chunk_document(f"cold-event-{index:03d}")))
+            expected_chunk_vectors = sum(
+                max(1, len(store.chunk_document(f"cold-event-{index:03d}")))
                 for index in range(file_count)
             )
             # Every search vectorizes its own query, but each stored file revision
@@ -592,7 +597,8 @@ class MemoryServiceIdempotencyTest(unittest.TestCase):
         for label, content, message in cases:
             with self.subTest(record=label), tempfile.TemporaryDirectory() as temp_dir:
                 store = MemoryStore(Path(temp_dir))
-                (Path(temp_dir) / "events.jsonl").write_text(content, encoding="utf-8")                with self.assertRaisesRegex(RuntimeError, message):
+                (Path(temp_dir) / "events.jsonl").write_text(content, encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, message):
                     store.append_entry_once("events", "event-1", {"event": "SessionEnd"})
                 self.assertEqual((Path(temp_dir) / "events.jsonl").read_text(encoding="utf-8"), content)
 
@@ -691,7 +697,8 @@ class MemoryServiceRestIdempotencyTest(unittest.TestCase):
                 base = {
                     "name": "events",
                     "event_id": "event-1",
-                    "entry": {"event": "SessionEnd", "session_id": "session-1"},                }
+                    "entry": {"event": "SessionEnd", "session_id": "session-1"},
+                }
                 self.assertEqual(post(base)[0], 200)
                 conflict = dict(base)
                 conflict["entry"] = {"event": "SessionEnd", "session_id": "different"}
@@ -790,6 +797,7 @@ class MemoryServiceRestIdempotencyTest(unittest.TestCase):
                     )
                     for _ in range(2)
                 ]
+
                 for result in results:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertNotIn("Memory capture unavailable:", result.stderr)
@@ -889,7 +897,8 @@ class MemoryServiceRestStatusTest(unittest.TestCase):
                     request = urllib.request.Request(
                         "http://127.0.0.1:%d/memory/search-semantic" % server.server_port,
                         data=json.dumps({"query": "needle", "top_k": 5}).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
                     )
                     with self.assertRaises(urllib.error.HTTPError) as raised:
                         urllib.request.urlopen(request, timeout=2)
@@ -988,6 +997,7 @@ class MemoryServiceContextTest(unittest.TestCase):
             runtime = root / "runtime"
             (home / ".claude").mkdir(parents=True)
             runtime.mkdir()
+
             env = os.environ.copy()
             env["HOME"] = str(home)
             env["XDG_RUNTIME_DIR"] = str(runtime)
@@ -1087,7 +1097,8 @@ class MemoryServiceContextTest(unittest.TestCase):
                                 "execution_context": context.to_dict(),
                             },
                         },
-                    )                    self.assertEqual(response, {"ok": True})
+                    )
+                    self.assertEqual(response, {"ok": True})
 
                 response = send_request(
                     socket_path,
@@ -1186,7 +1197,8 @@ class MemoryServiceContextTest(unittest.TestCase):
                     {"name": "execution-context", "context": context.to_dict(), "limit": -1},
                 ]
                 for request in invalid_requests:
-                    response = send_request(                        socket_path,
+                    response = send_request(
+                        socket_path,
                         {"op": "retrieve", **request},
                     )
                     self.assertFalse(response["ok"])
@@ -1285,7 +1297,8 @@ class MemoryServiceContextTest(unittest.TestCase):
                         "op": "append",
                         "name": "execution-context",
                         "entry": {"result": "legacy"},
-                    },                )
+                    },
+                )
                 self.assertEqual(legacy_response, {"ok": True})
 
                 response = send_request(
@@ -1384,7 +1397,8 @@ class MemorySchemaVersionTest(unittest.TestCase):
         value = ExecutionContext(
             request_id="request-1",
             execution_id="execution-1",
-            objective="objective",        ).to_dict()
+            objective="objective",
+        ).to_dict()
         for schema_version in (True, "1", -1):
             value["schema_version"] = schema_version
             with self.subTest(schema_version=schema_version):
@@ -1483,7 +1497,8 @@ class MemoryIndexReadinessTest(unittest.TestCase):
 
             status, search = self.post_json(
                 "/memory/search-semantic", {"query": "first prompt during warm-up"}
-            )            self.assertEqual(status, 503)
+            )
+            self.assertEqual(status, 503)
             self.assertTrue(search["retryable"])
             self.assertEqual(search["search_index"]["state"], "warming")
 
@@ -1582,7 +1597,8 @@ class MemoryIndexReadinessTest(unittest.TestCase):
 
     def test_exhausted_warmup_retries_return_non_retryable_search_error(self):
         calls = []
-        def incomplete_report(max_passes=3):            calls.append(max_passes)
+        def incomplete_report(max_passes=3):
+            calls.append(max_passes)
             return {
                 "pass": len(calls),
                 "expected_files": ["broken.md"],
@@ -1659,10 +1675,10 @@ class MemoryHistoryRestTest(unittest.TestCase):
                 server = create_http_server(service, "127.0.0.1", 0)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
-                base = f"http://127.0.0.1:{server.server_address[1]}"
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
                 try:
                     def get(path):
-                        with urllib.request.urlopen(base + path, timeout=3) as response:
+                        with urllib.request.urlopen(base_url + path, timeout=3) as response:
                             return json.loads(response.read().decode("utf-8"))
 
                     first = get("/history?limit=1&event_type=pipeline.stage.completed")
