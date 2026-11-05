@@ -23,6 +23,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlsplit
 
 # Allow execution from the repository without requiring package installation.
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -347,8 +348,7 @@ class MemoryStore:
                 {
                     "record": record,
                     "execution_context": record_context.to_dict(),
-                    "relation": relation,
-                    "authoritative": False,
+                    "relation": relation,                    "authoritative": False,
                     "_rank": rank,
                     "_record_index": record_index,
                 }
@@ -697,8 +697,7 @@ class MemoryStore:
         # Treat UUIDs, event IDs, and machine-like IDs containing digits plus
         # separators as keys. Dotted artifact types are keys when they have
         # multiple components; ordinary hyphenated prose remains searchable.
-        is_uuid = bool(
-            re.fullmatch(
+        is_uuid = bool(            re.fullmatch(
                 r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
                 normalized_query,
             )
@@ -925,11 +924,12 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         service = self.server.memory_service
-        if self.path == "/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/health":
             # Liveness must not depend on index warm-up.
             self._send(200, {"ok": True, "service": "memory"})
             return
-        if self.path == "/ready":
+        if parsed.path == "/ready":
             status = service.search_index_status()
             ready = status["state"] == "ready"
             self._send(
@@ -937,6 +937,89 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 {"ok": ready, "service": "memory", "ready": ready, "search_index": status},
             )
             return
+
+        if parsed.path == "/history":
+            try:
+                params = parse_qs(parsed.query, strict_parsing=True)
+                allowed = {"limit", "cursor", "event_type", "source", "correlation_id", "since", "until"}
+                unknown = set(params) - allowed
+                if unknown:
+                    raise ValueError("unsupported history filter: " + sorted(unknown)[0])
+                if any(len(values) != 1 for values in params.values()):
+                    raise ValueError("history filters must be supplied once")
+                raw_limit = params.get("limit", ["50"])[0]
+                if not raw_limit.isdigit():
+                    raise ValueError("limit must be an integer")
+                limit = int(raw_limit)
+                if limit < 1 or limit > 100:
+                    raise ValueError("limit must be between 1 and 100")
+                raw_cursor = params.get("cursor", ["0"])[0]
+                if not raw_cursor.isdigit():
+                    raise ValueError("cursor must be a non-negative offset")
+                offset = int(raw_cursor)
+
+                filters = {key: values[0] for key, values in params.items() if key not in {"limit", "cursor"}}
+                since = filters.pop("since", None)
+                until = filters.pop("until", None)
+                for bound in (since, until):
+                    if bound is not None:
+                        datetime.fromisoformat(bound.replace("Z", "+00:00"))
+                if since and until and since > until:
+                    raise ValueError("since must not be later than until")
+
+                records = service.store.read_entries("session_events")
+                selected = []
+                for record in records:
+                    event_type = record.get("event_type", record.get("kind"))
+                    event_source = record.get("source", record.get("producer"))
+                    if "event_type" in filters and event_type != filters["event_type"]:
+                        continue
+                    if "source" in filters and event_source != filters["source"]:
+                        continue
+                    if "correlation_id" in filters and record.get("correlation_id") != filters["correlation_id"]:
+                        continue
+                    timestamp = record.get("timestamp", record.get("captured_at"))
+                    if since and (not isinstance(timestamp, str) or timestamp < since):
+                        continue
+                    if until and (not isinstance(timestamp, str) or timestamp > until):
+                        continue
+                    selected.append(record)
+
+                page = selected[offset:offset + limit]
+                next_offset = offset + len(page)
+                next_cursor = str(next_offset) if next_offset < len(selected) else None
+                self._send(200, {
+                    "ok": True,
+                    "entries": page,
+                    "pagination": {
+                        "limit": limit,
+                        "next_cursor": next_cursor,
+                        "returned": len(page),
+                        "total": len(selected),
+                    },
+                })
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("History REST request failed")
+                self._send(500, {"ok": False, "error": "history request failed"})
+            return
+
+        if parsed.path.startswith("/history/"):
+            event_id = unquote(parsed.path[len("/history/"):])
+            if not event_id or "/" in event_id:
+                self._send(400, {"ok": False, "error": "invalid history entry id"})
+                return
+            matches = [
+                record for record in service.store.read_entries("session_events")
+                if record.get("event_id") == event_id
+            ]
+            if not matches:
+                self._send(404, {"ok": False, "error": "history entry not found"})
+                return
+            self._send(200, {"ok": True, "entry": matches[0]})
+            return
+
         self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:
@@ -1047,8 +1130,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None: return
 
 
-def create_http_server(service: "MemoryService", host: str, port: int) -> ThreadingHTTPServer:
-    if host not in {"127.0.0.1","::1","localhost"}: raise ValueError("Memory HTTP service only accepts loopback binds")
+def create_http_server(service: "MemoryService", host: str, port: int) -> ThreadingHTTPServer:    if host not in {"127.0.0.1","::1","localhost"}: raise ValueError("Memory HTTP service only accepts loopback binds")
     server=ThreadingHTTPServer((host,port),MemoryHTTPHandler)
     server.memory_service=service
     return server
