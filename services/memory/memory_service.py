@@ -1044,18 +1044,25 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path.startswith("/history/"):
-            event_id = unquote(parsed.path[len("/history/"):])
-            if not event_id or "/" in event_id:
-                self._send(400, {"ok": False, "error": "invalid history entry id"})
-                return
-            matches = [
-                record for record in service.store.read_history_entries()
-                if record.get("event_id") == event_id
-            ]
-            if not matches:
-                self._send(404, {"ok": False, "error": "history entry not found"})
-                return
-            self._send(200, {"ok": True, "entry": matches[0]})
+            try:
+                if parsed.query:
+                    raise ValueError("history entry lookup does not accept query parameters")
+                event_id = unquote(parsed.path[len("/history/"):])
+                if not event_id or "/" in event_id:
+                    raise ValueError("invalid history entry id")
+                matches = [
+                    record for record in service.store.read_history_entries()
+                    if record.get("event_id") == event_id
+                ]
+                if not matches:
+                    self._send(404, {"ok": False, "error": "history entry not found"})
+                    return
+                self._send(200, {"ok": True, "entry": matches[0]})
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("History entry REST request failed")
+                self._send(500, {"ok": False, "error": "history request failed"})
             return
 
         self._send(404, {"ok": False, "error": "not found"})
