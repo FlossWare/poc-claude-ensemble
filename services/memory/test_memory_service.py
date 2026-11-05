@@ -1728,7 +1728,7 @@ class MemoryHistoryRestTest(unittest.TestCase):
             LEDGER_STORES["session_events"] = (history_path, original_store[1])
             service = MemoryService(root / "memory.sock", root / "memory")
             history_path.parent.mkdir(parents=True)
-            history_path.write_text('{"event_id":"valid"}\\n{not-json}\\n', encoding="utf-8")
+            history_path.write_text('{"event_id":"valid"}\n{not-json}\n', encoding="utf-8")
             server = create_http_server(service, "127.0.0.1", 0)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
