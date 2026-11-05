@@ -268,6 +268,29 @@ class MemoryStore:
             logger.error(f"Error reading entries from {name}: {e}")
         return entries
 
+    def read_history_entries(self) -> List[Dict[str, Any]]:
+        """Read the session history strictly; malformed records must not disappear."""
+        path = self._memory_path("session_events", ".jsonl")
+        if not path.exists():
+            return []
+        entries: List[Dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"session history contains malformed JSON at line {line_number}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise RuntimeError(
+                        f"session history record at line {line_number} is not an object"
+                    )
+                entries.append(record)
+        return entries
+
     def retrieve_entries(
         self,
         name: str,
@@ -397,8 +420,7 @@ class MemoryStore:
             raise ValueError("content must be a string")
         if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise ValueError("sha256 must be a lowercase SHA-256 digest")
-        actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if actual_sha != sha256:
+        actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()        if actual_sha != sha256:
             raise ValueError("sha256 does not match content")
         metadata = dict(metadata or {})
         scope = metadata.get("scope")
@@ -797,8 +819,7 @@ class MemoryStore:
             current_chunk = []
             current_header = "intro"
             max_chunk_size = 2000
-            for i, line in enumerate(lines):
-                if line.startswith("#"):
+            for i, line in enumerate(lines):                if line.startswith("#"):
                     if current_chunk:
                         chunks.append(
                             {
@@ -967,7 +988,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 if since and until and since > until:
                     raise ValueError("since must not be later than until")
 
-                records = service.store.read_entries("session_events")
+                records = service.store.read_history_entries()
                 selected = []
                 for record in records:
                     event_type = record.get("event_type", record.get("kind"))
@@ -1011,7 +1032,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "invalid history entry id"})
                 return
             matches = [
-                record for record in service.store.read_entries("session_events")
+                record for record in service.store.read_history_entries()
                 if record.get("event_id") == event_id
             ]
             if not matches:
@@ -1197,8 +1218,7 @@ class MemoryService:
                 logger.warning("%s", error)
         return {
             "state": state,
-            "indexed_files": indexed,
-            "expected_files": expected,
+            "indexed_files": indexed,            "expected_files": expected,
             "elapsed_seconds": round(elapsed, 3),
             "warmup_timeout_seconds": self._index_warmup_timeout_seconds,
             **({"error": error} if error else {}),
