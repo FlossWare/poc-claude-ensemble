@@ -23,6 +23,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlsplit
 
 # Allow execution from the repository without requiring package installation.
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -265,6 +266,29 @@ class MemoryStore:
                         entries.append(json.loads(line))
         except Exception as e:
             logger.error(f"Error reading entries from {name}: {e}")
+        return entries
+
+    def read_history_entries(self) -> List[Dict[str, Any]]:
+        """Read the session history strictly; malformed records must not disappear."""
+        path = self._memory_path("session_events", ".jsonl")
+        if not path.exists():
+            return []
+        entries: List[Dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"session history contains malformed JSON at line {line_number}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise RuntimeError(
+                        f"session history record at line {line_number} is not an object"
+                    )
+                entries.append(record)
         return entries
 
     def retrieve_entries(
@@ -925,11 +949,12 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         service = self.server.memory_service
-        if self.path == "/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/health":
             # Liveness must not depend on index warm-up.
             self._send(200, {"ok": True, "service": "memory"})
             return
-        if self.path == "/ready":
+        if parsed.path == "/ready":
             status = service.search_index_status()
             ready = status["state"] == "ready"
             self._send(
@@ -937,6 +962,109 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 {"ok": ready, "service": "memory", "ready": ready, "search_index": status},
             )
             return
+
+        if parsed.path == "/history":
+            try:
+                params = parse_qs(parsed.query, strict_parsing=True)
+                allowed = {"limit", "cursor", "event_type", "source", "correlation_id", "since", "until"}
+                unknown = set(params) - allowed
+                if unknown:
+                    raise ValueError("unsupported history filter: " + sorted(unknown)[0])
+                if any(len(values) != 1 for values in params.values()):
+                    raise ValueError("history filters must be supplied once")
+                raw_limit = params.get("limit", ["50"])[0]
+                if not raw_limit.isdigit():
+                    raise ValueError("limit must be an integer")
+                limit = int(raw_limit)
+                if limit < 1 or limit > 100:
+                    raise ValueError("limit must be between 1 and 100")
+                raw_cursor = params.get("cursor", ["0"])[0]
+                if not raw_cursor.isdigit():
+                    raise ValueError("cursor must be a non-negative offset")
+                offset = int(raw_cursor)
+
+                filters = {key: values[0] for key, values in params.items() if key not in {"limit", "cursor"}}
+                since = filters.pop("since", None)
+                until = filters.pop("until", None)
+
+                def parse_timestamp(value: str) -> datetime:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return parsed.astimezone(timezone.utc)
+
+                since_time = parse_timestamp(since) if since else None
+                until_time = parse_timestamp(until) if until else None
+                if since_time and until_time and since_time > until_time:
+                    raise ValueError("since must not be later than until")
+
+                records = service.store.read_history_entries()
+                selected = []
+                for record in records:
+                    event_type = record.get("event_type", record.get("kind"))
+                    event_source = record.get("source", record.get("producer"))
+                    if "event_type" in filters and event_type != filters["event_type"]:
+                        continue
+                    if "source" in filters and event_source != filters["source"]:
+                        continue
+                    if "correlation_id" in filters and record.get("correlation_id") != filters["correlation_id"]:
+                        continue
+                    if since_time or until_time:
+                        timestamp = record.get("timestamp", record.get("captured_at"))
+                        if timestamp is None:
+                            continue
+                        try:
+                            event_time = parse_timestamp(timestamp)
+                        except (TypeError, ValueError) as exc:
+                            raise RuntimeError("session history contains an invalid event timestamp") from exc
+                        if since_time and event_time < since_time:
+                            continue
+                        if until_time and event_time > until_time:
+                            continue
+                    selected.append(record)
+
+                page = selected[offset:offset + limit]
+                next_offset = offset + len(page)
+                next_cursor = str(next_offset) if next_offset < len(selected) else None
+                self._send(200, {
+                    "ok": True,
+                    "entries": page,
+                    "pagination": {
+                        "limit": limit,
+                        "next_cursor": next_cursor,
+                        "returned": len(page),
+                        "total": len(selected),
+                    },
+                })
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("History REST request failed")
+                self._send(500, {"ok": False, "error": "history request failed"})
+            return
+
+        if parsed.path.startswith("/history/"):
+            try:
+                if parsed.query:
+                    raise ValueError("history entry lookup does not accept query parameters")
+                event_id = unquote(parsed.path[len("/history/"):])
+                if not event_id or "/" in event_id:
+                    raise ValueError("invalid history entry id")
+                matches = [
+                    record for record in service.store.read_history_entries()
+                    if record.get("event_id") == event_id
+                ]
+                if not matches:
+                    self._send(404, {"ok": False, "error": "history entry not found"})
+                    return
+                self._send(200, {"ok": True, "entry": matches[0]})
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("History entry REST request failed")
+                self._send(500, {"ok": False, "error": "history request failed"})
+            return
+
         self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:

@@ -1645,5 +1645,108 @@ class MemoryIndexReadinessTest(unittest.TestCase):
         self.assertEqual(self.service.search_index_status()["state"], "ready")
 
 
+
+class MemoryHistoryRestTest(unittest.TestCase):
+    def test_history_endpoint_filters_paginates_and_reads_entry(self):
+        from memory_service import LEDGER_STORES, MemoryService, create_http_server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            original_store = LEDGER_STORES["session_events"]
+            LEDGER_STORES["session_events"] = (
+                root / "history" / "session-events.jsonl",
+                original_store[1],
+            )
+            service = MemoryService(root / "memory.sock", root / "memory")
+            try:
+                for index in range(3):
+                    service.store.append_entry_once(
+                        "session_events",
+                        f"event-{index}",
+                        {
+                            "event_type": "pipeline.stage.completed" if index < 2 else "thompson.decision",
+                            "source": "ensemble",
+                            "correlation_id": "request-1" if index < 2 else "request-2",
+                            "timestamp": f"2026-11-05T18:0{index}:00Z",
+                            "payload": {"stage": index},
+                        },
+                    )
+
+                server = create_http_server(service, "127.0.0.1", 0)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
+                try:
+                    def get(path):
+                        with urllib.request.urlopen(base_url + path, timeout=3) as response:
+                            return json.loads(response.read().decode("utf-8"))
+
+                    first = get("/history?limit=1&event_type=pipeline.stage.completed")
+                    self.assertTrue(first["ok"])
+                    self.assertEqual([item["event_id"] for item in first["entries"]], ["event-0"])
+                    self.assertEqual(first["pagination"]["next_cursor"], "1")
+
+                    second = get(
+                        "/history?limit=1&event_type=pipeline.stage.completed"
+                        "&cursor=" + first["pagination"]["next_cursor"]
+                    )
+                    self.assertEqual([item["event_id"] for item in second["entries"]], ["event-1"])
+                    self.assertIsNone(second["pagination"]["next_cursor"])
+
+                    filtered = get("/history?correlation_id=request-2")
+                    self.assertEqual([item["event_id"] for item in filtered["entries"]], ["event-2"])
+
+                    detail = get("/history/event-2")
+                    self.assertEqual(detail["entry"]["event_id"], "event-2")
+
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        get("/history?limit=1000")
+                    self.assertEqual(error.exception.code, 400)
+
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        get("/history/missing")
+                    self.assertEqual(error.exception.code, 404)
+
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        get("/history/event-2?unexpected=true")
+                    self.assertEqual(error.exception.code, 400)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=3)
+            finally:
+                LEDGER_STORES["session_events"] = original_store
+
+
+    def test_history_entry_lookup_fails_closed_on_malformed_jsonl(self):
+        from memory_service import LEDGER_STORES, MemoryService, create_http_server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            original_store = LEDGER_STORES["session_events"]
+            history_path = root / "history" / "session-events.jsonl"
+            LEDGER_STORES["session_events"] = (history_path, original_store[1])
+            service = MemoryService(root / "memory.sock", root / "memory")
+            history_path.parent.mkdir(parents=True)
+            history_path.write_text('{"event_id":"valid"}\n{not-json}\n', encoding="utf-8")
+            server = create_http_server(service, "127.0.0.1", 0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/history/valid"
+                )
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request, timeout=3)
+                self.assertEqual(error.exception.code, 500)
+                payload = json.loads(error.exception.read().decode("utf-8"))
+                self.assertEqual(payload["error"], "history request failed")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+                LEDGER_STORES["session_events"] = original_store
+
+
 if __name__ == "__main__":
     unittest.main()
