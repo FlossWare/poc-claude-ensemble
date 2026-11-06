@@ -1,0 +1,35 @@
+name: Session Ledger REST Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/memory/**"
+      - ".github/workflows/session-ledger-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/memory/**"
+      - ".github/workflows/session-ledger-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  session-ledger-rest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test runner
+        run: python -m pip install --upgrade pytest
+      - name: Test session history REST API
+        env:
+          PYTHONPATH: services
+          POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
+          POC_CLAUDE_ENSEMBLE_MEMORY_DIR: ${{ runner.temp }}/memory
+          POC_CLAUDE_ENSEMBLE_LOG_DIR: ${{ runner.temp }}/logs
+          POC_CLAUDE_ENSEMBLE_RUNTIME_DIR: ${{ runner.temp }}/runtime
+        run: python -m pytest services/memory/test_memory_service.py -k history -q
