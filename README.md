@@ -24,33 +24,21 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 
 ## Session history API
 
-The Memory service exposes the existing append-only session-events store as a
-read-only REST resource. This is implemented inside this POC repository; it
-does not require a separate Ledger service or repository.
+The Memory service exposes the existing append-only session-events ledger
+through read-only REST endpoints. The API is part of this POC and reads the
+existing JSONL source of truth; it does not introduce a separate Ledger
+service or repository. The POC deliberately has no REST write endpoint for
+the ledger.
 
-List events (default page size 50, maximum 100):
+- `GET /history` lists events with filtering and offset pagination.
+- `GET /history/{event_id}` returns one event by its event ID.
 
-```bash
-curl -fsS 'http://127.0.0.1:8767/history?limit=50' | jq
-```
-
-Supported filters are `event_type`, `source`, `correlation_id`, `since`,
-and `until` (ISO-8601 timestamps). Pagination uses the returned
-`pagination.next_cursor` value:
-
-```bash
-curl -fsS 'http://127.0.0.1:8767/history?event_type=session_end&limit=25' | jq
-curl -fsS 'http://127.0.0.1:8767/history?correlation_id=request-123' | jq
-curl -fsS 'http://127.0.0.1:8767/history?limit=25&cursor=25' | jq
-curl -fsS 'http://127.0.0.1:8767/history/<event-id>' | jq
-```
-
-The collection response contains `entries` and `pagination` metadata
-(`limit`, `returned`, `total`, and nullable `next_cursor`). A missing
-entry returns 404; invalid filters or limits return 400. History reads fail
-closed with 500 if the JSONL source contains a malformed record, rather than
-silently omitting potentially important events. The endpoint is read-only;
-existing append/idempotency behavior remains unchanged.
+The default page size is 50 and the maximum is 100. Supported filters are
+`event_type`, `source`, `correlation_id`, `since`, and `until`.
+Pagination uses the returned `pagination.next_cursor` as the next request's
+`cursor` parameter. See
+[`services/docs/SESSION_HISTORY_API.md`](services/docs/SESSION_HISTORY_API.md)
+for the complete contract, response examples, error behavior, and curl usage.
 
 ## Embedding inference backends
 
