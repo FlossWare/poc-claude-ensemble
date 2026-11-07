@@ -182,9 +182,21 @@ Set `POC_CLAUDE_ENSEMBLE_KNOWLEDGE_SEARCH=0` to turn off the `knowledge` section
 Knowledge failures are reported in `degraded` as `knowledge:<leg>` and never affect
 the transcript results.
 
+Search runs its independent legs concurrently. The lexical, intent, related-session and
+knowledge legs start while the query embedding and transcript vector steps are in progress,
+so `/search` takes about as long as its longest chain rather than the sum of all legs. The
+`/knowledge/search` endpoint runs its vector and exact-match legs at the same time. Model
+services (embedding, reranking) still handle one request at a time, so the speedup comes from
+overlapping calls to different services. Concurrency is tested in
+`services/embeddings/test_hybrid_concurrency.py`.
+
 Chunks stored before exact-match rows existed are copied into the index with
 `services/embeddings/backfill_knowledge_lexical.py`. The copy is idempotent. Rows
 copied before the provenance columns existed (chunk position, chunk count, content
 SHA-256) show those fields as `null` until the backfill is rerun, which fills them in
 without overwriting existing values. The backfill log is written to
 `~/.FlossWare/poc-claude-ensemble/state/logs/backfill-knowledge-lexical.log`.
+
+Options: `--workers N` sets how many batches are posted to the lexical service at once
+(default 4). `--start-offset N` resumes a run at a record offset, for example after an
+interrupted run. `--limit N` stops early for trial runs.
