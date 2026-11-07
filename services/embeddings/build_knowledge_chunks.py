@@ -205,7 +205,9 @@ def existing(ids):
 def knowledge_rows(batch):
     """Exact-match index rows for a batch of (vector_id, text, metadata) triples."""
     return [{"chunk_id": meta["chunk_id"], "vector_id": vid, "url": meta["url"], "source": meta["source"],
-             "title": meta["title"], "text": text} for vid, text, meta in batch]
+             "title": meta["title"], "text": text, "chunk_index": meta.get("chunk"),
+             "chunk_count": meta.get("chunks"), "content_sha256": meta.get("content_sha256")}
+            for vid, text, meta in batch]
 
 
 def flush(batch):

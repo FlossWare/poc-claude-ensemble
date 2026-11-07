@@ -153,8 +153,9 @@ loopback ports.
 The services run from `shared/` in the working deployment and are copied here as they stand.
 
 - Keyword analysis: index text and queries go through the Tokenization service (`lexical-v1`). Existing databases are upgraded with `services/embeddings/migrate_lexical_tokenization.py`, run with the lexical service stopped.
-- Sourced documents: `services/embeddings/build_knowledge_chunks.py` stores each document as a Knowledge record, chunks it through Chunking, and writes vectors to `knowledge_chunks`. Lexical indexing covers transcript sessions only.
-- Not yet built: Thompson outcome recording from transcripts, and worker/arbiter quality monitoring.
+- Sourced documents: `services/embeddings/build_knowledge_chunks.py` stores each document as a Knowledge record, chunks it through Chunking, and writes vectors to `knowledge_chunks` and exact-match rows to the knowledge lexical index. Transcript sessions are indexed in the transcript lexical index.
+- Transcript outcomes: finished turns are recorded to Thompson during ingest (`services/embeddings/turn_outcomes.py`). Send `"record_outcomes": false` in the `POST /sessions/ingest` body to skip this.
+- Not yet built: worker/arbiter quality monitoring.
 
 
 ## Knowledge retrieval
@@ -182,4 +183,8 @@ Knowledge failures are reported in `degraded` as `knowledge:<leg>` and never aff
 the transcript results.
 
 Chunks stored before exact-match rows existed are copied into the index with
-`services/embeddings/backfill_knowledge_lexical.py`. The copy is idempotent.
+`services/embeddings/backfill_knowledge_lexical.py`. The copy is idempotent. Rows
+copied before the provenance columns existed (chunk position, chunk count, content
+SHA-256) show those fields as `null` until the backfill is rerun, which fills them in
+without overwriting existing values. The backfill log is written to
+`~/.FlossWare/poc-claude-ensemble/state/logs/backfill-knowledge-lexical.log`.
