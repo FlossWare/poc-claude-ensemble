@@ -706,6 +706,15 @@ if __name__ == "__main__":
 
 
 class KnowledgeRetrievalTests(unittest.TestCase):
+    def test_exact_match_knowledge_hit_keeps_chunk_position_and_hash(self):
+        row = {"key": "v-1", "text": "RFC 8259", "source": "rfc", "url": "https://example.test/rfc8259",
+               "title": "RFC 8259", "chunk_id": "c1", "chunk_index": 2, "chunk_count": 5,
+               "content_sha256": "ab" * 32}
+        hit = hs._knowledge_from_exact(row)
+        self.assertEqual((hit["chunk_index"], hit["chunk_count"], hit["content_sha256"]),
+                         (2, 5, "ab" * 32))
+        self.assertEqual(hit["source_type"], "knowledge")
+
     def test_knowledge_result_preserves_document_and_chunk_provenance(self):
         hit = hs._knowledge_result({
             "id": "chunk-revision-id",

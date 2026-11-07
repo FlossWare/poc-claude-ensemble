@@ -30,8 +30,8 @@ class KnowledgeLexicalTests(unittest.TestCase):
     def test_ingest_inserts_then_skips_existing_chunks(self):
         first = kl.ingest([chunk("c1", "RFC-8259 JSON text format")], analyze, path=self.db)
         again = kl.ingest([chunk("c1", "RFC-8259 JSON text format")], analyze, path=self.db)
-        self.assertEqual(first, {"inserted": 1, "already_present": 0})
-        self.assertEqual(again, {"inserted": 0, "already_present": 1})
+        self.assertEqual(first, {"inserted": 1, "already_present": 0, "repaired": 0})
+        self.assertEqual(again, {"inserted": 0, "already_present": 1, "repaired": 0})
         self.assertEqual(kl.count(path=self.db), 1)
 
     def test_exact_identifier_is_found_and_unrelated_text_is_not(self):
@@ -88,6 +88,78 @@ class KnowledgeLexicalTests(unittest.TestCase):
     def test_tokenizer_settings_match_the_transcript_index(self):
         import lexical_service
         self.assertEqual(kl.FTS_TOKENIZE, lexical_service.FTS_TOKENIZE)
+
+    def test_provenance_round_trips_through_search(self):
+        provenance = {"chunk_index": 2, "chunk_count": 5, "content_sha256": "ab" * 32}
+        kl.ingest([{**chunk("c1", "RFC-8259 JSON text format"), **provenance}], analyze, path=self.db)
+        hit = kl.search("RFC-8259", 1, analyze, path=self.db)[0]
+        self.assertEqual({k: hit[k] for k in provenance}, provenance)
+
+    def test_chunks_without_provenance_still_index_with_null_fields(self):
+        kl.ingest([chunk("c1", "RFC-8259 JSON text format")], analyze, path=self.db)
+        hit = kl.search("RFC-8259", 1, analyze, path=self.db)[0]
+        self.assertEqual((hit["chunk_index"], hit["chunk_count"], hit["content_sha256"]), (None, None, None))
+
+    def test_null_provenance_is_repaired_and_never_overwritten(self):
+        kl.ingest([chunk("c1", "RFC-8259 JSON text format")], analyze, path=self.db)
+        provenance = {"chunk_index": 1, "chunk_count": 3, "content_sha256": "cd" * 32}
+        repair = kl.ingest([{**chunk("c1", "RFC-8259 JSON text format"), **provenance}], analyze, path=self.db)
+        self.assertEqual(repair, {"inserted": 0, "already_present": 1, "repaired": 1})
+        hit = kl.search("RFC-8259", 1, analyze, path=self.db)[0]
+        self.assertEqual({k: hit[k] for k in provenance}, provenance)
+        # Rows that already have provenance keep it, even when a later write carries different values.
+        other = {"chunk_index": 9, "chunk_count": 9, "content_sha256": "ef" * 32}
+        again = kl.ingest([{**chunk("c1", "RFC-8259 JSON text format"), **other}], analyze, path=self.db)
+        self.assertEqual(again["repaired"], 0)
+        hit = kl.search("RFC-8259", 1, analyze, path=self.db)[0]
+        self.assertEqual({k: hit[k] for k in provenance}, provenance)
+
+    def test_database_from_before_provenance_is_upgraded_in_place(self):
+        import sqlite3
+        legacy = sqlite3.connect(self.db)
+        legacy.executescript("""
+            CREATE TABLE knowledge_chunks (
+                id INTEGER PRIMARY KEY, chunk_id TEXT NOT NULL UNIQUE, vector_id TEXT NOT NULL,
+                url TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+                analyzed TEXT NOT NULL);
+            CREATE VIRTUAL TABLE knowledge_fts USING fts5(analyzed, tokenize='{tokenize}');
+            INSERT INTO knowledge_chunks (chunk_id, vector_id, url, source, title, text, analyzed)
+                VALUES ('old', 'v-old', 'https://example.test/doc', 'rfc', 'Doc', 'RFC-7519 old row', 'rfc-7519 old row');
+            INSERT INTO knowledge_fts (rowid, analyzed) VALUES (1, 'rfc-7519 old row');
+        """.format(tokenize=kl.FTS_TOKENIZE.replace("'", "''")))
+        legacy.commit()
+        legacy.close()
+        kl.ingest([chunk("new", "RFC-8259 new row")], analyze, path=self.db)
+        columns = {row[1] for row in sqlite3.connect(self.db).execute("PRAGMA table_info(knowledge_chunks)")}
+        self.assertTrue({"chunk_index", "chunk_count", "content_sha256"} <= columns)
+        old = kl.search("RFC-7519", 1, analyze, path=self.db)[0]
+        self.assertEqual((old["chunk_id"], old["content_sha256"]), ("old", None))
+
+    def test_search_works_on_legacy_database_before_upgrade(self):
+        import sqlite3
+        legacy = sqlite3.connect(self.db)
+        legacy.executescript("""
+            CREATE TABLE knowledge_chunks (
+                id INTEGER PRIMARY KEY, chunk_id TEXT NOT NULL UNIQUE, vector_id TEXT NOT NULL,
+                url TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+                analyzed TEXT NOT NULL);
+            CREATE VIRTUAL TABLE knowledge_fts USING fts5(analyzed, tokenize='{tokenize}');
+            INSERT INTO knowledge_chunks (chunk_id, vector_id, url, source, title, text, analyzed)
+                VALUES ('old', 'v-old', 'https://example.test/doc', 'rfc', 'Doc', 'RFC-7519 old row', 'rfc-7519 old row');
+            INSERT INTO knowledge_fts (rowid, analyzed) VALUES (1, 'rfc-7519 old row');
+        """.format(tokenize=kl.FTS_TOKENIZE.replace("'", "''")))
+        legacy.commit()
+        legacy.close()
+        hit = kl.search("RFC-7519", 1, analyze, path=self.db)[0]
+        self.assertEqual((hit["chunk_id"], hit["chunk_index"], hit["content_sha256"]), ("old", None, None))
+
+    def test_invalid_provenance_is_rejected(self):
+        bad_values = [{"chunk_index": -1}, {"chunk_index": "2"}, {"chunk_index": True},
+                      {"chunk_count": 1.5}, {"content_sha256": ""}, {"content_sha256": 7}]
+        for extra in bad_values:
+            with self.subTest(extra=extra), self.assertRaises(kl.ChunkValidationError):
+                kl.ingest([{**chunk("c1", "ok"), **extra}], analyze, path=self.db)
+        self.assertEqual(kl.count(path=self.db), 0)
 
 
 class KnowledgeRoutesTests(unittest.TestCase):

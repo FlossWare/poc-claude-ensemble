@@ -42,12 +42,14 @@ def chunk_row(record):
         return None
     return {"chunk_id": str(meta["chunk_id"]), "vector_id": str(record["id"]), "url": str(meta["url"]),
             "source": str(meta.get("source") or ""), "title": str(meta.get("title") or ""),
-            "text": str(record.get("document") or "")}
+            "text": str(record.get("document") or ""),
+            "chunk_index": meta.get("chunk"), "chunk_count": meta.get("chunks"),
+            "content_sha256": meta.get("content_sha256")}
 
 
 def backfill(vector_url=VECTOR_URL, lexical_url=LEXICAL_URL, limit=None, log=None):
     """Copy stored knowledge records into the exact-match index. Returns the totals."""
-    totals = {"read": 0, "skipped": 0, "inserted": 0, "already_present": 0}
+    totals = {"read": 0, "skipped": 0, "inserted": 0, "already_present": 0, "repaired": 0}
     offset = 0
     while True:
         page_size = PAGE if limit is None else min(PAGE, limit - totals["read"])
@@ -69,6 +71,7 @@ def backfill(vector_url=VECTOR_URL, lexical_url=LEXICAL_URL, limit=None, log=Non
             result = post(f"{lexical_url}/knowledge/documents", {"chunks": rows[start:start + POST_BATCH]})
             totals["inserted"] += result["inserted"]
             totals["already_present"] += result["already_present"]
+            totals["repaired"] += result.get("repaired", 0)
         offset += len(records)
         if log and offset % 5000 < PAGE:
             log(f"progress: {totals} of {page['total']}")

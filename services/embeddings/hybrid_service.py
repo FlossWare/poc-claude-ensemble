@@ -70,7 +70,6 @@ FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
 FILE_KEYS = ("file_path", "notebook_path", "path")
 TOOL_TEXT_CHARS = 20000   # tool inputs, tool results, and thinking are clipped, as in the bulk index
 COLLECTION = "transcript_text"
-KNOWLEDGE_COLLECTION = "knowledge_chunks"
 CANDIDATES = 200
 RRF_K = 60
 DEP_TIMEOUT = 30
@@ -230,7 +229,8 @@ def _knowledge_from_exact(row):
     return {
         "key": row["key"], "text": row["text"], "source": "knowledge", "source_type": "knowledge",
         "kind": "knowledge_chunk", "origin": row["source"], "url": row["url"], "title": row["title"],
-        "chunk_id": row["chunk_id"], "chunk_index": None, "chunk_count": None, "content_sha256": None,
+        "chunk_id": row["chunk_id"], "chunk_index": row.get("chunk_index"),
+        "chunk_count": row.get("chunk_count"), "content_sha256": row.get("content_sha256"),
         "score": None,
     }
 

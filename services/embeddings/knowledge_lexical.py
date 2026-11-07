@@ -35,10 +35,26 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     source TEXT NOT NULL,
     title TEXT NOT NULL,
     text TEXT NOT NULL,
-    analyzed TEXT NOT NULL
+    analyzed TEXT NOT NULL,
+    chunk_index INTEGER,
+    chunk_count INTEGER,
+    content_sha256 TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(analyzed, tokenize='{tokenize}');
 """.format(tokenize=FTS_TOKENIZE.replace("'", "''"))
+
+# Provenance columns added after the first schema. Databases created before them are upgraded in
+# place; the rows stay NULL until a rerun of the builder or backfill fills them in.
+PROVENANCE_COLUMNS = ("chunk_index", "chunk_count", "content_sha256")
+PROVENANCE_FIELDS = ("chunk_index", "chunk_count", "content_sha256")
+
+
+def _ensure_provenance_columns(conn):
+    present = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_chunks)")}
+    types = {"chunk_index": "INTEGER", "chunk_count": "INTEGER", "content_sha256": "TEXT"}
+    for column in PROVENANCE_COLUMNS:
+        if column not in present:
+            conn.execute(f"ALTER TABLE knowledge_chunks ADD COLUMN {column} {types[column]}")
 
 
 def connect_write(path=None):
@@ -46,6 +62,8 @@ def connect_write(path=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
     conn.executescript(SCHEMA)
+    with conn:
+        _ensure_provenance_columns(conn)
     return conn
 
 
@@ -73,7 +91,15 @@ def validate_chunks(chunks):
             raise ChunkValidationError(f"chunk {index}: text must be non-empty")
         if len(chunk["text"]) > MAX_TEXT_CHARS:
             raise ChunkValidationError(f"chunk {index}: text exceeds {MAX_TEXT_CHARS} characters")
-        clean.append({key: chunk[key] for key in ("chunk_id", "vector_id", "url", "source", "title", "text")})
+        for field in ("chunk_index", "chunk_count"):
+            value = chunk.get(field)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+                raise ChunkValidationError(f"chunk {index}: {field} must be a non-negative integer or null")
+        sha = chunk.get("content_sha256")
+        if sha is not None and (not isinstance(sha, str) or not sha.strip()):
+            raise ChunkValidationError(f"chunk {index}: content_sha256 must be a non-empty string or null")
+        clean.append({key: chunk.get(key) for key in
+                      ("chunk_id", "vector_id", "url", "source", "title", "text") + PROVENANCE_FIELDS})
     return clean
 
 
@@ -82,7 +108,7 @@ def ingest(chunks, analyze, path=None):
     clean = validate_chunks(chunks)
     analyzed = [" ".join(analyze(chunk["text"])) for chunk in clean]
     conn = connect_write(path)
-    inserted = already = 0
+    inserted = already = repaired = 0
     try:
         with _WRITE_LOCK:
             with conn:
@@ -91,18 +117,30 @@ def ingest(chunks, analyze, path=None):
                                            (chunk["chunk_id"],)).fetchone()
                     if present:
                         already += 1
+                        # Rows written before provenance columns existed get them filled in here,
+                        # so a rerun of the backfill repairs them. Existing values are never overwritten.
+                        if chunk["content_sha256"] is not None:
+                            cursor = conn.execute(
+                                "UPDATE knowledge_chunks SET chunk_index = COALESCE(chunk_index, ?), "
+                                "chunk_count = COALESCE(chunk_count, ?), "
+                                "content_sha256 = COALESCE(content_sha256, ?) "
+                                "WHERE chunk_id = ? AND content_sha256 IS NULL",
+                                (chunk["chunk_index"], chunk["chunk_count"], chunk["content_sha256"],
+                                 chunk["chunk_id"]))
+                            repaired += cursor.rowcount
                         continue
                     cursor = conn.execute(
-                        "INSERT INTO knowledge_chunks (chunk_id, vector_id, url, source, title, text, analyzed) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO knowledge_chunks (chunk_id, vector_id, url, source, title, text, analyzed, "
+                        "chunk_index, chunk_count, content_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (chunk["chunk_id"], chunk["vector_id"], chunk["url"], chunk["source"],
-                         chunk["title"], chunk["text"], terms))
+                         chunk["title"], chunk["text"], terms,
+                         chunk["chunk_index"], chunk["chunk_count"], chunk["content_sha256"]))
                     conn.execute("INSERT INTO knowledge_fts (rowid, analyzed) VALUES (?, ?)",
                                  (cursor.lastrowid, terms))
                     inserted += 1
     finally:
         conn.close()
-    return {"inserted": inserted, "already_present": already}
+    return {"inserted": inserted, "already_present": already, "repaired": repaired}
 
 
 def match_expression(terms):
@@ -121,8 +159,12 @@ def search(query, top_k, analyze, path=None):
         return []
     conn = connect_read(path)
     try:
+        # A read-only connection cannot upgrade an older database, so provenance columns that are
+        # not there yet are selected as NULL. The search keeps working before the upgrade runs.
+        present = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_chunks)")}
+        provenance = ", ".join(f"k.{c}" if c in present else f"NULL AS {c}" for c in PROVENANCE_COLUMNS)
         rows = conn.execute(
-            """SELECT k.vector_id, k.chunk_id, k.url, k.source, k.title, k.text
+            f"""SELECT k.vector_id, k.chunk_id, k.url, k.source, k.title, k.text, {provenance}
                FROM knowledge_fts
                JOIN knowledge_chunks k ON k.id = knowledge_fts.rowid
                WHERE knowledge_fts MATCH ?
@@ -133,7 +175,9 @@ def search(query, top_k, analyze, path=None):
     finally:
         conn.close()
     return [{"vector_id": vector_id, "chunk_id": chunk_id, "url": url, "source": source, "title": title,
-             "text": text, "key": vector_id} for vector_id, chunk_id, url, source, title, text in rows]
+             "text": text, "chunk_index": chunk_index, "chunk_count": chunk_count,
+             "content_sha256": content_sha256, "key": vector_id}
+            for vector_id, chunk_id, url, source, title, text, chunk_index, chunk_count, content_sha256 in rows]
 
 
 def count(path=None):
