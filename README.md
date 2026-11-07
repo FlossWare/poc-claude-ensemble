@@ -183,12 +183,11 @@ Knowledge failures are reported in `degraded` as `knowledge:<leg>` and never aff
 the transcript results.
 
 Search runs its independent legs concurrently. The lexical, intent, related-session and
-knowledge legs start while the query embedding and transcript vector steps are in progress,
-so `/search` takes about as long as its longest chain rather than the sum of all legs. The
-`/knowledge/search` endpoint runs its vector and exact-match legs at the same time. Model
-services (embedding, reranking) still handle one request at a time, so the speedup comes from
-overlapping calls to different services. Concurrency is tested in
-`services/embeddings/test_hybrid_concurrency.py`.
+knowledge legs start while the query embedding and transcript vector steps are in progress.
+The `/knowledge/search` endpoint runs its vector and exact-match legs at the same time. The
+gain on a live service was about 11% on `/search` (mean 3.87s to 3.46s over 15 queries). Most
+of the remaining time is the embedding and reranking calls, which each hold a model lock and
+handle one request at a time. Concurrency is tested in `services/embeddings/test_hybrid_concurrency.py`.
 
 Chunks stored before exact-match rows existed are copied into the index with
 `services/embeddings/backfill_knowledge_lexical.py`. The copy is idempotent. Rows
