@@ -57,7 +57,9 @@ class StubDownstream(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "ready": True, "service": "memory"})
         if parsed.path.startswith("/records/"):
             record = self.store["records"].get(unquote(parsed.path[len("/records/"):]))
-            return self._send(200, record) if record else self._send(404, {"ok": False, "error_code": "not_found"})
+            # Matches the live Knowledge API: the record is wrapped as {"ok": true, "record": {...}}.
+            return self._send(200, {"ok": True, "record": record}) if record \
+                else self._send(404, {"ok": False, "error_code": "not_found"})
         if parsed.path == "/history":
             query = parse_qs(parsed.query)
             limit, cursor = int(query["limit"][0]), int(query["cursor"][0])
