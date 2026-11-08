@@ -1108,6 +1108,28 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             body=self._body()
+            ledger_path = urlsplit(self.path).path
+            if ledger_path == "/api/v1/ledger/entries":
+                try:
+                    result = self.server.memory_service.ledger.append(body)
+                    self._send(200 if result["status"] == "duplicate" else 201, {"ok": True, **result})
+                except ValueError as exc:
+                    self._send(409 if "exists" in str(exc) else 400, {"ok": False, "error": str(exc)})
+                return
+            if ledger_path == "/api/v1/ledger/verify":
+                try:
+                    result = self.server.memory_service.ledger.verify(body.get("from_sequence", 1), body.get("through_sequence"))
+                    self._send(200, {"ok": True, **result})
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                return
+            if ledger_path == "/api/v1/ledger/import":
+                try:
+                    result = self.server.memory_service.ledger.import_batch(body.get("source_ledger_id"), body.get("entries"))
+                    self._send(200, {"ok": True, **result})
+                except ValueError as exc:
+                    self._send(409 if "conflict" in str(exc) else 400, {"ok": False, "error": str(exc)})
+                return
             operations={"/memory/read":"read","/memory/write":"write","/memory/append":"append",
                         "/memory/append-once":"append_once",
                         "/memory/entries":"entries","/memory/retrieve":"retrieve","/memory/list":"list",
