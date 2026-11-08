@@ -210,8 +210,10 @@ class JsonlAppendOnlyLedger:
     def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
         state = self.status()
         end = state["head_sequence"] if through_sequence is None else through_sequence
-        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < from_sequence:
+        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < 0 or (end > 0 and end < from_sequence):
             raise ValueError("invalid verification range")
+        if end == 0 and from_sequence == 1:
+            return {"ok": True, "from_sequence": 1, "through_sequence": 0, "verified_count": 0, "assurance": "empty_ledger"}
         previous = None
         if from_sequence > 1:
             if not isinstance(checkpoint, dict) or checkpoint.get("ledger_id") != self.ledger_id or checkpoint.get("sequence") != from_sequence - 1:
@@ -241,6 +243,8 @@ class JsonlAppendOnlyLedger:
             if sequence != expected:
                 first_failure = (expected, "sequence_gap"); break
             if "entry_sha256" not in record:
+                if "schema_version" in record or "sequence" in record:
+                    first_failure = (sequence, "invalid_envelope"); break
                 legacy_seen = True
                 verified += 1
                 expected += 1
