@@ -478,7 +478,7 @@ class JsonlAppendOnlyLedger:
                             "provenance": provenance,
                         }
                         record["entry_sha256"] = envelope_hash(record)
-                        handle.write(canonical(record) + b"\\n")
+                        handle.write(canonical(record) + b"\n")
                         handle.flush()
                         os.fsync(handle.fileno())
                         previous = record["entry_sha256"]
