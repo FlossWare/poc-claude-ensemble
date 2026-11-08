@@ -38,6 +38,40 @@ class MemoryHistoryHandler(BaseHTTPRequestHandler):
 
 
 class InteractionRouteTests(unittest.TestCase):
+    def test_sse_reconnect_uses_last_event_id_over_initial_query_cursor(self):
+        import io
+        import sys
+        from pathlib import Path
+        from unittest.mock import patch
+
+        services_root = Path(__file__).resolve().parents[1]
+        if str(services_root) not in sys.path:
+            sys.path.insert(0, str(services_root))
+        import server.ensemble_server as gateway_module
+
+        app = gateway_module.EnsembleApplication()
+        requested_cursors = []
+
+        def history(_handler, cursor, _limit=100):
+            requested_cursors.append(cursor)
+            return 200, {"ok": True, "entries": []}
+
+        app._interaction_history = history
+
+        class StreamHandler:
+            command = "GET"
+            headers = {"Last-Event-ID": "4"}
+            wfile = io.BytesIO()
+
+            def send_response(self, _status): pass
+            def send_header(self, _name, _value): pass
+            def end_headers(self): pass
+
+        handler = StreamHandler()
+        with patch.object(gateway_module.time, "sleep", side_effect=BrokenPipeError):
+            app._handle_interactions(handler, "/stream", "cursor=0")
+        self.assertEqual(requested_cursors, [5])
+
     def test_gateway_exposes_historical_model_interactions(self):
         import sys
         from pathlib import Path
