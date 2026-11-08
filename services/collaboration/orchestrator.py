@@ -296,6 +296,22 @@ class CollaborationOrchestrator:
                         metadata={"collaboration_round": self.state.round},
                     )
                 )
+                proposal = response.text
+                if not isinstance(proposal, str) or not proposal.strip():
+                    self._emit_interaction(
+                        "worker.failed", worker_id=model, role="solver", model=model,
+                        round=self.state.round, candidate_id=candidate_id,
+                        status="failed", error_type="EmptyModelResponse",
+                        latency_ms=round((time.monotonic() - started) * 1000, 2),
+                    )
+                    return Candidate(
+                        candidate_id,
+                        model,
+                        self.state.round,
+                        "",
+                        status="failed",
+                        error="solver returned an empty proposal",
+                    )
                 self._emit_interaction(
                     "worker.responded", worker_id=model, role="solver", model=getattr(response, "model", model),
                     provider=getattr(response, "provider", None), request_id=getattr(response, "request_id", None),
@@ -305,16 +321,6 @@ class CollaborationOrchestrator:
                     latency_ms=round((time.monotonic() - started) * 1000, 2),
                     round=self.state.round, candidate_id=candidate_id, status="success",
                 )
-                proposal = response.text
-                if not isinstance(proposal, str) or not proposal.strip():
-                    return Candidate(
-                        candidate_id,
-                        model,
-                        self.state.round,
-                        "",
-                        status="failed",
-                        error="solver returned an empty proposal",
-                    )
                 return Candidate(candidate_id, model, self.state.round, proposal)
             except Exception as exc:
                 self._emit_interaction(
