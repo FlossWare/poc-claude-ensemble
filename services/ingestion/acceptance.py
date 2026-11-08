@@ -185,7 +185,9 @@ def _run_steps(config: Config, state: dict[str, Any], check: Callable[..., None]
           f"HTTP {status}")
 
     source_id = state["source_id"]
-    status, record = _call("GET", f"{config.knowledge}/records/{_quoted(source_id)}")
+    status, body = _call("GET", f"{config.knowledge}/records/{_quoted(source_id)}")
+    # The Knowledge HTTP API wraps the stored record as {"ok": true, "record": {...}}.
+    record = body.get("record") if isinstance(body, dict) else None
     check("knowledge record discoverable",
           status == 200 and isinstance(record, dict) and record.get("content_sha256") == expected_sha
           and record.get("tombstoned") is False, f"HTTP {status}")
