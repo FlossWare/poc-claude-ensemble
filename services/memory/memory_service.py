@@ -1253,7 +1253,7 @@ class MemoryService:
     def __init__(self, socket_path: Path, memory_dir: Path):
         self.socket_path = Path(socket_path)
         self.store = MemoryStore(memory_dir)
-        self.ledger = JsonlAppendOnlyLedger(LEDGER_STORES["session_events"][0])
+        self._ledger: JsonlAppendOnlyLedger | None = None
         self.socket = None
         self.http_server = None
         self.http_thread = None
@@ -1279,6 +1279,15 @@ class MemoryService:
             raise ValueError(
                 "POC_CLAUDE_ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS must be a finite positive number"
             ) from exc
+
+    @property
+    def ledger(self) -> JsonlAppendOnlyLedger:
+        # Preserve the memory daemon's historical startup behavior: creating
+        # the service must not create the session-history directory. The
+        # durable ledger adapter is initialized only when a ledger API is used.
+        if self._ledger is None:
+            self._ledger = JsonlAppendOnlyLedger(LEDGER_STORES["session_events"][0])
+        return self._ledger
 
     def search_index_status(self) -> Dict[str, Any]:
         """Return an explicit, bounded startup state for the search index."""
