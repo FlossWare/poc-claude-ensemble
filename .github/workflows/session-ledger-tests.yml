@@ -33,3 +33,8 @@ jobs:
           POC_CLAUDE_ENSEMBLE_LOG_DIR: ${{ runner.temp }}/logs
           POC_CLAUDE_ENSEMBLE_RUNTIME_DIR: ${{ runner.temp }}/runtime
         run: python -m pytest services/memory/test_memory_service.py -k history -q
+      - name: Test append-only ledger contract
+        env:
+          PYTHONPATH: services
+          POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
+        run: python -m pytest services/memory/test_append_only_ledger.py services/memory/test_ledger_http_transfer.py -q
