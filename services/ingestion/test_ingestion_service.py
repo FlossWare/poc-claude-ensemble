@@ -15,6 +15,13 @@ class IngestionSourceTests(unittest.TestCase):
         self.assertEqual(result["preview"], "A small source document.")
         self.assertIn("chunking", result["planned_stages"])
 
+    def test_pdf_extractor_uses_bounded_text_extractor(self):
+        with patch.object(ingestion, "_pdf_text", return_value=b"Extracted PDF text") as extract:
+            text, media_type = ingestion._extract(b"%PDF-test", "application/pdf", "source.pdf")
+        self.assertEqual(text, "Extracted PDF text")
+        self.assertEqual(media_type, "application/pdf")
+        extract.assert_called_once()
+
     def test_html_extractor_omits_script_and_style_content(self):
         text, media_type = ingestion._extract(
             b"<html><body><h1>Visible</h1><script>secret()</script><p>Text</p></body></html>",
