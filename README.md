@@ -158,6 +158,43 @@ The services run from `shared/` in the working deployment and are copied here as
 - Not yet built: worker/arbiter quality monitoring.
 
 
+## Operational dashboard API
+
+The gateway exposes a read-only operational view of the POC service fleet at
+`http://127.0.0.1:8080`. It probes each service's `GET /health` endpoint and
+reports health state and probe latency. Service URLs can be overridden with
+`POC_CLAUDE_ENSEMBLE_<SERVICE>_URL` (for example,
+`POC_CLAUDE_ENSEMBLE_VECTOR_URL`). The original `ENSEMBLE_<SERVICE>_URL`
+override remains supported for compatibility.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/dashboard` | Aggregated service health and storage snapshot |
+| `GET /api/v1/services` | Service inventory and health |
+| `GET /api/v1/services/{id}` | One service's metadata and health |
+| `GET /api/v1/services/{id}/health` | One service's health probe |
+| `GET /api/v1/services/{id}/metrics` | Service-specific metrics where supported |
+
+The inventory covers embedding, vector, lexical, hybrid, reranking, chunking,
+tokenization, index, extraction, intent, ranking, knowledge, and memory.
+Vector metrics report collection names and counts from the existing
+`GET /collections` endpoint. Services without a metrics endpoint report
+metrics as unavailable. Ingestion totals are intentionally unavailable until
+the ingestion pipeline records durable run accounting; the dashboard does not
+guess counts from logs or process state.
+
+Example:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/v1/dashboard | jq
+curl -fsS http://127.0.0.1:8080/api/v1/services | jq
+curl -fsS http://127.0.0.1:8080/api/v1/services/vector/metrics | jq
+```
+
+The inventory probes services concurrently with a bounded worker pool and
+short per-service timeout. It is observational only: it does not restart
+services, write to stores, or change live configuration.
+
 ## Knowledge retrieval
 
 Knowledge (books, RFCs, papers) is searched beside transcripts, never merged into
