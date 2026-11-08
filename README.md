@@ -230,8 +230,7 @@ unavailable until their connectors are implemented and tested.
 
 Remote fetching rejects credentials in URIs, non-public DNS results, unsafe
 redirect targets, oversized responses, and unsupported schemes. HTTP(S) is
-restricted to standard ports. PDF extraction uses `pdftotext`; HTML extraction
-omits script/style content. The health endpoint reports only transports that
+restricted to standard ports. PDF extraction uses `pdftotext` from Poppler (`poppler-utils` on Debian/Fedora-derived Linux package sets); it is time- and output-bounded. HTML extraction omits script/style content. PDF image OCR is not included. The health endpoint reports only transports that
 are actually enabled.
 
 - `GET /api/v1/ingestion/health` reports the supported schemes and extractors.
