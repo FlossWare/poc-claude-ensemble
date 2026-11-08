@@ -472,6 +472,12 @@ class CollaborationOrchestrator:
             reviewer = self.reviewers.get(item.get("reviewer", ""))
             if candidate is None or candidate.status != "complete" or reviewer is None:
                 continue
+            started = time.monotonic()
+            self._emit_interaction(
+                "review.started", reviewer=str(item.get("reviewer", "")),
+                candidate_id=candidate.candidate_id, round=self.state.round,
+                follow_up=True,
+            )
             try:
                 result = reviewer.review(
                     candidate_id=candidate.candidate_id,
@@ -480,9 +486,22 @@ class CollaborationOrchestrator:
                     focus=str(item.get("question", "")),
                 )
                 self._review_calls += 1
+                self._emit_interaction(
+                    "review.responded", reviewer=getattr(result, "reviewer", item.get("reviewer", "")),
+                    candidate_id=candidate.candidate_id, round=self.state.round,
+                    provider=getattr(result, "provider", None), model=getattr(result, "model", None),
+                    status=getattr(result, "status", "complete"), follow_up=True,
+                    latency_ms=round((time.monotonic() - started) * 1000, 2),
+                )
                 self.state.reviews.append(self._record(candidate.candidate_id, result))
             except Exception as exc:
                 self._review_calls += 1
+                self._emit_interaction(
+                    "review.failed", reviewer=str(item.get("reviewer", "")),
+                    candidate_id=candidate.candidate_id, round=self.state.round,
+                    status="failed", error_type=type(exc).__name__, follow_up=True,
+                    latency_ms=round((time.monotonic() - started) * 1000, 2),
+                )
                 self.state.reviews.append(
                     ReviewRecord(
                         candidate.candidate_id,
