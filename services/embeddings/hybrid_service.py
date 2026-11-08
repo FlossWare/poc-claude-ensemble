@@ -34,7 +34,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-_POOL = ThreadPoolExecutor(max_workers=8)
+# Pool tasks are leaf calls: each makes one REST request and never waits on another pool task, so a busy
+# pool cannot deadlock. Sixteen workers leave room for several concurrent searches, each using about five.
+_POOL = ThreadPoolExecutor(max_workers=16)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8773
@@ -210,6 +212,12 @@ def _related_sessions(query):
     return list(sessions.values())[:10]
 
 
+def _intent_for(query):
+    """Intent label and confidence for a query. Raises DependencyError when the intent service is unavailable."""
+    body = _call("intent", f"{INTENT_URL}/classify", {"text": query})
+    return {"label": body["label"], "confidence": body["confidence"]}
+
+
 def _knowledge_result(record):
     """Normalize a knowledge vector hit without discarding document/chunk provenance."""
     metadata = record.get("metadata") or {}
@@ -235,39 +243,67 @@ def _knowledge_from_exact(row):
     }
 
 
-def _knowledge_search(query, embedding, degraded, limit=KNOWLEDGE_TOP):
-    """Vector and exact-match hits from knowledge, fused with RRF. Kept apart from transcript results."""
-    vector_list, exact_list, records = [], [], {}
-    if embedding is not None:
-        try:
-            vector = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
-                           {"embedding": embedding, "top_k": CANDIDATES})
-            for r in vector["results"]:
-                record = _knowledge_result(r)
-                records.setdefault(record["key"], record)
-                vector_list.append(records[record["key"]])
-        except DependencyError as exc:
-            degraded.append(f"knowledge:{exc.name}")
+def _knowledge_vector_leg(embedding):
+    """Vector hits from knowledge as normalized records. Returns (records, degraded label or None)."""
+    try:
+        vector = _call("knowledge-vector", f"{VECTOR_URL}/collections/{KNOWLEDGE_COLLECTION}/query",
+                       {"embedding": embedding, "top_k": CANDIDATES})
+        return [_knowledge_result(r) for r in vector["results"]], None
+    except DependencyError as exc:
+        return [], f"knowledge:{exc.name}"
+
+
+def _knowledge_exact_leg(query):
+    """Exact-match hits from the knowledge lexical index. Returns (records, degraded label or None)."""
     try:
         exact = _call("lexical", f"{LEXICAL_URL}/knowledge/search", {"query": query, "top_k": CANDIDATES})
-        for row in exact["results"]:
-            record = _knowledge_from_exact(row)
-            records.setdefault(record["key"], record)
-            exact_list.append(records[record["key"]])
+        return [_knowledge_from_exact(row) for row in exact["results"]], None
     except DependencyError as exc:
-        degraded.append(f"knowledge:{exc.name}")
+        return [], f"knowledge:{exc.name}"
+
+
+def _fuse_knowledge(query, vector_records, exact_records, limit=KNOWLEDGE_TOP):
+    """Fuse the two knowledge legs with RRF. A record found by both legs is kept once, vector side first."""
+    records, vector_list, exact_list = {}, [], []
+    for record in vector_records:
+        records.setdefault(record["key"], record)
+        vector_list.append(records[record["key"]])
+    for record in exact_records:
+        records.setdefault(record["key"], record)
+        exact_list.append(records[record["key"]])
     fused = fuse_weighted([(1.0, vector_list), (exact_weight(query), exact_list)])[:limit]
     for record in fused:
         record["text"] = record["text"][:KNOWLEDGE_TEXT_CHARS]
     return fused
 
 
+def _knowledge_search(query, embedding, degraded, limit=KNOWLEDGE_TOP):
+    """Vector and exact-match hits from knowledge, fused with RRF. Kept apart from transcript results."""
+    vector_records = []
+    if embedding is not None:
+        vector_records, label = _knowledge_vector_leg(embedding)
+        if label:
+            degraded.append(label)
+    exact_records, label = _knowledge_exact_leg(query)
+    if label:
+        degraded.append(label)
+    return _fuse_knowledge(query, vector_records, exact_records, limit)
+
+
 def knowledge_search(query, top_k, rerank=True):
     """Search only the knowledge collection and its exact-match index."""
     degraded = []
+    # The exact-match leg does not need the query embedding, so it runs while the embedding call is in flight.
+    exact_future = _POOL.submit(_knowledge_exact_leg, query)
     embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
                           timeout=EMBED_QUERY_TIMEOUT)
-    results = _knowledge_search(query, embedded["embeddings"][0], degraded, limit=max(top_k, RERANK_TOP))
+    vector_records, label = _knowledge_vector_leg(embedded["embeddings"][0])
+    if label:
+        degraded.append(label)
+    exact_records, label = exact_future.result()
+    if label:
+        degraded.append(label)
+    results = _fuse_knowledge(query, vector_records, exact_records, limit=max(top_k, RERANK_TOP))
     reranked = False
     if RERANK_ENABLED and rerank and results:
         try:
@@ -288,15 +324,22 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     degraded = []
     vector_list, lexical_list = [], []
     embedding = None
-    # Lexical and embedding/vector legs are independent, so run the lexical call concurrently.
+    # These legs need only the query, or the query embedding, and not the transcript vector or ranking.
+    # They are submitted first so they run alongside the embedding and transcript steps.
     lexical_future = _POOL.submit(_call, "lexical", f"{LEXICAL_URL}/search",
                                   {"query": query, "top_k": CANDIDATES})
+    intent_future = _POOL.submit(_intent_for, query)
+    related_future = _POOL.submit(_related_sessions, query)
+    exact_future = _POOL.submit(_knowledge_exact_leg, query) if KNOWLEDGE_SEARCH else None
     try:
         embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
                           timeout=EMBED_QUERY_TIMEOUT)
         embedding = embedded["embeddings"][0]
     except DependencyError as exc:
         degraded.append(exc.name)
+    knowledge_vector_future = None
+    if KNOWLEDGE_SEARCH and embedding is not None:
+        knowledge_vector_future = _POOL.submit(_knowledge_vector_leg, embedding)
     if embedding is not None:
         try:
             vector = _call("vector", f"{VECTOR_URL}/collections/{COLLECTION}/query",
@@ -348,16 +391,25 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     results = fused[:top_k]
     related = []
     try:
-        related = _related_sessions(query)
+        related = related_future.result()
     except DependencyError as exc:
         degraded.append(exc.name)
     intent = None
     try:
-        intent = _call("intent", f"{INTENT_URL}/classify", {"text": query})
-        intent = {"label": intent["label"], "confidence": intent["confidence"]}
+        intent = intent_future.result()
     except DependencyError as exc:
         degraded.append(exc.name)
-    knowledge = _knowledge_search(query, embedding, degraded) if KNOWLEDGE_SEARCH else []
+    knowledge = []
+    if KNOWLEDGE_SEARCH:
+        vector_records = []
+        if knowledge_vector_future is not None:
+            vector_records, label = knowledge_vector_future.result()
+            if label:
+                degraded.append(label)
+        exact_records, label = exact_future.result()
+        if label:
+            degraded.append(label)
+        knowledge = _fuse_knowledge(query, vector_records, exact_records)
     return {"ok": True, "results": results, "knowledge": knowledge, "degraded": degraded, "reranked": reranked,
             "related_sessions": related, "intent": intent}
 
