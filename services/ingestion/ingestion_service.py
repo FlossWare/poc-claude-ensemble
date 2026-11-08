@@ -153,6 +153,9 @@ def _fetch_http(uri: str) -> tuple[bytes, str, str]:
     raise IngestionError("remote URI redirect limit exceeded", 400, "redirect_limit")
 
 
+FETCHERS = {"http": _fetch_http, "https": _fetch_http}
+
+
 def _extract(data: bytes, media_type: str, filename: str = "") -> tuple[str, str]:
     if len(data) > MAX_SOURCE_BYTES:
         raise IngestionError("source exceeds the 8 MiB limit", 413, "source_too_large")
@@ -191,14 +194,18 @@ def _extract(data: bytes, media_type: str, filename: str = "") -> tuple[str, str
 
 
 def resolve_source(body: dict[str, Any]) -> dict[str, Any]:
+    supplied = [key for key in ("uri", "content_base64", "text") if key in body]
+    if len(supplied) != 1:
+        raise IngestionError("provide exactly one of uri, content_base64, or text")
     if "uri" in body:
         uri = body.get("uri")
         if not isinstance(uri, str) or not uri.strip() or len(uri) > 4096:
             raise IngestionError("uri must be a non-empty string of at most 4096 characters")
         parsed = urllib.parse.urlsplit(uri.strip())
-        if parsed.scheme.lower() not in {"http", "https"}:
+        fetcher = FETCHERS.get(parsed.scheme.lower())
+        if fetcher is None:
             raise IngestionError(f"unsupported URI scheme: {parsed.scheme or '(missing)'}", 415, "unsupported_scheme")
-        data, media_type, final_uri = _fetch_http(uri.strip())
+        data, media_type, final_uri = fetcher(uri.strip())
         text, extracted_type = _extract(data, media_type, PurePosixPath(parsed.path).name)
         title = PurePosixPath(urllib.parse.urlsplit(final_uri).path).name or host_title(final_uri)
         return {"source_id": final_uri, "locator": final_uri, "origin": "remote-uri",
