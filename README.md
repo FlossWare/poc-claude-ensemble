@@ -231,6 +231,8 @@ uses `pdftotext`; HTML extraction omits script/style content.
 - `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it.
 - `POST /api/v1/ingestion/ingest` stores the source in Knowledge, chunks it,
   embeds it, and updates the lexical and vector knowledge indexes.
+- `GET /api/v1/ingestion/history` returns bounded completed-ingestion history from
+  the existing append-only session-events ledger.
 
 Example preview:
 
