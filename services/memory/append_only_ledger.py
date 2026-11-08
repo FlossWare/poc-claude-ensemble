@@ -287,15 +287,15 @@ class JsonlAppendOnlyLedger:
             state = self.status()
         except RuntimeError as exc:
             message = str(exc)
-            line_number = 1
-            match = __import__("re").search(r"line (\\d+)", message)
-            if match:
-                line_number = int(match.group(1))
-            return {"ok": False, "first_failing_sequence": line_number,
+            try:
+                failing_sequence = int(message.rsplit("line ", 1)[1].split()[0])
+            except (IndexError, ValueError):
+                failing_sequence = 1
+            return {"ok": False, "first_failing_sequence": failing_sequence,
                     "failure_category": "malformed_record", "verified_count": 0,
                     "assurance": "legacy_unverified"}
         end = state["head_sequence"] if through_sequence is None else through_sequence
-        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < 0 or (end > 0 and end < from_sequence):
+        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or isinstance(end, bool) or not isinstance(end, int) or end > state["head_sequence"] or end < 0 or (end > 0 and end < from_sequence):
             raise ValueError("invalid verification range")
         if end == 0 and from_sequence == 1:
             return {"ok": True, "from_sequence": 1, "through_sequence": 0, "verified_count": 0, "assurance": "empty_ledger"}
@@ -312,52 +312,58 @@ class JsonlAppendOnlyLedger:
                         "assurance": "unverified_partial_range"}
         expected, verified, legacy_seen = from_sequence, 0, False
         legacy_digest = hashlib.sha256(b"").hexdigest()
-        first_failure = None
         seen_event_ids = set()
+        first_failure = None
         try:
-            scan = self._scan()
-            for sequence, record, raw in scan:
-            if sequence > end:
-                break
-            if sequence < from_sequence:
-                if from_sequence == 1:
-                    if "entry_sha256" in record:
-                        previous = record.get("entry_sha256")
-                    else:
-                        legacy_seen = True
-                        legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
-                        previous = legacy_digest
-                continue
-            if sequence != expected:
-                first_failure = (expected, "sequence_gap"); break
+            for sequence, record, raw in self._scan():
+                if sequence > end:
+                    break
+                if sequence < from_sequence:
+                    if from_sequence == 1:
+                        if "entry_sha256" in record:
+                            previous = record.get("entry_sha256")
+                        else:
+                            legacy_seen = True
+                            legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                            previous = legacy_digest
+                    continue
+                if sequence != expected:
+                    first_failure = (expected, "sequence_gap")
+                    break
                 public = self._public_entry(sequence, record, raw)
                 if public["event_id"] in seen_event_ids:
-                    first_failure = (sequence, "duplicate_event_id"); break
+                    first_failure = (sequence, "duplicate_event_id")
+                    break
                 seen_event_ids.add(public["event_id"])
                 if "entry_sha256" not in record:
                     if "schema_version" in record or "sequence" in record:
-                        first_failure = (sequence, "invalid_envelope"); break
+                        first_failure = (sequence, "invalid_envelope")
+                        break
                     legacy_seen = True
-                verified += 1
-                expected += 1
-                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
-                previous = legacy_digest
-                continue
-            try:
-                validate_envelope(record, self.ledger_id)
+                    verified += 1
+                    expected += 1
+                    legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                    previous = legacy_digest
+                    continue
+                try:
+                    validate_envelope(record, self.ledger_id)
                 except ValueError as exc:
                     category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
-                    first_failure = (sequence, category); break
+                    first_failure = (sequence, category)
+                    break
                 if record.get("previous_entry_sha256") != previous:
-                    first_failure = (sequence, "broken_hash_chain"); break
+                    first_failure = (sequence, "broken_hash_chain")
+                    break
                 previous = record["entry_sha256"]
                 expected += 1
                 verified += 1
         except RuntimeError as exc:
             message = str(exc)
-            match = __import__("re").search(r"line (\\d+)", message)
-            sequence = int(match.group(1)) if match else expected
-            first_failure = (sequence, "malformed_record")
+            try:
+                failing_sequence = int(message.rsplit("line ", 1)[1].split()[0])
+            except (IndexError, ValueError):
+                failing_sequence = expected
+            first_failure = (failing_sequence, "malformed_record")
         if first_failure:
             return {"ok": False, "first_failing_sequence": first_failure[0], "failure_category": first_failure[1],
                     "verified_count": verified, "assurance": "legacy_prefix_unverified" if legacy_seen else "hash_chain"}
