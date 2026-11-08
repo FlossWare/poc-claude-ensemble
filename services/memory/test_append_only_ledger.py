@@ -59,7 +59,12 @@ def test_legacy_prefix_remains_readable_and_assurance_is_explicit(tmp_path):
               "timestamp": "2026-11-06T12:00:00Z", "payload": {"session": "old"}}
     path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
     ledger = JsonlAppendOnlyLedger(path)
-    assert ledger.pull()["entries"][0] == legacy
+    exported = ledger.pull()["entries"][0]
+    assert exported["schema_version"] == 0
+    assert exported["event_id"] == "legacy"
+    assert exported["event_type"] == "session_end"
+    assert exported["source"] == "claude-code"
+    assert exported["payload"] == legacy["payload"]
     assert ledger.verify()["ok"]
     assert "legacy_prefix_unverified" in ledger.verify()["assurance"]
     added = ledger.append(event("new"))
