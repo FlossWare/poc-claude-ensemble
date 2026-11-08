@@ -81,15 +81,29 @@ class InteractionEventTests(unittest.TestCase):
 
     def test_empty_worker_response_is_recorded_as_failure(self):
         events = []
+        import json
+
+        arbiter_text = json.dumps({
+            "selected_candidate": None,
+            "decision": "unresolved",
+            "rationale": "no worker produced a usable proposal",
+            "supporting_evidence": [],
+            "rejected_alternatives": [],
+            "blocking_concerns": ["no usable worker output"],
+            "follow_ups": [],
+            "complete": False,
+            "human_decision_required": False,
+        })
         loop = CollaborationOrchestrator(
             "inspect a task",
             solvers={"sonnet": FakeProvider("")},
-            arbiter=FakeProvider("{}"),
+            arbiter=FakeProvider(arbiter_text),
             reviewers={},
+            max_rounds=1,
             event_sink=events.append,
         )
-        with self.assertRaises(RuntimeError):
-            loop.run()
+        result = loop.run()
+        self.assertEqual(result.status, "unresolved")
         failure = next(event for event in events if event["event_name"] == "worker.failed")
         self.assertEqual(failure["error_type"], "EmptyModelResponse")
 
