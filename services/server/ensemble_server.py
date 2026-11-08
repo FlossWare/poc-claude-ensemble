@@ -362,6 +362,26 @@ class EnsembleApplication:
 
     def _dispatch(self, handler: BaseHTTPRequestHandler) -> None:
         parsed = urlsplit(handler.path)
+        if parsed.path in {"/", "/dashboard", "/dashboard/"}:
+            if handler.command != "GET":
+                _send(handler, HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
+                return
+            dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard", "index.html")
+            try:
+                with open(dashboard_path, "rb") as dashboard_file:
+                    body = dashboard_file.read(1024 * 1024 + 1)
+                if len(body) > 1024 * 1024:
+                    raise OSError("dashboard asset exceeds size limit")
+            except OSError:
+                _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "dashboard asset not found"})
+                return
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Cache-Control", "no-store")
+            handler.end_headers()
+            handler.wfile.write(body)
+            return
         if not parsed.path.startswith(API_PREFIX + "/"):
             _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
