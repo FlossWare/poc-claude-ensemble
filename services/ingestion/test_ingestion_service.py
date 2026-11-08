@@ -42,6 +42,23 @@ class IngestionSourceTests(unittest.TestCase):
         with self.assertRaises(ingestion.IngestionError):
             ingestion.resolve_source({"filename": "notes.txt", "content_base64": "not base64!"})
 
+    def test_ingest_requires_a_valid_preview_token(self):
+        with self.assertRaises(ingestion.IngestionError) as caught:
+            ingestion.ingest({})
+        self.assertEqual(caught.exception.code, "preview_expired")
+
+    def test_preview_token_is_single_use_after_success(self):
+        preview_result = ingestion.preview({"text": "single-use source"})
+        preview_id = preview_result["preview_id"]
+        with patch.object(ingestion, "_post_json") as post_json:
+            post_json.side_effect = [
+                {"ok": True, "decision": "rejected"},
+            ]
+            result = ingestion.ingest({"preview_id": preview_id})
+        self.assertEqual(result["status"], "rejected")
+        with self.assertRaises(ingestion.IngestionError):
+            ingestion.ingest({"preview_id": preview_id})
+
     def test_ingest_uses_existing_knowledge_chunk_embedding_and_indexes(self):
         calls = []
 
@@ -58,8 +75,10 @@ class IngestionSourceTests(unittest.TestCase):
                 return {"ok": True, "embeddings": [[0.1, 0.2], [0.3, 0.4]]}
             return {"ok": True}
 
-        with patch.object(ingestion, "_post_json", side_effect=fake_post):
-            result = ingestion.ingest({"title": "Test", "text": "A test source."})
+        preview_result = ingestion.preview({"title": "Test", "text": "A test source."})
+        with patch.object(ingestion, "resolve_source", side_effect=AssertionError("ingest must use the reviewed preview")):
+            with patch.object(ingestion, "_post_json", side_effect=fake_post):
+                result = ingestion.ingest({"preview_id": preview_result["preview_id"]})
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["chunks"], 2)
