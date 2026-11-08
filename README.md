@@ -194,7 +194,7 @@ override remains supported for compatibility.
 | `GET /api/v1/services/{id}/metrics` | Service-specific metrics where supported |
 
 The inventory covers embedding, vector, lexical, hybrid, reranking, chunking,
-tokenization, index, extraction, intent, ranking, knowledge, and memory.
+tokenization, index, extraction, intent, ranking, knowledge, memory, and ingestion.
 Vector metrics report collection names and counts from the existing
 `GET /collections` endpoint. Services without a metrics endpoint report
 metrics as unavailable. Ingestion totals are intentionally unavailable until
