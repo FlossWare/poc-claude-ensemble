@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -373,7 +374,7 @@ def _body(handler) -> dict[str, Any]:
     return value
 
 
-class IngestionHandler(__import__("http.server").server.BaseHTTPRequestHandler):
+class IngestionHandler(BaseHTTPRequestHandler):
     server_version = "FlossWarePOCIngestion/1"
 
     def _send(self, status: int, payload: dict[str, Any]) -> None:
@@ -409,14 +410,12 @@ class IngestionHandler(__import__("http.server").server.BaseHTTPRequestHandler):
 
 
 def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
-    from http.server import ThreadingHTTPServer
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise ValueError("ingestion service only accepts loopback binds")
     return ThreadingHTTPServer((host, port), IngestionHandler)
 
 
 def main() -> None:
-    from http.server import ThreadingHTTPServer
     import logging
     logging.basicConfig(level=logging.INFO)
     host = os.environ.get("POC_CLAUDE_ENSEMBLE_INGESTION_HOST", DEFAULT_HOST)
