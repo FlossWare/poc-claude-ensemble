@@ -35,8 +35,59 @@ class IngestionSourceTests(unittest.TestCase):
 
     def test_unsupported_uri_scheme_is_rejected_before_fetch(self):
         with self.assertRaises(ingestion.IngestionError) as caught:
-            ingestion.resolve_source({"uri": "ftp://example.org/document.pdf"})
+            ingestion.resolve_source({"uri": "s3://example.org/document.pdf"})
         self.assertEqual(caught.exception.code, "unsupported_scheme")
+
+    def test_ftp_connector_requires_explicit_opt_in(self):
+        with patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_INGESTION_ENABLE_FTP": ""}):
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                ingestion.resolve_source({"uri": "ftp://example.org/report.txt"})
+        self.assertEqual(caught.exception.code, "transport_disabled")
+
+    def test_opted_in_ftp_fetcher_uses_anonymous_login_and_extracts_text(self):
+        class FakeFTP:
+            def __init__(self, pinned_host):
+                self.pinned_host = pinned_host
+                self.connected = None
+                self.logged_in = False
+                self.passive = False
+                self.closed = False
+
+            def connect(self, host, port, timeout):
+                self.connected = (host, port, timeout)
+
+            def login(self):
+                self.logged_in = True
+
+            def set_pasv(self, enabled):
+                self.passive = enabled
+
+            def retrbinary(self, command, callback, blocksize):
+                self.command = command
+                self.blocksize = blocksize
+                callback(b"FTP document content")
+
+            def close(self):
+                self.closed = True
+
+        clients = []
+
+        def make_client(address):
+            client = FakeFTP(address)
+            clients.append(client)
+            return client
+
+        with patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_INGESTION_ENABLE_FTP": "true"}):
+            with patch.object(ingestion, "_global_address", return_value="93.184.216.34"):
+                with patch.object(ingestion, "_PinnedFTP", side_effect=make_client):
+                    source = ingestion.resolve_source({"uri": "ftp://example.org/report.txt"})
+
+        self.assertEqual(source["text"], "FTP document content")
+        self.assertEqual(source["media_type"], "text/plain")
+        self.assertEqual(clients[0].connected[0], "93.184.216.34")
+        self.assertTrue(clients[0].logged_in)
+        self.assertTrue(clients[0].passive)
+        self.assertTrue(clients[0].closed)
 
     def test_upload_rejects_invalid_base64(self):
         with self.assertRaises(ingestion.IngestionError):
