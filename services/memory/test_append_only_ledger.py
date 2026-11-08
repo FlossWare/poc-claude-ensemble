@@ -142,7 +142,7 @@ def test_tampered_entry_hash_and_broken_chain_are_reported(tmp_path):
     ledger.append(event("two"))
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     records[1]["previous_entry_sha256"] = "f" * 64
-    path.write_text("\\n".join(json.dumps(item) for item in records) + "\\n", encoding="utf-8")
+    path.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
     result = ledger.verify()
     assert not result["ok"] and result["failure_category"] == "broken_hash_chain"
 
@@ -153,10 +153,10 @@ def test_missing_sequence_and_malformed_record_are_explicit(tmp_path):
     ledger.append(event("one"))
     ledger.append(event("two"))
     lines = path.read_text(encoding="utf-8").splitlines()
-    path.write_text(lines[1] + "\\n", encoding="utf-8")
+    path.write_text(lines[1] + "\n", encoding="utf-8")
     result = ledger.verify()
     assert not result["ok"] and result["failure_category"] == "sequence_gap"
-    path.write_text('{"broken":\\n', encoding="utf-8")
+    path.write_text('{"broken":\n', encoding="utf-8")
     result = ledger.verify()
     assert not result["ok"] and result["failure_category"] == "malformed_record"
 
@@ -164,7 +164,7 @@ def test_missing_sequence_and_malformed_record_are_explicit(tmp_path):
 def test_legacy_prefix_checkpoint_is_explicitly_unverified(tmp_path):
     path = tmp_path / "events.jsonl"
     legacy = {"event_id": "legacy", "kind": "session_end", "producer": "claude-code", "payload": {"old": True}}
-    path.write_text(json.dumps(legacy) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
     ledger = JsonlAppendOnlyLedger(path)
     first = ledger.append(event("new"))["entry"]
     status = ledger.status()
