@@ -16,6 +16,7 @@ import os
 import re
 import socket
 import ssl
+import threading
 import subprocess
 import tempfile
 import time
@@ -45,9 +46,9 @@ PROFILES = {
 EMBED_BATCH = 64
 
 PREVIEW_TTL_SECONDS = 600
-PREVIEW_CACHE_LIMIT = 64
+PREVIEW_CACHE_LIMIT = 16
 _PREVIEW_CACHE: dict[str, dict[str, Any]] = {}
-_PREVIEW_LOCK = __import__("threading").Lock()
+_PREVIEW_LOCK = threading.Lock()
 
 KNOWLEDGE_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781")
 CHUNKING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
