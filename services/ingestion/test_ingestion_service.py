@@ -50,10 +50,12 @@ class IngestionSourceTests(unittest.TestCase):
     def test_preview_token_is_single_use_after_success(self):
         preview_result = ingestion.preview({"text": "single-use source"})
         preview_id = preview_result["preview_id"]
-        with patch.object(ingestion, "_post_json") as post_json:
-            post_json.side_effect = [
-                {"ok": True, "decision": "rejected"},
-            ]
+        def reject_knowledge(_base, path, _payload, timeout=60):
+            if path == "/records":
+                return {"ok": True, "decision": "rejected"}
+            return {"ok": True}
+
+        with patch.object(ingestion, "_post_json", side_effect=reject_knowledge):
             result = ingestion.ingest({"preview_id": preview_id})
         self.assertEqual(result["status"], "rejected")
         with self.assertRaises(ingestion.IngestionError):
