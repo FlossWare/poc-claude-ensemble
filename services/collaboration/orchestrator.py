@@ -109,6 +109,7 @@ class CollaborationOrchestrator:
         max_review_calls: int | None = None,
         max_arbiter_calls: int | None = None,
         execution_id: str | None = None,
+        parent_event_id: str | None = None,
         event_sink: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         if not task.strip():
@@ -137,6 +138,7 @@ class CollaborationOrchestrator:
         self._review_calls = 0
         self._arbiter_calls = 0
         self.execution_id = execution_id or str(uuid4())
+        self.parent_event_id = parent_event_id
         self.event_sink = event_sink
 
     def _emit_interaction(self, event_name: str, **fields: Any) -> None:
@@ -152,6 +154,7 @@ class CollaborationOrchestrator:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "correlation_id": self.execution_id,
             "execution_id": self.execution_id,
+            "parent_event_id": self.parent_event_id,
             **fields,
         }
         try:
