@@ -6,12 +6,18 @@ on:
     paths:
       - "services/memory/**"
       - "services/server/**"
+      - "services/collaboration/**"
+      - "services/ingestion/**"
+      - "services/shared/**"
       - ".github/workflows/session-ledger-tests.yml"
   push:
     branches: [main]
     paths:
       - "services/memory/**"
       - "services/server/**"
+      - "services/collaboration/**"
+      - "services/ingestion/**"
+      - "services/shared/**"
       - ".github/workflows/session-ledger-tests.yml"
 
 permissions:
@@ -35,6 +41,27 @@ jobs:
           POC_CLAUDE_ENSEMBLE_LOG_DIR: ${{ runner.temp }}/logs
           POC_CLAUDE_ENSEMBLE_RUNTIME_DIR: ${{ runner.temp }}/runtime
         run: python -m pytest services/memory/test_memory_service.py -k history -q
+
+
+  poc-ingestion-interactions:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: services
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test ingestion source resolution and indexing
+        run: python -m unittest discover -s services/ingestion -p "test_*.py" -v
+      - name: Test collaboration interaction events
+        run: python -m unittest discover -s services/collaboration -p "test_interaction_events.py" -v
+      - name: Test interaction and ingestion gateway routes
+        run: |
+          python -m unittest discover -s services/server -p "test_interaction_routes.py" -v
+          python -m unittest discover -s services/server -p "test_ingestion_routes.py" -v
+      - name: Test append-only interaction ledger writer
+        run: python -m unittest discover -s services/shared -p "test_operational_memory.py" -v
 
   operational-dashboard:
     runs-on: ubuntu-latest

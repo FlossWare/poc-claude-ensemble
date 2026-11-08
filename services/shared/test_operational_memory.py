@@ -48,6 +48,26 @@ class OperationalMemoryWriterTest(unittest.TestCase):
         self.assertIn("operational-learning.outcome-", payload["name"])
         self.assertIn("task-1", payload["content"])
 
+    @patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_MEMORY_GATEWAY_URL": ""})
+    @patch("shared.operational_memory.urllib.request.urlopen")
+    def test_append_ledger_event_uses_existing_append_once_endpoint(self, urlopen):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return b'{"ok": true, "status": "stored"}'
+
+        urlopen.return_value = Response()
+        writer = OperationalMemoryWriter()
+        self.assertTrue(writer.append_ledger_event(
+            "event-123", {"event_type": "model_interaction", "event_name": "worker.started"}
+        ))
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8767/memory/append-once")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["name"], "session_events")
+        self.assertEqual(payload["event_id"], "event-123")
+        self.assertEqual(payload["entry"]["event_type"], "model_interaction")
+
     @patch("shared.operational_memory.urllib.request.urlopen", side_effect=URLError("offline"))
     def test_write_event_reports_memory_failure(self, _urlopen):
         writer = OperationalMemoryWriter(timeout=0.1)
