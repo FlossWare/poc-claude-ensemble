@@ -230,12 +230,13 @@ class JsonlAppendOnlyLedger:
             if sequence > end:
                 break
             if sequence < from_sequence:
-                if "entry_sha256" in record:
-                    previous = record.get("entry_sha256")
-                else:
-                    legacy_seen = True
-                    legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
-                    previous = legacy_digest
+                if from_sequence == 1:
+                    if "entry_sha256" in record:
+                        previous = record.get("entry_sha256")
+                    else:
+                        legacy_seen = True
+                        legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                        previous = legacy_digest
                 continue
             if sequence != expected:
                 first_failure = (expected, "sequence_gap"); break
@@ -272,6 +273,7 @@ class JsonlAppendOnlyLedger:
         with self._locked():
             head, previous_hash, legacy_digest = self._head()
             previous = previous_hash or (legacy_digest if head else None)
+            prepared, seen = [], {}
             for incoming in entries:
                 event = validate_event(incoming)
                 source_sequence = incoming.get("sequence")
@@ -279,29 +281,56 @@ class JsonlAppendOnlyLedger:
                     if isinstance(source_sequence, bool) or not isinstance(source_sequence, int) or source_sequence <= last_source:
                         raise ValueError("import source sequences must be positive and strictly ascending")
                     last_source = source_sequence
+                if incoming.get("ledger_id") not in (None, source_ledger_id):
+                    raise ValueError("import source ledger identity mismatch")
                 if incoming.get("payload_sha256") is not None and incoming["payload_sha256"] != digest(event["payload"]):
                     raise ValueError("import payload hash mismatch")
                 if incoming.get("entry_sha256") is not None and incoming["entry_sha256"] != envelope_hash(incoming):
                     raise ValueError("import entry hash mismatch")
-                existing = self.get(event["event_id"])
+                event_id = event["event_id"]
+                prior = seen.get(event_id)
+                if prior is not None:
+                    if prior != event:
+                        raise ValueError("import conflict: duplicate event_id has different content in batch")
+                    duplicates.append(event_id)
+                    continue
+                seen[event_id] = event
+                existing = self.get(event_id)
                 if existing:
-                    if existing.get("payload") == event["payload"] and all(existing.get(k) == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")):
-                        duplicates.append(event["event_id"]); continue
+                    same = existing.get("payload") == event["payload"] and all(
+                        existing.get(k) == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")
+                    )
+                    if same:
+                        duplicates.append(event_id)
+                        continue
                     raise ValueError("import conflict: event_id already exists with different content")
-                head += 1
-                provenance = {"source_ledger_id": source_ledger_id, "source_sequence": source_sequence,
-                              "source_entry_sha256": incoming.get("entry_sha256"),
-                              "source_assurance": "entry_hash_verified" if incoming.get("entry_sha256") else "legacy_unverified",
-                              "source_provenance": incoming.get("provenance", {})}
-                record = {"schema_version": 1, "ledger_id": self.ledger_id, "sequence": head, **event,
-                          "captured_at": incoming.get("captured_at") or now_utc(),
-                          "payload_sha256": digest(event["payload"]), "previous_entry_sha256": previous,
-                          "provenance": provenance}
-                record["entry_sha256"] = envelope_hash(record)
-                with self.path.open("ab") as handle:
-                    handle.write(canonical(record) + b"\n")
+                prepared.append((incoming, event))
+            # Validate the complete batch before the first durable write. JSONL
+            # cannot provide a multi-record database transaction; each fsynced
+            # line is a committed prefix and retries are idempotent.
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("ab") as handle:
+                for incoming, event in prepared:
+                    head += 1
+                    provenance = {
+                        "source_ledger_id": source_ledger_id,
+                        "source_sequence": incoming.get("sequence"),
+                        "source_entry_sha256": incoming.get("entry_sha256"),
+                        "source_assurance": "entry_hash_verified" if incoming.get("entry_sha256") else "legacy_unverified",
+                        "source_provenance": incoming.get("provenance", {}),
+                    }
+                    record = {
+                        "schema_version": 1, "ledger_id": self.ledger_id, "sequence": head, **event,
+                        "captured_at": incoming.get("captured_at") or now_utc(),
+                        "payload_sha256": digest(event["payload"]), "previous_entry_sha256": previous,
+                        "provenance": provenance,
+                    }
+                    record["entry_sha256"] = envelope_hash(record)
+                    handle.write(canonical(record) + b"\\n")
                     handle.flush()
                     os.fsync(handle.fileno())
-                previous = record["entry_sha256"]
-                imported.append(event["event_id"])
-        return {"imported": imported, "duplicates": duplicates, "head_sequence": head}
+                    previous = record["entry_sha256"]
+                    imported.append(event["event_id"])
+        return {"imported": imported, "duplicates": duplicates, "head_sequence": head,
+                "committed_prefix": len(imported),
+                "retry_after_source_sequence": last_source if len(imported) == len(prepared) else (prepared[len(imported)][0].get("sequence") if len(imported) < len(prepared) else None)}
