@@ -648,7 +648,10 @@ class EnsembleApplication:
                 if set(params) - {"cursor"} or any(len(v) != 1 for v in params.values()):
                     raise ValueError("only one cursor parameter is supported")
                 raw_cursor = params.get("cursor", [None])[0]
-                if raw_cursor is None:
+                last_event_id = handler.headers.get("Last-Event-ID", "")
+                if raw_cursor is None and last_event_id.isdigit():
+                    cursor = int(last_event_id) + 1
+                elif raw_cursor is None:
                     status, initial = self._interaction_history(0, 1)
                     if status != HTTPStatus.OK:
                         _send(handler, status, initial)
@@ -674,10 +677,9 @@ class EnsembleApplication:
                         handler.wfile.flush()
                         return
                     entries = payload.get("entries", [])
-                    for entry in entries:
-                        event_id = str(entry.get("event_id", ""))
+                    for sequence, entry in enumerate(entries, start=cursor):
                         data = json.dumps(entry, sort_keys=True, ensure_ascii=False)
-                        frame = f"id: {event_id}\\nevent: model_interaction\\ndata: {data}\\n\\n"
+                        frame = f"id: {sequence}\\nevent: model_interaction\\ndata: {data}\\n\\n"
                         handler.wfile.write(frame.encode("utf-8"))
                     cursor += len(entries)
                     if entries:
