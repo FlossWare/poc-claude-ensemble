@@ -406,8 +406,18 @@ class IngestionHandler(BaseHTTPRequestHandler):
                 if set(params) - {"limit", "cursor"} or any(len(values) != 1 for values in params.values()):
                     raise IngestionError("history supports only limit and cursor")
                 limit = int(params.get("limit", ["50"])[0])
-                cursor = int(params.get("cursor", ["0"])[0])
-                if limit < 1 or limit > 100 or cursor < 0:
+                raw_cursor = params.get("cursor", [None])[0]
+                if limit < 1 or limit > 100:
+                    raise IngestionError("limit must be 1..100 and cursor must be non-negative")
+                if raw_cursor is None:
+                    first_query = urlencode({"event_type": "ingestion", "limit": "1", "cursor": "0"})
+                    first_request = urllib.request.Request(MEMORY_URL.rstrip("/") + "/history?" + first_query, method="GET")
+                    with urllib.request.urlopen(first_request, timeout=5) as first_response:
+                        first_result = json.loads(first_response.read().decode("utf-8"))
+                    cursor = max(0, int(first_result.get("pagination", {}).get("total", 0)) - limit)
+                else:
+                    cursor = int(raw_cursor)
+                if cursor < 0:
                     raise IngestionError("limit must be 1..100 and cursor must be non-negative")
                 query = urlencode({"event_type": "ingestion", "limit": str(limit), "cursor": str(cursor)})
                 request = urllib.request.Request(MEMORY_URL.rstrip("/") + "/history?" + query, method="GET")
