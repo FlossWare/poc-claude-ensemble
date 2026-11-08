@@ -324,7 +324,7 @@ class JsonlAppendOnlyLedger:
                             previous = record.get("entry_sha256")
                         else:
                             legacy_seen = True
-                            legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                            legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
                             previous = legacy_digest
                     continue
                 if sequence != expected:
@@ -342,7 +342,7 @@ class JsonlAppendOnlyLedger:
                     legacy_seen = True
                     verified += 1
                     expected += 1
-                    legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                    legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
                     previous = legacy_digest
                     continue
                 try:
