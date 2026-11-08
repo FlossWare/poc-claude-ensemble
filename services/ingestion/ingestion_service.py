@@ -355,6 +355,7 @@ def _record_ingestion_event(source: dict[str, Any], chunks: int, vectors: int) -
         "correlation_id": event_id,
         "execution_id": event_id,
         "source_id": source["source_id"],
+        "title": source["title"],
         "origin": source["origin"],
         "media_type": source["media_type"],
         "chunk_count": chunks,
@@ -415,7 +416,9 @@ class IngestionHandler(BaseHTTPRequestHandler):
                 self._send(200, result)
             except IngestionError as exc:
                 self._send(exc.status, {"ok": False, "error_code": exc.code, "error": str(exc)})
-            except (ValueError, urllib.error.URLError, OSError, json.JSONDecodeError):
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send(400, {"ok": False, "error_code": "invalid_request", "error": str(exc)})
+            except (urllib.error.URLError, OSError):
                 self._send(503, {"ok": False, "error_code": "history_unavailable", "error": "ingestion history unavailable"})
             return
         self._send(404, {"ok": False, "error": "not found"})
