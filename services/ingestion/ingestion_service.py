@@ -184,7 +184,7 @@ def _fetch_ftp(uri: str) -> tuple[bytes, str, str]:
     parsed = urllib.parse.urlsplit(uri)
     if not parsed.hostname or parsed.username is not None or parsed.password is not None:
         raise IngestionError("FTP URI must have a host and must not contain credentials", 400, "invalid_uri")
-    if parsed.port not in {None, 21} or parsed.fragment:
+    if parsed.port not in {None, 21} or parsed.fragment or parsed.query:
         raise IngestionError("FTP supports only the standard port and no URI fragment", 403, "unsafe_uri")
     host = parsed.hostname.encode("idna").decode("ascii")
     address = _global_address(host)
