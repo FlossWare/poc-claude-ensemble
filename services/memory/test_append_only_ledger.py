@@ -1,5 +1,5 @@
 import json
-import sys
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from append_only_ledger import JsonlAppendOnlyLedger, digest
@@ -115,3 +115,17 @@ def test_tampered_payload_is_detected(tmp_path):
     result = ledger.verify()
     assert not result["ok"]
     assert result["failure_category"] == "payload_hash_mismatch"
+
+def test_shared_contract_fixture(tmp_path):
+    fixture_path = Path(__file__).resolve().parents[2] / "parity" / "ledger-contract.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    ledger = JsonlAppendOnlyLedger(tmp_path / "contract.jsonl")
+    for item in fixture["events"]:
+        ledger.append(item)
+    page = ledger.pull(limit=fixture["expectations"]["max_page_size"])
+    assert [item["sequence"] for item in page["entries"]] == [1, 2]
+    assert page["next_after_sequence"] == 2 and page["has_more"]
+    filtered = ledger.pull(event_type=fixture["expectations"]["filter_event_type"], limit=2)
+    assert [item["event_id"] for item in filtered["entries"]] == fixture["expectations"]["filtered_event_ids"]
+    assert [item["event_id"] for item in ledger.replay(limit=10)["entries"]] == fixture["expectations"]["event_ids"]
+    assert ledger.verify()["ok"]
