@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """POC source ingestion: URI resolution, content extraction, and Knowledge indexing.
 
-The public source contract is URI-agnostic. This POC currently registers HTTP(S)
-fetchers and PDF, HTML, plain-text, and Markdown extractors. Adding a transport
-does not change the request contract.
+The public source contract is URI-agnostic. HTTP(S) is enabled by default;
+anonymous FTP is an explicit opt-in. PDF, HTML, plain-text, and Markdown
+extractors remain independent of the transport used to retrieve a source.
 """
 from __future__ import annotations
 
