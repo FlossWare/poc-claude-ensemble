@@ -360,14 +360,14 @@ class JsonlAppendOnlyLedger:
                     legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
                     previous = legacy_digest
                     continue
+                if record.get("previous_entry_sha256") != previous:
+                    first_failure = (sequence, "broken_hash_chain")
+                    break
                 try:
                     validate_envelope(record, self.ledger_id)
                 except ValueError as exc:
                     category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
                     first_failure = (sequence, category)
-                    break
-                if record.get("previous_entry_sha256") != previous:
-                    first_failure = (sequence, "broken_hash_chain")
                     break
                 previous = record["entry_sha256"]
                 expected += 1
