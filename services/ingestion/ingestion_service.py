@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from uuid import uuid4
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
@@ -280,93 +281,122 @@ def preview(body: dict[str, Any]) -> dict[str, Any]:
 
 def ingest(body: dict[str, Any]) -> dict[str, Any]:
     source = resolve_source(body)
+    ingestion_id = str(uuid4())
+    _record_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
     content = source["text"]
     revision_id = source["content_sha256"]
-    knowledge = _post_json(KNOWLEDGE_URL, "/records", {
-        "source_id": source["source_id"],
-        "revision_sequence": time.time_ns(),
-        "revision_id": revision_id,
-        "title": source["title"],
-        "content": content,
-        "provenance": {"origin": source["origin"], "locator": source["locator"]},
-        "profiles": PROFILES,
-    })
-    if knowledge.get("decision") not in {"accepted", "duplicate"}:
-        return {"ok": True, "status": "rejected", "source_id": source["source_id"],
-                "decision": knowledge.get("decision"), "chunks": 0, "vectors": 0}
-    chunked = _post_json(CHUNKING_URL, "/chunk", {
-        "profile": CHUNK_PROFILE, "source_id": source["source_id"],
-        "media_type": "text/plain", "text": content,
-    })
-    chunks = chunked.get("chunks")
-    if not isinstance(chunks, list):
-        raise IngestionError("chunking service returned an invalid result", 502, "invalid_downstream_response")
-    content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    stored = 0
-    for start in range(0, len(chunks), EMBED_BATCH):
-        batch = chunks[start:start + EMBED_BATCH]
-        texts = [item["text"] for item in batch]
-        embedded = _post_json(EMBEDDING_URL, "/embeddings", {"texts": texts, "mode": "document"})
-        vectors = embedded.get("embeddings")
-        if not isinstance(vectors, list) or len(vectors) != len(batch):
-            raise IngestionError("embedding service returned an invalid vector count", 502, "invalid_downstream_response")
-        rows = []
-        ids = []
-        metadatas = []
-        for item in batch:
-            chunk_id = item["chunk_id"]
-            vector_id = hashlib.sha256(f"{chunk_id}|{content_sha}".encode("utf-8")).hexdigest()
-            meta = {"kind": "knowledge_chunk", "source": source["origin"], "url": source["locator"],
-                    "title": source["title"], "chunk": item.get("index"),
-                    "chunks": len(chunks), "chunk_id": chunk_id, "content_sha256": content_sha}
-            ids.append(vector_id)
-            metadatas.append(meta)
-            rows.append({"chunk_id": chunk_id, "vector_id": vector_id, "url": source["locator"],
-                         "source": source["origin"], "title": source["title"], "text": item["text"],
-                         "chunk_index": item.get("index"), "chunk_count": len(chunks),
-                         "content_sha256": content_sha})
-        _post_json(LEXICAL_URL, "/knowledge/documents", {"chunks": rows})
-        _post_json(VECTOR_URL, f"/collections/knowledge_chunks/upsert", {
-            "ids": ids, "embeddings": vectors, "documents": texts, "metadatas": metadatas,
+    try:
+        knowledge = _post_json(KNOWLEDGE_URL, "/records", {
+            "source_id": source["source_id"],
+            "revision_sequence": time.time_ns(),
+            "revision_id": revision_id,
+            "title": source["title"],
+            "content": content,
+            "provenance": {"origin": source["origin"], "locator": source["locator"]},
+            "profiles": PROFILES,
         })
-        stored += len(batch)
-    # Remove superseded vectors only after the new revision has been indexed successfully.
-    _post_json(VECTOR_URL, "/collections/knowledge_chunks/delete-superseded", {
-        "url": source["locator"], "keep_sha256": content_sha,
-    })
-    _record_ingestion_event(source, len(chunks), stored)
-    return {"ok": True, "status": "completed", "source_id": source["source_id"],
-            "decision": knowledge.get("decision"), "chunks": len(chunks), "vectors": stored,
-            "content_sha256": content_sha}
+        if knowledge.get("decision") not in {"accepted", "duplicate"}:
+            _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
+            return {"ok": True, "status": "rejected", "ingestion_id": ingestion_id,
+                    "source_id": source["source_id"], "decision": knowledge.get("decision"),
+                    "chunks": 0, "vectors": 0}
+        chunked = _post_json(CHUNKING_URL, "/chunk", {
+            "profile": CHUNK_PROFILE, "source_id": source["source_id"],
+            "media_type": "text/plain", "text": content,
+        })
+        chunks = chunked.get("chunks")
+        if not isinstance(chunks, list):
+            raise IngestionError("chunking service returned an invalid result", 502, "invalid_downstream_response")
+        content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        stored = 0
+        for start in range(0, len(chunks), EMBED_BATCH):
+            batch = chunks[start:start + EMBED_BATCH]
+            texts = [item["text"] for item in batch]
+            embedded = _post_json(EMBEDDING_URL, "/embeddings", {"texts": texts, "mode": "document"})
+            vectors = embedded.get("embeddings")
+            if not isinstance(vectors, list) or len(vectors) != len(batch):
+                raise IngestionError("embedding service returned an invalid vector count", 502, "invalid_downstream_response")
+            rows = []
+            ids = []
+            metadatas = []
+            for item in batch:
+                chunk_id = item["chunk_id"]
+                vector_id = hashlib.sha256(f"{chunk_id}|{content_sha}".encode("utf-8")).hexdigest()
+                meta = {"kind": "knowledge_chunk", "source": source["origin"], "url": source["locator"],
+                        "title": source["title"], "chunk": item.get("index"),
+                        "chunks": len(chunks), "chunk_id": chunk_id, "content_sha256": content_sha}
+                ids.append(vector_id)
+                metadatas.append(meta)
+                rows.append({"chunk_id": chunk_id, "vector_id": vector_id, "url": source["locator"],
+                             "source": source["origin"], "title": source["title"], "text": item["text"],
+                             "chunk_index": item.get("index"), "chunk_count": len(chunks),
+                             "content_sha256": content_sha})
+            _post_json(LEXICAL_URL, "/knowledge/documents", {"chunks": rows})
+            _post_json(VECTOR_URL, "/collections/knowledge_chunks/upsert", {
+                "ids": ids, "embeddings": vectors, "documents": texts, "metadatas": metadatas,
+            })
+            stored += len(batch)
+        # Remove superseded vectors only after the new revision has been indexed successfully.
+        _post_json(VECTOR_URL, "/collections/knowledge_chunks/delete-superseded", {
+            "url": source["locator"], "keep_sha256": content_sha,
+        })
+        _record_ingestion_event(
+            source, ingestion_id, "ingestion.completed", status="completed",
+            chunks=len(chunks), vectors=stored, content_sha256=content_sha,
+        )
+        return {"ok": True, "status": "completed", "ingestion_id": ingestion_id,
+                "source_id": source["source_id"], "decision": knowledge.get("decision"),
+                "chunks": len(chunks), "vectors": stored, "content_sha256": content_sha}
+    except Exception as exc:
+        _record_ingestion_event(
+            source, ingestion_id, "ingestion.failed", status="failed",
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
-def _record_ingestion_event(source: dict[str, Any], chunks: int, vectors: int) -> None:
-    """Best-effort append to the existing POC session-events ledger."""
-    event_id = hashlib.sha256(
-        f"ingestion|{source['source_id']}|{source['content_sha256']}".encode("utf-8")
-    ).hexdigest()
+def _record_ingestion_event(
+    source: dict[str, Any],
+    ingestion_id: str,
+    event_name: str,
+    *,
+    status: str,
+    chunks: int | None = None,
+    vectors: int | None = None,
+    content_sha256: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    """Best-effort metadata-only event in the existing append-only POC ledger."""
+    event_id = str(uuid4())
     entry = {
         "event_id": event_id,
         "event_type": "ingestion",
-        "event_name": "ingestion.completed",
+        "event_name": event_name,
         "source": "poc-ingestion",
         "producer": "poc-claude-ensemble",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "correlation_id": event_id,
-        "execution_id": event_id,
+        "correlation_id": ingestion_id,
+        "execution_id": ingestion_id,
         "source_id": source["source_id"],
         "title": source["title"],
         "origin": source["origin"],
         "media_type": source["media_type"],
-        "chunk_count": chunks,
-        "vector_count": vectors,
+        "status": status,
     }
+    if chunks is not None:
+        entry["chunk_count"] = chunks
+    if vectors is not None:
+        entry["vector_count"] = vectors
+    if content_sha256 is not None:
+        entry["content_sha256"] = content_sha256
+    if error_type is not None:
+        entry["error_type"] = error_type
     try:
         _post_json(MEMORY_URL, "/memory/append-once", {
             "name": "session_events", "event_id": event_id, "entry": entry,
         }, timeout=5)
     except IngestionError:
-        # Ingestion success is not rolled back because optional observability is down.
+        # Ingestion success/failure is not hidden or rolled back because optional observability is down.
         pass
 
 
