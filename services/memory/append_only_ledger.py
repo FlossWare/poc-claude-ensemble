@@ -411,7 +411,7 @@ class JsonlAppendOnlyLedger:
         imported, duplicates, last_source = [], [], 0
         with self._locked():
             head, previous_hash, legacy_digest, legacy_count = self._head()
-            integrity = self.verify()
+            integrity = self._verify_unlocked()
             if not integrity["ok"]:
                 raise RuntimeError("refusing import into an invalid ledger: " + integrity["failure_category"])
             previous = previous_hash or (legacy_digest if head else None)
