@@ -47,7 +47,9 @@ def validate_event(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("entry must be an object")
     event_id = value.get("event_id") or str(uuid.uuid4())
-    event_type, source, payload = value.get("event_type"), value.get("source"), value.get("payload")
+    event_type = value.get("event_type", value.get("kind"))
+    source = value.get("source", value.get("producer"))
+    payload = value.get("payload")
     if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
         raise ValueError("event_id must be 1-256 characters")
     if not isinstance(event_type, str) or not event_type.strip() or len(event_type) > 256:
@@ -175,23 +177,26 @@ class JsonlAppendOnlyLedger:
         since, until = parse_time(filters.get("since")), parse_time(filters.get("until"))
         if since and until and since > until:
             raise ValueError("since must not be later than until")
-        entries, scanned = [], after_sequence
+        entries, scanned, scanned_count = [], after_sequence, 0
         for sequence, record, _ in self._scan():
             if sequence <= after_sequence:
                 continue
             if sequence > upper:
                 break
             scanned = sequence
-            if filters.get("event_id") and record.get("event_id") != filters["event_id"]: continue
-            if filters.get("event_type") and record.get("event_type", record.get("kind")) != filters["event_type"]: continue
-            if filters.get("source") and record.get("source", record.get("producer")) != filters["source"]: continue
-            if filters.get("correlation_id") and record.get("correlation_id") != filters["correlation_id"]: continue
+            scanned_count += 1
+            matches = True
+            if filters.get("event_id") and record.get("event_id") != filters["event_id"]: matches = False
+            if filters.get("event_type") and record.get("event_type", record.get("kind")) != filters["event_type"]: matches = False
+            if filters.get("source") and record.get("source", record.get("producer")) != filters["source"]: matches = False
+            if filters.get("correlation_id") and record.get("correlation_id") != filters["correlation_id"]: matches = False
             stamp = record.get("timestamp", record.get("captured_at"))
             event_time = parse_time(stamp) if stamp else None
-            if since and (event_time is None or event_time < since): continue
-            if until and (event_time is None or event_time > until): continue
-            entries.append(record)
-            if sequence - after_sequence >= limit:
+            if since and (event_time is None or event_time < since): matches = False
+            if until and (event_time is None or event_time > until): matches = False
+            if matches:
+                entries.append(record)
+            if scanned_count >= limit:
                 break
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head,
                 "has_more": scanned < upper}
@@ -202,43 +207,63 @@ class JsonlAppendOnlyLedger:
                 return record
         return None
 
-    def verify(self, from_sequence=1, through_sequence=None):
+    def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
         state = self.status()
         end = state["head_sequence"] if through_sequence is None else through_sequence
-        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < 0:
+        if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < from_sequence:
             raise ValueError("invalid verification range")
-        previous, expected, verified, legacy_seen = None, 1, 0, False
+        previous = None
+        if from_sequence > 1:
+            if not isinstance(checkpoint, dict) or checkpoint.get("ledger_id") != self.ledger_id or checkpoint.get("sequence") != from_sequence - 1:
+                return {"ok": False, "first_failing_sequence": from_sequence,
+                        "failure_category": "missing_checkpoint", "verified_count": 0,
+                        "assurance": "unverified_partial_range"}
+            previous = checkpoint.get("entry_sha256")
+            if not isinstance(previous, str) or len(previous) != 64:
+                return {"ok": False, "first_failing_sequence": from_sequence,
+                        "failure_category": "invalid_checkpoint", "verified_count": 0,
+                        "assurance": "unverified_partial_range"}
+        expected, verified, legacy_seen = from_sequence, 0, False
+        legacy_digest = hashlib.sha256(b"").hexdigest()
         first_failure = None
         for sequence, record, raw in self._scan():
-            if sequence > end: break
-            if "entry_sha256" not in record:
-                legacy_seen = True
-                if from_sequence <= sequence:
-                    verified += 1
-                continue
+            if sequence > end:
+                break
             if sequence < from_sequence:
-                previous = record.get("entry_sha256")
-                expected = sequence + 1
+                if "entry_sha256" in record:
+                    previous = record.get("entry_sha256")
+                else:
+                    legacy_seen = True
+                    legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                    previous = legacy_digest
                 continue
             if sequence != expected:
-                first_failure = (sequence, "sequence_gap"); break
+                first_failure = (expected, "sequence_gap"); break
+            if "entry_sha256" not in record:
+                legacy_seen = True
+                verified += 1
+                expected += 1
+                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                previous = legacy_digest
+                continue
             if record.get("payload_sha256") != digest(record.get("payload")):
                 first_failure = (sequence, "payload_hash_mismatch"); break
             if record.get("previous_entry_sha256") != previous:
-                # A legacy prefix is explicitly an unverified checkpoint, not a
-                # claim that old JSONL records were hash chained.
-                if not (legacy_seen and sequence == from_sequence):
-                    first_failure = (sequence, "broken_hash_chain"); break
+                first_failure = (sequence, "broken_hash_chain"); break
             if not hmac.compare_digest(record.get("entry_sha256", ""), envelope_hash(record)):
                 first_failure = (sequence, "entry_hash_mismatch"); break
             previous = record["entry_sha256"]
-            expected = sequence + 1
+            expected += 1
             verified += 1
         if first_failure:
             return {"ok": False, "first_failing_sequence": first_failure[0], "failure_category": first_failure[1],
                     "verified_count": verified, "assurance": "legacy_prefix_unverified" if legacy_seen else "hash_chain"}
+        if expected <= end:
+            return {"ok": False, "first_failing_sequence": expected, "failure_category": "missing_sequence",
+                    "verified_count": verified, "assurance": "legacy_prefix_unverified" if legacy_seen else "hash_chain"}
         return {"ok": True, "from_sequence": from_sequence, "through_sequence": end,
-                "verified_count": verified, "assurance": "legacy_prefix_unverified_and_hash_chain" if legacy_seen else "hash_chain"}
+                "verified_count": verified,
+                "assurance": "legacy_prefix_unverified_and_hash_chain" if legacy_seen else "hash_chain"}
 
     def import_batch(self, source_ledger_id, entries):
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
