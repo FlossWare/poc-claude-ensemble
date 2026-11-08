@@ -8,11 +8,12 @@ from operational_dashboard import OperationalDashboard
 class OperationalDashboardTests(unittest.TestCase):
     @patch("operational_dashboard._get_json")
     def test_service_reports_health_and_latency(self, get_json):
-        get_json.return_value = (200, {"ok": True, "service": "embedding"}, 2.5)
+        get_json.return_value = (200, {"ok": True, "service": "embedding", "token": "must-not-leak"}, 2.5)
         result = OperationalDashboard().service("embedding")
         self.assertEqual(result["status"], "healthy")
         self.assertEqual(result["health"]["latency_ms"], 2.5)
         self.assertEqual(result["id"], "embedding")
+        self.assertNotIn("token", result["health"])
 
     @patch("operational_dashboard._get_json")
     def test_unreachable_service_is_unavailable(self, get_json):
