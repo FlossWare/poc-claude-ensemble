@@ -45,7 +45,7 @@ class IngestionSourceTests(unittest.TestCase):
     def test_ingest_requires_a_valid_preview_token(self):
         with self.assertRaises(ingestion.IngestionError) as caught:
             ingestion.ingest({})
-        self.assertEqual(caught.exception.code, "preview_expired")
+        self.assertEqual(caught.exception.code, "preview_required")
 
     def test_preview_token_is_single_use_after_success(self):
         preview_result = ingestion.preview({"text": "single-use source"})
