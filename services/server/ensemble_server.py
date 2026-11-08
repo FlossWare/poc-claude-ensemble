@@ -628,7 +628,7 @@ class EnsembleApplication:
     def _interaction_history(self, cursor: int, limit: int = 100) -> tuple[int, dict[str, Any]]:
         query = urlencode({"event_type": "model_interaction", "limit": str(limit), "cursor": str(cursor)})
         status, raw = _forward(self.service_urls.get("memory"), "GET", "/history?" + query, None,
-                               _InteractionForwardHandler(handler))
+                               handler)
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -658,6 +658,7 @@ class EnsembleApplication:
                     if not raw_cursor.isdigit():
                         raise ValueError("cursor must be a non-negative integer")
                     cursor = int(raw_cursor)
+                setattr(handler, "_ensemble_response_started", True)
                 handler.send_response(HTTPStatus.OK)
                 handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 handler.send_header("Cache-Control", "no-cache, no-transform")
