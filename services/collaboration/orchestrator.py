@@ -623,7 +623,15 @@ class CollaborationOrchestrator:
             latency_ms=round((time.monotonic() - arbiter_started) * 1000, 2),
             round=self.state.round, status="success",
         )
-        adjudication = self._parse_adjudication(response.text)
+        try:
+            adjudication = self._parse_adjudication(response.text)
+        except Exception as exc:
+            self._emit_interaction(
+                "arbiter.failed", worker_id="arbiter", role="arbiter",
+                model=self.arbiter_model_id, round=self.state.round,
+                status="failed", error_type=type(exc).__name__,
+            )
+            raise
         self._emit_interaction(
             "arbiter.decided", worker_id="arbiter", role="arbiter",
             model=self.arbiter_model_id, round=self.state.round,
