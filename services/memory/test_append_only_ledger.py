@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
+
+import pytest
 from concurrent.futures import ThreadPoolExecutor
 
-from append_only_ledger import JsonlAppendOnlyLedger, digest
+from append_only_ledger import JsonlAppendOnlyLedger, LedgerImportError, digest
 
 
 def event(event_id, payload=None, event_type="prompt", source="poc"):
@@ -176,3 +178,38 @@ def test_legacy_prefix_checkpoint_is_explicitly_unverified(tmp_path):
     result = ledger.verify(from_sequence=2, checkpoint=checkpoint)
     assert result["ok"]
     assert "legacy_prefix_unverified" in result["assurance"]
+
+def test_timestamp_filters_and_export_are_read_only(tmp_path):
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    ledger.append(event("early"))
+    ledger.append(dict(event("late"), timestamp="2026-11-08T12:00:00Z"))
+    before = ledger.path.read_bytes()
+    result = ledger.pull(since="2026-11-08T00:00:00Z", until="2026-11-08T23:59:59Z")
+    assert [item["event_id"] for item in result["entries"]] == ["late"]
+    exported = ledger.export(limit=10)
+    assert len(exported["entries"]) == 2
+    assert ledger.path.read_bytes() == before
+
+
+def test_import_io_failure_reports_committed_prefix_and_retry_is_safe(tmp_path, monkeypatch):
+    source = JsonlAppendOnlyLedger(tmp_path / "source.jsonl")
+    destination = JsonlAppendOnlyLedger(tmp_path / "destination.jsonl")
+    batch = [source.append(event("io-1"))["entry"], source.append(event("io-2"))["entry"]]
+    import append_only_ledger
+    real_fsync = append_only_ledger.os.fsync
+    calls = 0
+    def fail_second_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated fsync failure")
+        return real_fsync(fd)
+    monkeypatch.setattr(append_only_ledger.os, "fsync", fail_second_fsync)
+    with pytest.raises(LedgerImportError) as error:
+        destination.import_batch(source.ledger_id, batch)
+    assert error.value.committed_prefix == 1
+    assert error.value.retry_after_source_sequence == 1
+    monkeypatch.setattr(append_only_ledger.os, "fsync", real_fsync)
+    retried = destination.import_batch(source.ledger_id, batch)
+    assert set(retried["duplicates"]) | set(retried["imported"]) == {"io-1", "io-2"}
+    assert destination.status()["head_sequence"] == 2
