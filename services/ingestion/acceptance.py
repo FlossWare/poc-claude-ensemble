@@ -104,7 +104,8 @@ def run(config: Config) -> dict[str, Any]:
     state: dict[str, Any] = {}
 
     def check(name: str, ok: bool, detail: str = "") -> None:
-        report["steps"].append({"name": name, "ok": bool(ok), "detail": detail})
+        # Detail explains a failure; passing checks report only their name.
+        report["steps"].append({"name": name, "ok": bool(ok), "detail": "" if ok else detail})
         if not ok:
             raise AcceptanceFailure(name, detail or "check failed")
 
