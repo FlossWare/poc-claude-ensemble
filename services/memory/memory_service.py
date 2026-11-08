@@ -21,13 +21,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import Counter
 from datetime import datetime, timezone
-from append_only_ledger import JsonlAppendOnlyLedger
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 # Allow execution from the repository without requiring package installation.
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+from append_only_ledger import JsonlAppendOnlyLedger
 from execution.context import ExecutionContext
 from shared.runtime_config import log_dir, memory_dir, runtime_dir, socket_path
 
