@@ -128,10 +128,10 @@ class JsonlAppendOnlyLedger:
             return ledger_id
 
     @contextmanager
-    def _locked(self):
+    def _locked(self, shared: bool = False):
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             try:
                 yield
             finally:
@@ -169,11 +169,15 @@ class JsonlAppendOnlyLedger:
                 legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
         return sequence, last_hash, legacy_digest, legacy_count
 
-    def status(self):
+    def _status_unlocked(self):
         head, last_hash, legacy_digest, legacy_count = self._head()
         return {"ledger_id": self.ledger_id, "head_sequence": head, "head_hash": last_hash,
                 "legacy_prefix_sequence_count": legacy_count,
                 "legacy_prefix_sha256": legacy_digest if legacy_count else None}
+
+    def status(self):
+        with self._locked(shared=True):
+            return self._status_unlocked()
 
     def _public_entry(self, sequence: int, record: dict[str, Any], raw: bytes) -> dict[str, Any]:
         if "schema_version" in record:
@@ -201,7 +205,7 @@ class JsonlAppendOnlyLedger:
         event = validate_event(value)
         with self._locked():
             head, previous_hash, legacy_digest, legacy_count = self._head()
-            integrity = self.verify()
+            integrity = self._verify_unlocked()
             if not integrity["ok"]:
                 raise RuntimeError("refusing append to an invalid ledger: " + integrity["failure_category"])
             for existing_sequence, existing, existing_raw in self._scan():
@@ -237,11 +241,15 @@ class JsonlAppendOnlyLedger:
             return {"status": "stored", "entry": record}
 
     def pull(self, after_sequence=0, through_sequence=None, limit=100, **filters):
+        with self._locked(shared=True):
+            return self._pull_unlocked(after_sequence, through_sequence, limit, **filters)
+
+    def _pull_unlocked(self, after_sequence=0, through_sequence=None, limit=100, **filters):
         if isinstance(after_sequence, bool) or not isinstance(after_sequence, int) or after_sequence < 0:
             raise ValueError("after_sequence must be a non-negative integer")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        state = self.status()
+        state = self._status_unlocked()
         head = state["head_sequence"]
         if after_sequence > head:
             raise ValueError("after_sequence exceeds head_sequence")
@@ -283,6 +291,10 @@ class JsonlAppendOnlyLedger:
         return self.pull(after_sequence, through_sequence, limit)
 
     def get(self, event_id):
+        with self._locked(shared=True):
+            return self._get_unlocked(event_id)
+
+    def _get_unlocked(self, event_id):
         for sequence, record, raw in self._scan():
             public = self._public_entry(sequence, record, raw)
             if public.get("event_id") == event_id:
@@ -290,8 +302,12 @@ class JsonlAppendOnlyLedger:
         return None
 
     def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
+        with self._locked(shared=True):
+            return self._verify_unlocked(from_sequence, through_sequence, checkpoint)
+
+    def _verify_unlocked(self, from_sequence=1, through_sequence=None, checkpoint=None):
         try:
-            state = self.status()
+            state = self._status_unlocked()
         except RuntimeError as exc:
             message = str(exc)
             try:
@@ -421,7 +437,7 @@ class JsonlAppendOnlyLedger:
                     duplicates.append(event_id)
                     continue
                 seen[event_id] = event
-                existing = self.get(event_id)
+                existing = self._get_unlocked(event_id)
                 if existing:
                     same = existing.get("payload") == event["payload"] and all(
                         existing.get(k) == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")
