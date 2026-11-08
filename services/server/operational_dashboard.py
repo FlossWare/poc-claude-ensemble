@@ -23,6 +23,7 @@ SERVICE_SPECS = (
     ("ranking", "Ranking", 8780, "Reciprocal-rank fusion."),
     ("knowledge", "Knowledge", 8781, "Sourced records and revision validation."),
     ("memory", "Memory", 8767, "Durable episodic memory and session history."),
+    ("ingestion", "Source ingestion", 8782, "URI, uploaded document, and inline-text ingestion."),
 )
 DEFAULT_TIMEOUT_SECONDS = 1.5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
