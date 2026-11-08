@@ -799,11 +799,27 @@ class EnsembleApplication:
                 except Exception:
                     LOG.exception("Unable to append model interaction event")
 
+            def record_interaction_failure(exc: Exception) -> None:
+                record_interaction({
+                    "event_id": str(uuid.uuid4()),
+                    "event_type": "model_interaction",
+                    "event_name": "interaction.failed",
+                    "source": "collaboration-orchestrator",
+                    "producer": "poc-claude-ensemble",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "correlation_id": execution_id,
+                    "execution_id": execution_id,
+                    "parent_event_id": interaction_parent_event_id,
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                })
+
             interaction_parent_event_id = str(uuid.uuid4())
             record_interaction({
                 "event_id": interaction_parent_event_id,
                 "event_type": "model_interaction",
                 "event_name": "interaction.started",
+                "status": "running",
                 "source": "collaboration-orchestrator",
                 "producer": "poc-claude-ensemble",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -834,6 +850,7 @@ class EnsembleApplication:
                 "event_id": str(uuid.uuid4()),
                 "event_type": "model_interaction",
                 "event_name": "interaction.completed",
+                "parent_event_id": interaction_parent_event_id,
                 "source": "collaboration-orchestrator",
                 "producer": "poc-claude-ensemble",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -975,12 +992,18 @@ class EnsembleApplication:
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.FORBIDDEN, {"ok": False, "error_code": "forbidden", "error": str(exc)})
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            if "record_interaction_failure" in locals():
+                record_interaction_failure(exc)
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.BAD_REQUEST, {"ok": False, "error_code": "invalid_request", "error": str(exc)})
         except ServiceUnavailable as exc:
+            if "record_interaction_failure" in locals():
+                record_interaction_failure(exc)
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error_code": "service_unavailable", "error": str(exc)})
         except Exception as exc:
+            if "record_interaction_failure" in locals():
+                record_interaction_failure(exc)
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.BAD_GATEWAY, {"ok": False, "error_code": "collaboration_failed", "error": str(exc)})
 
