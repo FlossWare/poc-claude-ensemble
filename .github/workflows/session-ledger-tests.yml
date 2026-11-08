@@ -15,6 +15,9 @@ on:
     paths:
       - "services/memory/**"
       - "services/server/**"
+      - "services/collaboration/**"
+      - "services/ingestion/**"
+      - "services/shared/**"
       - ".github/workflows/session-ledger-tests.yml"
 
 permissions:
