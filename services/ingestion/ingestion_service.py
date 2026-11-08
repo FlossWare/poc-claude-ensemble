@@ -302,7 +302,7 @@ def preview(body: dict[str, Any]) -> dict[str, Any]:
 
 def _claim_preview(preview_id: Any) -> dict[str, Any]:
     if not isinstance(preview_id, str) or not preview_id:
-        raise IngestionError("preview_id is required; preview the source before ingesting")
+        raise IngestionError("preview_id is required; preview the source before ingesting", 400, "preview_required")
     now = time.monotonic()
     with _PREVIEW_LOCK:
         item = _PREVIEW_CACHE.get(preview_id)
