@@ -154,7 +154,7 @@ class JsonlAppendOnlyLedger:
             }
             record["entry_sha256"] = envelope_hash(record)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("ab") as handle:
+            with self.path.open("a+b") as handle:
                 if handle.tell() and not self.path.read_bytes().endswith(b"\n"):
                     raise RuntimeError("cannot append: JSONL ledger has an unterminated final record")
                 handle.write(canonical(record) + b"\n")
