@@ -118,23 +118,27 @@ class JsonlAppendOnlyLedger:
                 yield sequence, record, raw
 
     def _head(self):
-        sequence, last_hash, legacy_digest = 0, None, hashlib.sha256(b"").hexdigest()
+        sequence, last_hash, legacy_digest, legacy_count = 0, None, hashlib.sha256(b"").hexdigest(), 0
         for sequence, record, raw in self._scan():
             if record.get("entry_sha256"):
                 last_hash = record["entry_sha256"]
             else:
-                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
-        return sequence, last_hash, legacy_digest
+                if "schema_version" in record or "sequence" in record or last_hash is not None:
+                    raise RuntimeError(f"ledger envelope is incomplete or legacy data follows hashed data at sequence {sequence}")
+                legacy_count += 1
+                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+        return sequence, last_hash, legacy_digest, legacy_count
 
     def status(self):
-        head, last_hash, legacy_digest = self._head()
+        head, last_hash, legacy_digest, legacy_count = self._head()
         return {"ledger_id": self.ledger_id, "head_sequence": head, "head_hash": last_hash,
-                "legacy_prefix_sha256": legacy_digest if head and last_hash is None else None}
+                "legacy_prefix_sequence_count": legacy_count,
+                "legacy_prefix_sha256": legacy_digest if legacy_count else None}
 
     def append(self, value: dict[str, Any]):
         event = validate_event(value)
         with self._locked():
-            head, previous_hash, legacy_digest = self._head()
+            head, previous_hash, legacy_digest, legacy_count = self._head()
             for _, existing, _ in self._scan():
                 if existing.get("event_id") == event["event_id"]:
                     same = (existing.get("payload") == event["payload"] and
@@ -275,7 +279,7 @@ class JsonlAppendOnlyLedger:
             raise ValueError("source_ledger_id and up to 1000 entries are required")
         imported, duplicates, last_source = [], [], 0
         with self._locked():
-            head, previous_hash, legacy_digest = self._head()
+            head, previous_hash, legacy_digest, legacy_count = self._head()
             previous = previous_hash or (legacy_digest if head else None)
             prepared, seen = [], {}
             for incoming in entries:
