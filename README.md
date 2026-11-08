@@ -176,6 +176,44 @@ The pipeline view is currently a capability map, not a live execution trace.
 Graph database and Thompson metrics are not yet included in this dashboard API.
 Operational views are read-only and do not restart services or mutate stored data. The separate Ingest workbench writes only after a successful preview and explicit operator confirmation.
 
+## Installing the local services
+
+The server installer installs and enables both the canonical REST gateway and
+the URI/document ingestion service as systemd user units. Run it from the
+deployed `shared/` directory (or from this repository's `services/`
+directory when testing a source checkout):
+
+```bash
+bash server/install.sh
+```
+
+The installer writes `claude-ensemble.service` and
+`claude-ingestion.service` under `~/.config/systemd/user`, reloads systemd,
+starts ingestion and the gateway, and waits for both the gateway readiness
+endpoint and ingestion `/health` endpoint. The ingestion unit is loopback-only,
+runs with a read-only home and system filesystem, and uses a private temporary
+directory for bounded PDF extraction. It does not enable anonymous FTP.
+
+To install and enable the units without starting them (for a top-level
+installer that controls startup ordering), set
+`POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1`. The top-level installer must
+then start `claude-ingestion.service` and `claude-ensemble.service` after
+their dependencies are available.
+
+Inspect the service with:
+
+```bash
+systemctl --user status claude-ingestion.service
+journalctl --user -u claude-ingestion.service -f
+curl -fsS http://127.0.0.1:8782/health | jq
+```
+
+The service is also runnable directly for development:
+
+```bash
+python3 services/ingestion/ingestion_service.py
+```
+
 ## Operational dashboard API
 
 The gateway exposes a read-only operational view of the POC service fleet at
