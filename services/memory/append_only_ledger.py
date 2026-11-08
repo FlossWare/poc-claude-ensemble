@@ -173,7 +173,7 @@ class JsonlAppendOnlyLedger:
         original = dict(record)
         event_id = record.get("event_id")
         if not isinstance(event_id, str) or not event_id:
-            event_id = "legacy-" + hashlib.sha256(raw.rstrip(b"\\r\\n")).hexdigest()
+            event_id = "legacy-" + hashlib.sha256(raw.rstrip(b"\r\n")).hexdigest()
         event_type = record.get("event_type", record.get("kind", "legacy.unknown"))
         source = record.get("source", record.get("producer", "legacy"))
         payload = record.get("payload", original)
@@ -250,17 +250,18 @@ class JsonlAppendOnlyLedger:
                 break
             scanned = sequence
             scanned_count += 1
+            public = self._public_entry(sequence, record, _)
             matches = True
-            if filters.get("event_id") and record.get("event_id") != filters["event_id"]: matches = False
-            if filters.get("event_type") and record.get("event_type", record.get("kind")) != filters["event_type"]: matches = False
-            if filters.get("source") and record.get("source", record.get("producer")) != filters["source"]: matches = False
-            if filters.get("correlation_id") and record.get("correlation_id") != filters["correlation_id"]: matches = False
-            stamp = record.get("timestamp", record.get("captured_at"))
+            if filters.get("event_id") and public.get("event_id") != filters["event_id"]: matches = False
+            if filters.get("event_type") and public.get("event_type") != filters["event_type"]: matches = False
+            if filters.get("source") and public.get("source") != filters["source"]: matches = False
+            if filters.get("correlation_id") and public.get("correlation_id") != filters["correlation_id"]: matches = False
+            stamp = public.get("timestamp", public.get("captured_at"))
             event_time = parse_time(stamp) if stamp else None
             if since and (event_time is None or event_time < since): matches = False
             if until and (event_time is None or event_time > until): matches = False
             if matches:
-                entries.append(self._public_entry(sequence, record, _))
+                entries.append(public)
             if scanned_count >= limit:
                 break
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head,
