@@ -145,9 +145,10 @@ class JsonlAppendOnlyLedger:
                     raise RuntimeError(f"session ledger malformed JSON at line {line_number}") from exc
                 if not isinstance(record, dict):
                     raise RuntimeError(f"session ledger record at line {line_number} is not an object")
-                if "sequence" in record and record["sequence"] != sequence:
-                    raise RuntimeError(f"session ledger sequence mismatch at line {line_number}")
-                yield sequence, record, raw
+                declared_sequence = record.get("sequence", sequence)
+                if isinstance(declared_sequence, bool) or not isinstance(declared_sequence, int) or declared_sequence < 1:
+                    declared_sequence = sequence
+                yield declared_sequence, record, raw
 
     def _head(self):
         sequence, last_hash, legacy_digest, legacy_count = 0, None, hashlib.sha256(b"").hexdigest(), 0
@@ -196,13 +197,14 @@ class JsonlAppendOnlyLedger:
             integrity = self.verify()
             if not integrity["ok"]:
                 raise RuntimeError("refusing append to an invalid ledger: " + integrity["failure_category"])
-            for _, existing, _ in self._scan():
-                if existing.get("event_id") == event["event_id"]:
-                    same = (digest(existing.get("payload")) == digest(event["payload"]) and
-                            existing.get("event_type", existing.get("kind")) == event["event_type"] and
-                            existing.get("source", existing.get("producer")) == event["source"] and
-                            existing.get("timestamp") == event["timestamp"] and
-                            existing.get("correlation_id") == event["correlation_id"])
+            for existing_sequence, existing, existing_raw in self._scan():
+                existing_public = self._public_entry(existing_sequence, existing, existing_raw)
+                if existing_public.get("event_id") == event["event_id"]:
+                    same = (digest(existing_public.get("payload")) == digest(event["payload"]) and
+                            existing_public.get("event_type") == event["event_type"] and
+                            existing_public.get("source") == event["source"] and
+                            existing_public.get("timestamp") == event["timestamp"] and
+                            existing_public.get("correlation_id") == event["correlation_id"])
                     if same:
                         return {"status": "duplicate", "entry": existing}
                     raise ValueError("event_id already exists with different content")
@@ -281,7 +283,17 @@ class JsonlAppendOnlyLedger:
         return None
 
     def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
-        state = self.status()
+        try:
+            state = self.status()
+        except RuntimeError as exc:
+            message = str(exc)
+            line_number = 1
+            match = __import__("re").search(r"line (\\d+)", message)
+            if match:
+                line_number = int(match.group(1))
+            return {"ok": False, "first_failing_sequence": line_number,
+                    "failure_category": "malformed_record", "verified_count": 0,
+                    "assurance": "legacy_unverified"}
         end = state["head_sequence"] if through_sequence is None else through_sequence
         if isinstance(from_sequence, bool) or not isinstance(from_sequence, int) or from_sequence < 1 or end > state["head_sequence"] or end < 0 or (end > 0 and end < from_sequence):
             raise ValueError("invalid verification range")
@@ -301,7 +313,10 @@ class JsonlAppendOnlyLedger:
         expected, verified, legacy_seen = from_sequence, 0, False
         legacy_digest = hashlib.sha256(b"").hexdigest()
         first_failure = None
-        for sequence, record, raw in self._scan():
+        seen_event_ids = set()
+        try:
+            scan = self._scan()
+            for sequence, record, raw in scan:
             if sequence > end:
                 break
             if sequence < from_sequence:
@@ -315,10 +330,14 @@ class JsonlAppendOnlyLedger:
                 continue
             if sequence != expected:
                 first_failure = (expected, "sequence_gap"); break
-            if "entry_sha256" not in record:
-                if "schema_version" in record or "sequence" in record:
-                    first_failure = (sequence, "invalid_envelope"); break
-                legacy_seen = True
+                public = self._public_entry(sequence, record, raw)
+                if public["event_id"] in seen_event_ids:
+                    first_failure = (sequence, "duplicate_event_id"); break
+                seen_event_ids.add(public["event_id"])
+                if "entry_sha256" not in record:
+                    if "schema_version" in record or "sequence" in record:
+                        first_failure = (sequence, "invalid_envelope"); break
+                    legacy_seen = True
                 verified += 1
                 expected += 1
                 legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
@@ -326,16 +345,19 @@ class JsonlAppendOnlyLedger:
                 continue
             try:
                 validate_envelope(record, self.ledger_id)
-            except ValueError as exc:
-                category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
-                first_failure = (sequence, category); break
-            if record.get("previous_entry_sha256") != previous:
-                first_failure = (sequence, "broken_hash_chain"); break
-            if not hmac.compare_digest(record.get("entry_sha256", ""), envelope_hash(record)):
-                first_failure = (sequence, "entry_hash_mismatch"); break
-            previous = record["entry_sha256"]
-            expected += 1
-            verified += 1
+                except ValueError as exc:
+                    category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
+                    first_failure = (sequence, category); break
+                if record.get("previous_entry_sha256") != previous:
+                    first_failure = (sequence, "broken_hash_chain"); break
+                previous = record["entry_sha256"]
+                expected += 1
+                verified += 1
+        except RuntimeError as exc:
+            message = str(exc)
+            match = __import__("re").search(r"line (\\d+)", message)
+            sequence = int(match.group(1)) if match else expected
+            first_failure = (sequence, "malformed_record")
         if first_failure:
             return {"ok": False, "first_failing_sequence": first_failure[0], "failure_category": first_failure[1],
                     "verified_count": verified, "assurance": "legacy_prefix_unverified" if legacy_seen else "hash_chain"}
