@@ -220,12 +220,19 @@ service on loopback port 8782. The request contract accepts a remote `uri`,
 an uploaded file (`filename` plus `content_base64`), or inline `text`.
 Transport resolution is separate from content extraction.
 
-The current POC connector registry supports HTTP and HTTPS on their standard
-ports. FTP, SFTP, and object-storage schemes are not advertised as supported
-until their fetchers are implemented and tested. Remote fetching rejects
-credentials in URIs, non-public DNS results, non-standard ports, unsafe
-redirect targets, oversized responses, and unsupported schemes. PDF extraction
-uses `pdftotext`; HTML extraction omits script/style content.
+The POC connector registry supports HTTP and HTTPS on their standard ports.
+Anonymous FTP is also available as an explicit opt-in because it transmits data
+without encryption. Enable it with
+`POC_CLAUDE_ENSEMBLE_INGESTION_ENABLE_FTP=true`; URI credentials are never
+accepted. The FTP connector pins both the control and passive data connections
+to the validated public peer address. SFTP and object-storage schemes remain
+unavailable until their connectors are implemented and tested.
+
+Remote fetching rejects credentials in URIs, non-public DNS results, unsafe
+redirect targets, oversized responses, and unsupported schemes. HTTP(S) is
+restricted to standard ports. PDF extraction uses `pdftotext`; HTML extraction
+omits script/style content. The health endpoint reports only transports that
+are actually enabled.
 
 - `GET /api/v1/ingestion/health` reports the supported schemes and extractors.
 - `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it. It returns a short-lived `preview_id` tied to the exact extracted content.
