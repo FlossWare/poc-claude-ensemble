@@ -1,0 +1,38 @@
+[Unit]
+Description=POC Claude Ensemble URI and Document Ingestion Service
+After=network.target claude-memory.service
+Wants=claude-memory.service
+
+[Service]
+Type=simple
+WorkingDirectory=%REPO_PATH%
+ExecStart=/usr/bin/env python3 %REPO_PATH%/ingestion/ingestion_service.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=poc-claude-ensemble-ingestion
+
+EnvironmentFile=-%h/.config/claude-ensemble/environment
+Environment="PATH=%h/.local/bin:%REPO_PATH%/tools:/usr/local/bin:/usr/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="POC_CLAUDE_ENSEMBLE_INGESTION_HOST=127.0.0.1"
+Environment="POC_CLAUDE_ENSEMBLE_INGESTION_PORT=8782"
+Environment="POC_CLAUDE_ENSEMBLE_MEMORY_URL=http://127.0.0.1:8767"
+
+# The service only fetches remote sources and forwards extracted content to
+# existing POC services. It does not need direct access to user home files.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=default.target
