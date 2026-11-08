@@ -45,6 +45,10 @@ DEFAULT_SERVICE_URLS = {
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_FORWARD_HOPS = 4
+# Ingestion runs several sequential downstream stages (chunk, embed, index), so it needs a
+# longer upstream budget than the default request timeout used for every other service.
+FORWARD_TIMEOUT_SECONDS = 5.0
+INGESTION_FORWARD_TIMEOUT_SECONDS = 180.0
 DEFAULT_METRICS_PAGE_SIZE = 100
 MAX_METRICS_PAGE_SIZE = 500
 DEFAULT_COLLAB_SOLVERS = ("sonnet", "haiku")
@@ -260,6 +264,7 @@ def _forward(
     path: str,
     body: bytes | None,
     handler: BaseHTTPRequestHandler,
+    timeout: float = FORWARD_TIMEOUT_SECONDS,
 ) -> tuple[int, bytes]:
     if not base:
         raise ServiceUnavailable("service is not configured")
@@ -300,7 +305,7 @@ def _forward(
     if remote_ensemble:
         request.add_header(FORWARD_MARKER, ", ".join(next_chain))
     try:
-        with urllib.request.urlopen(request, timeout=5.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         _invalidate_ensemble_target(base)
@@ -436,7 +441,9 @@ class EnsembleApplication:
             service_path = f"/{service}{remainder}" if remainder != "/" else f"/{service}"
             if parsed.query:
                 service_path += f"?{parsed.query}"
-            status, response = _forward(self.service_urls[service], handler.command, service_path, body, handler)
+            timeout = INGESTION_FORWARD_TIMEOUT_SECONDS if service == "ingestion" else FORWARD_TIMEOUT_SECONDS
+            status, response = _forward(self.service_urls[service], handler.command, service_path, body, handler,
+                                        timeout=timeout)
             setattr(handler, "_ensemble_response_started", True)
             handler.send_response(status)
             handler.send_header("Content-Type", "application/json")
