@@ -653,7 +653,7 @@ class EnsembleApplication:
                     raise ValueError("only one cursor parameter is supported")
                 raw_cursor = params.get("cursor", [None])[0]
                 last_event_id = handler.headers.get("Last-Event-ID", "")
-                if raw_cursor is None and last_event_id.isdigit():
+                if last_event_id.isdigit():
                     cursor = int(last_event_id) + 1
                 elif raw_cursor is None:
                     status, initial = self._interaction_history(handler, 0, 1)
