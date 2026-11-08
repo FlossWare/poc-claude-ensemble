@@ -406,7 +406,7 @@ def _body(handler) -> dict[str, Any]:
         raise IngestionError("Content-Length is required")
     length = int(raw_length)
     if length <= 0 or length > MAX_BODY_BYTES:
-        raise IngestionError("request body must be between 1 byte and 10 MiB", 413, "payload_too_large")
+        raise IngestionError("request body must be between 1 byte and 12 MiB", 413, "payload_too_large")
     value = json.loads(handler.rfile.read(length).decode("utf-8"))
     if not isinstance(value, dict):
         raise IngestionError("request body must be a JSON object")
