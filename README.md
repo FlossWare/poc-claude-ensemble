@@ -228,8 +228,8 @@ redirect targets, oversized responses, and unsupported schemes. PDF extraction
 uses `pdftotext`; HTML extraction omits script/style content.
 
 - `GET /api/v1/ingestion/health` reports the supported schemes and extractors.
-- `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it.
-- `POST /api/v1/ingestion/ingest` stores the source in Knowledge, chunks it,
+- `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it. It returns a short-lived `preview_id` tied to the exact extracted content.
+- `POST /api/v1/ingestion/ingest` accepts that `preview_id`, so it ingests exactly what was previewed rather than refetching a potentially changed remote resource. It stores the source in Knowledge, chunks it,
   embeds it, and updates the lexical and vector knowledge indexes.
 - `GET /api/v1/ingestion/history` returns bounded completed-ingestion history from
   the existing append-only session-events ledger.
