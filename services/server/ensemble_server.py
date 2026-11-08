@@ -629,7 +629,7 @@ class EnsembleApplication:
                 return
         _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "experiment endpoint not found"})
 
-    def _interaction_history(self, cursor: int, limit: int = 100) -> tuple[int, dict[str, Any]]:
+    def _interaction_history(self, handler: BaseHTTPRequestHandler, cursor: int, limit: int = 100) -> tuple[int, dict[str, Any]]:
         query = urlencode({"event_type": "model_interaction", "limit": str(limit), "cursor": str(cursor)})
         status, raw = _forward(self.service_urls.get("memory"), "GET", "/history?" + query, None,
                                handler)
@@ -656,7 +656,7 @@ class EnsembleApplication:
                 if raw_cursor is None and last_event_id.isdigit():
                     cursor = int(last_event_id) + 1
                 elif raw_cursor is None:
-                    status, initial = self._interaction_history(0, 1)
+                    status, initial = self._interaction_history(handler, 0, 1)
                     if status != HTTPStatus.OK:
                         _send(handler, status, initial)
                         return
@@ -675,7 +675,7 @@ class EnsembleApplication:
                 handler.wfile.write(b"retry: 1000\n")
                 handler.wfile.flush()
                 while True:
-                    status, payload = self._interaction_history(cursor, 100)
+                    status, payload = self._interaction_history(handler, cursor, 100)
                     if status != HTTPStatus.OK or payload.get("ok") is not True:
                         handler.wfile.write(b'event: error\ndata: {"error":"history unavailable"}\n\n')
                         handler.wfile.flush()
@@ -712,7 +712,7 @@ class EnsembleApplication:
             limit, cursor = int(raw_limit), int(raw_cursor)
             if limit < 1 or limit > 100:
                 raise ValueError("limit must be between 1 and 100")
-            status, payload = self._interaction_history(cursor, limit)
+            status, payload = self._interaction_history(handler, cursor, limit)
             _send(handler, status, payload)
         except ValueError as exc:
             _send(handler, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
