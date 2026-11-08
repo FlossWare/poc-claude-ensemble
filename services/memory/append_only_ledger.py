@@ -63,6 +63,13 @@ def validate_envelope(record: dict[str, Any], ledger_id: str) -> None:
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+class LedgerImportError(RuntimeError):
+    def __init__(self, message: str, committed_prefix: int, retry_after_source_sequence: int | None):
+        super().__init__(message)
+        self.committed_prefix = committed_prefix
+        self.retry_after_source_sequence = retry_after_source_sequence
+
+
 
 def parse_time(value: str | None):
     if value is None:
@@ -451,28 +458,38 @@ class JsonlAppendOnlyLedger:
             # cannot provide a multi-record database transaction; each fsynced
             # line is a committed prefix and retries are idempotent.
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("ab") as handle:
-                for incoming, event in prepared:
-                    head += 1
-                    provenance = {
-                        "source_ledger_id": source_ledger_id,
-                        "source_sequence": incoming.get("sequence"),
-                        "source_entry_sha256": incoming.get("entry_sha256"),
-                        "source_assurance": "entry_hash_verified" if incoming.get("entry_sha256") else "legacy_unverified",
-                        "source_provenance": incoming.get("provenance", {}),
-                    }
-                    record = {
-                        "schema_version": 1, "ledger_id": self.ledger_id, "sequence": head, **event,
-                        "captured_at": incoming.get("captured_at") or now_utc(),
-                        "payload_sha256": digest(event["payload"]), "previous_entry_sha256": previous,
-                        "provenance": provenance,
-                    }
-                    record["entry_sha256"] = envelope_hash(record)
-                    handle.write(canonical(record) + b"\\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                    previous = record["entry_sha256"]
-                    imported.append(event["event_id"])
+            committed_prefix = 0
+            retry_after_source_sequence = None
+            try:
+                with self.path.open("ab") as handle:
+                    for incoming, event in prepared:
+                        head += 1
+                        provenance = {
+                            "source_ledger_id": source_ledger_id,
+                            "source_sequence": incoming.get("sequence"),
+                            "source_entry_sha256": incoming.get("entry_sha256"),
+                            "source_assurance": "entry_hash_verified" if incoming.get("entry_sha256") else "legacy_unverified",
+                            "source_provenance": incoming.get("provenance", {}),
+                        }
+                        record = {
+                            "schema_version": 1, "ledger_id": self.ledger_id, "sequence": head, **event,
+                            "captured_at": incoming.get("captured_at") or now_utc(),
+                            "payload_sha256": digest(event["payload"]), "previous_entry_sha256": previous,
+                            "provenance": provenance,
+                        }
+                        record["entry_sha256"] = envelope_hash(record)
+                        handle.write(canonical(record) + b"\\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                        previous = record["entry_sha256"]
+                        imported.append(event["event_id"])
+                        committed_prefix += 1
+                        retry_after_source_sequence = incoming.get("sequence", retry_after_source_sequence)
+            except OSError as exc:
+                raise LedgerImportError(
+                    f"JSONL import stopped after committed prefix {committed_prefix}: {exc}",
+                    committed_prefix, retry_after_source_sequence,
+                ) from exc
         return {"imported": imported, "duplicates": duplicates, "head_sequence": head,
                 "committed_prefix": len(imported),
                 "retry_after_source_sequence": last_source if len(imported) == len(prepared) else (prepared[len(imported)][0].get("sequence") if len(imported) < len(prepared) else None)}
