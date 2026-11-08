@@ -231,7 +231,7 @@ uses `pdftotext`; HTML extraction omits script/style content.
 - `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it. It returns a short-lived `preview_id` tied to the exact extracted content.
 - `POST /api/v1/ingestion/ingest` accepts that `preview_id`, so it ingests exactly what was previewed rather than refetching a potentially changed remote resource. It stores the source in Knowledge, chunks it,
   embeds it, and updates the lexical and vector knowledge indexes.
-- `GET /api/v1/ingestion/history` returns bounded completed-ingestion history from
+- `GET /api/v1/ingestion/history` returns bounded ingestion lifecycle history (started, completed, rejected, and failed) from
   the existing append-only session-events ledger.
 
 Example preview:
@@ -250,8 +250,8 @@ python3 services/ingestion/ingestion_service.py
 
 The service is loopback-only and uses the existing Knowledge, Chunking,
 Embedding, Lexical, Vector, and Memory services. It does not create a parallel
-document store. Successful ingestion appends a metadata-only event to the
-existing session-events ledger.
+document store. Ingestion lifecycle events are appended as metadata-only records to the
+existing session-events ledger; event persistence is best-effort and never changes the ingestion result.
 
 ## Model interaction history
 
