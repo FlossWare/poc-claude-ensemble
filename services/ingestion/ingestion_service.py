@@ -8,6 +8,8 @@ does not change the request contract.
 from __future__ import annotations
 
 import base64
+import ftplib
+import mimetypes
 import hashlib
 import http.client
 import ipaddress
@@ -161,7 +163,57 @@ def _fetch_http(uri: str) -> tuple[bytes, str, str]:
     raise IngestionError("remote URI redirect limit exceeded", 400, "redirect_limit")
 
 
-FETCHERS = {"http": _fetch_http, "https": _fetch_http}
+class _PinnedFTP(ftplib.FTP):
+    """FTP client whose passive data channel is pinned to the validated peer IP."""
+
+    def __init__(self, pinned_host: str):
+        super().__init__(timeout=FETCH_TIMEOUT)
+        self.pinned_host = pinned_host
+
+    def makepasv(self):
+        _advertised_host, port = super().makepasv()
+        if not 1 <= port <= 65535:
+            raise IngestionError("FTP server returned an invalid passive data port", 502, "remote_ftp_error")
+        return self.pinned_host, port
+
+
+def _fetch_ftp(uri: str) -> tuple[bytes, str, str]:
+    if os.environ.get("POC_CLAUDE_ENSEMBLE_INGESTION_ENABLE_FTP", "").strip().lower() not in {"1", "true", "yes"}:
+        raise IngestionError("FTP transport is disabled; enable it explicitly to use unencrypted FTP", 403, "transport_disabled")
+    parsed = urllib.parse.urlsplit(uri)
+    if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        raise IngestionError("FTP URI must have a host and must not contain credentials", 400, "invalid_uri")
+    if parsed.port not in {None, 21} or parsed.fragment:
+        raise IngestionError("FTP supports only the standard port and no URI fragment", 403, "unsafe_uri")
+    host = parsed.hostname.encode("idna").decode("ascii")
+    address = _global_address(host)
+    remote_path = urllib.parse.unquote(parsed.path or "")
+    if not remote_path or any(ord(char) < 32 or ord(char) == 127 for char in remote_path):
+        raise IngestionError("FTP URI must identify a file path without control characters", 400, "invalid_uri")
+    client = _PinnedFTP(address)
+    try:
+        client.connect(address, 21, timeout=FETCH_TIMEOUT)
+        client.login()  # Anonymous access only; credentials in URIs are never accepted.
+        client.set_pasv(True)
+        payload = bytearray()
+
+        def collect(block: bytes) -> None:
+            if len(payload) + len(block) > MAX_SOURCE_BYTES:
+                raise IngestionError("remote resource exceeds the 8 MiB limit", 413, "source_too_large")
+            payload.extend(block)
+
+        client.retrbinary("RETR " + remote_path, collect, blocksize=64 * 1024)
+        media_type = mimetypes.guess_type(remote_path)[0] or "application/octet-stream"
+        return bytes(payload), media_type, uri
+    except IngestionError:
+        raise
+    except ftplib.all_errors as exc:
+        raise IngestionError("FTP retrieval failed", 502, "remote_ftp_error") from exc
+    finally:
+        client.close()
+
+
+FETCHERS = {"http": _fetch_http, "https": _fetch_http, "ftp": _fetch_ftp}
 
 
 def _extract(data: bytes, media_type: str, filename: str = "") -> tuple[str, str]:
@@ -478,7 +530,7 @@ class IngestionHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
         if parsed.path == "/health":
-            self._send(200, {"ok": True, "service": "ingestion", "schemes": ["http", "https"],
+            self._send(200, {"ok": True, "service": "ingestion", "schemes": ["http", "https"] + (["ftp"] if os.environ.get("POC_CLAUDE_ENSEMBLE_INGESTION_ENABLE_FTP", "").strip().lower() in {"1", "true", "yes"} else []),
                              "media_types": ["application/pdf", "text/html", "text/plain", "text/markdown"]})
             return
         if parsed.path == "/history":
