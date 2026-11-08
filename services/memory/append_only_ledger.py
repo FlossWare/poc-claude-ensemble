@@ -34,6 +34,8 @@ def now_utc() -> str:
 def parse_time(value: str | None):
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise ValueError("timestamps must be ISO-8601 strings")
     try:
         result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:
@@ -77,16 +79,20 @@ class JsonlAppendOnlyLedger:
         self.ledger_id = self._load_ledger_id()
 
     def _load_ledger_id(self) -> str:
-        if self.meta_path.exists():
-            value = json.loads(self.meta_path.read_text(encoding="utf-8"))
-            if isinstance(value, dict) and isinstance(value.get("ledger_id"), str):
-                return value["ledger_id"]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        ledger_id = str(uuid.uuid4())
-        temp = self.meta_path.with_suffix(self.meta_path.suffix + ".tmp")
-        temp.write_text(json.dumps({"ledger_id": ledger_id}, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(temp, self.meta_path)
-        return ledger_id
+        with self._locked():
+            if self.meta_path.exists():
+                value = json.loads(self.meta_path.read_text(encoding="utf-8"))
+                if isinstance(value, dict) and isinstance(value.get("ledger_id"), str) and value["ledger_id"]:
+                    return value["ledger_id"]
+                raise RuntimeError("ledger metadata file is invalid")
+            ledger_id = str(uuid.uuid4())
+            temp = self.meta_path.with_name(self.meta_path.name + "." + uuid.uuid4().hex + ".tmp")
+            with temp.open("w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"ledger_id": ledger_id}, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, self.meta_path)
+            return ledger_id
 
     @contextmanager
     def _locked(self):
@@ -141,7 +147,7 @@ class JsonlAppendOnlyLedger:
             head, previous_hash, legacy_digest, legacy_count = self._head()
             for _, existing, _ in self._scan():
                 if existing.get("event_id") == event["event_id"]:
-                    same = (existing.get("payload") == event["payload"] and
+                    same = (digest(existing.get("payload")) == digest(event["payload"]) and
                             existing.get("event_type", existing.get("kind")) == event["event_type"] and
                             existing.get("source", existing.get("producer")) == event["source"] and
                             existing.get("timestamp") == event["timestamp"] and
@@ -176,8 +182,8 @@ class JsonlAppendOnlyLedger:
         if after_sequence > head:
             raise ValueError("after_sequence exceeds head_sequence")
         upper = head if through_sequence is None else through_sequence
-        if isinstance(upper, bool) or not isinstance(upper, int) or not 0 <= upper <= head:
-            raise ValueError("through_sequence must be between 0 and head_sequence")
+        if isinstance(upper, bool) or not isinstance(upper, int) or not 0 <= upper <= head or upper < after_sequence:
+            raise ValueError("through_sequence must be between after_sequence and head_sequence")
         since, until = parse_time(filters.get("since")), parse_time(filters.get("until"))
         if since and until and since > until:
             raise ValueError("since must not be later than until")
