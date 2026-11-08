@@ -44,6 +44,11 @@ PROFILES = {
 }
 EMBED_BATCH = 64
 
+PREVIEW_TTL_SECONDS = 600
+PREVIEW_CACHE_LIMIT = 64
+_PREVIEW_CACHE: dict[str, dict[str, Any]] = {}
+_PREVIEW_LOCK = __import__("threading").Lock()
+
 KNOWLEDGE_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_KNOWLEDGE_URL", "http://127.0.0.1:8781")
 CHUNKING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_CHUNKING_URL", "http://127.0.0.1:8775")
 EMBEDDING_URL = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBEDDING_URL", "http://127.0.0.1:8770")
@@ -269,8 +274,23 @@ def _post_json(base: str, path: str, payload: dict[str, Any], timeout: int = 60)
 
 def preview(body: dict[str, Any]) -> dict[str, Any]:
     source = resolve_source(body)
+    preview_id = str(uuid4())
+    now = time.monotonic()
+    with _PREVIEW_LOCK:
+        expired = [key for key, item in _PREVIEW_CACHE.items() if item["expires_at"] <= now]
+        for key in expired:
+            _PREVIEW_CACHE.pop(key, None)
+        while len(_PREVIEW_CACHE) >= PREVIEW_CACHE_LIMIT:
+            _PREVIEW_CACHE.pop(next(iter(_PREVIEW_CACHE)))
+        _PREVIEW_CACHE[preview_id] = {
+            "source": source,
+            "expires_at": now + PREVIEW_TTL_SECONDS,
+            "in_progress": False,
+        }
     return {
         "ok": True,
+        "preview_id": preview_id,
+        "preview_expires_in_seconds": PREVIEW_TTL_SECONDS,
         "source": {key: source[key] for key in ("source_id", "locator", "origin", "title", "media_type", "content_sha256")},
         "characters": len(source["text"]),
         "preview": source["text"][:3000],
@@ -279,8 +299,35 @@ def preview(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _claim_preview(preview_id: Any) -> dict[str, Any]:
+    if not isinstance(preview_id, str) or not preview_id:
+        raise IngestionError("preview_id is required; preview the source before ingesting")
+    now = time.monotonic()
+    with _PREVIEW_LOCK:
+        item = _PREVIEW_CACHE.get(preview_id)
+        if item is None or item["expires_at"] <= now:
+            _PREVIEW_CACHE.pop(preview_id, None)
+            raise IngestionError("source preview is missing or expired; preview it again", 410, "preview_expired")
+        if item["in_progress"]:
+            raise IngestionError("this source preview is already being ingested", 409, "ingestion_in_progress")
+        item["in_progress"] = True
+        return item["source"]
+
+
+def _release_preview(preview_id: str, *, consume: bool) -> None:
+    with _PREVIEW_LOCK:
+        item = _PREVIEW_CACHE.get(preview_id)
+        if item is None:
+            return
+        if consume:
+            _PREVIEW_CACHE.pop(preview_id, None)
+        else:
+            item["in_progress"] = False
+
+
 def ingest(body: dict[str, Any]) -> dict[str, Any]:
-    source = resolve_source(body)
+    preview_id = body.get("preview_id")
+    source = _claim_preview(preview_id)
     ingestion_id = str(uuid4())
     _record_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
     content = source["text"]
@@ -297,6 +344,7 @@ def ingest(body: dict[str, Any]) -> dict[str, Any]:
         })
         if knowledge.get("decision") not in {"accepted", "duplicate"}:
             _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
+            _release_preview(preview_id, consume=True)
             return {"ok": True, "status": "rejected", "ingestion_id": ingestion_id,
                     "source_id": source["source_id"], "decision": knowledge.get("decision"),
                     "chunks": 0, "vectors": 0}
@@ -344,10 +392,12 @@ def ingest(body: dict[str, Any]) -> dict[str, Any]:
             source, ingestion_id, "ingestion.completed", status="completed",
             chunks=len(chunks), vectors=stored, content_sha256=content_sha,
         )
+        _release_preview(preview_id, consume=True)
         return {"ok": True, "status": "completed", "ingestion_id": ingestion_id,
                 "source_id": source["source_id"], "decision": knowledge.get("decision"),
                 "chunks": len(chunks), "vectors": stored, "content_sha256": content_sha}
     except Exception as exc:
+        _release_preview(preview_id, consume=False)
         _record_ingestion_event(
             source, ingestion_id, "ingestion.failed", status="failed",
             error_type=type(exc).__name__,
