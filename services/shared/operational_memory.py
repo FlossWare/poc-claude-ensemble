@@ -118,3 +118,42 @@ class OperationalMemoryWriter:
                     f"required Thompson state persistence failed: {exc}"
                 ) from exc
             return False
+
+
+    def append_ledger_event(self, event_id: str, entry: Mapping[str, Any]) -> bool:
+        """Append one idempotent event to the existing session-events ledger.
+
+        This is deliberately a narrow producer API. The Memory service remains
+        the ledger authority; this writer never opens or edits the JSONL file.
+        """
+        if not isinstance(event_id, str) or not event_id.strip() or len(event_id) > 256:
+            raise ValueError("event_id must be a non-empty string of at most 256 characters")
+        if not isinstance(entry, Mapping) or not entry:
+            raise ValueError("entry must be a non-empty mapping")
+        record = dict(entry)
+        record.setdefault("event_type", "model_interaction")
+        record.setdefault("source", "collaboration-orchestrator")
+        record.setdefault("producer", "poc-claude-ensemble")
+        body = json.dumps(
+            {"name": "session_events", "event_id": event_id, "entry": record},
+            sort_keys=True,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/append-once",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            return bool(result.get("ok") and result.get("status") in {"stored", "duplicate"})
+        except urllib.error.HTTPError as exc:
+            if exc.code == 409:
+                logger.error("Interaction ledger event ID conflict: %s", event_id)
+                return False
+            logger.warning("Interaction ledger append failed for %s: HTTP %s", event_id, exc.code)
+            return False
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            logger.warning("Interaction ledger append failed for %s: %s", event_id, exc)
+            return False
