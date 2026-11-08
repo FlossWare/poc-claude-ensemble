@@ -130,7 +130,7 @@ def test_shared_contract_fixture(tmp_path):
     page = ledger.pull(limit=fixture["expectations"]["max_page_size"])
     assert [item["sequence"] for item in page["entries"]] == [1, 2]
     assert page["next_after_sequence"] == 2 and page["has_more"]
-    filtered = ledger.pull(event_type=fixture["expectations"]["filter_event_type"], limit=2)
+    filtered = ledger.pull(event_type=fixture["expectations"]["filter_event_type"], limit=fixture["expectations"]["filter_scan_limit"])
     assert [item["event_id"] for item in filtered["entries"]] == fixture["expectations"]["filtered_event_ids"]
     assert [item["event_id"] for item in ledger.replay(limit=10)["entries"]] == fixture["expectations"]["event_ids"]
     assert ledger.verify()["ok"]
