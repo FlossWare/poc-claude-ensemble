@@ -18,6 +18,7 @@ class InteractionEventTests(unittest.TestCase):
             arbiter=object(),
             reviewers={},
             execution_id="execution-123",
+            parent_event_id="parent-1",
             event_sink=events.append,
         )
 
@@ -32,6 +33,7 @@ class InteractionEventTests(unittest.TestCase):
         self.assertEqual(event["execution_id"], "execution-123")
         self.assertEqual(event["correlation_id"], "execution-123")
         self.assertEqual(event["worker_id"], "worker-a")
+        self.assertEqual(event["parent_event_id"], "parent-1")
         self.assertTrue(event["event_id"])
         self.assertTrue(event["timestamp"])
 
