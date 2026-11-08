@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 class IngestionUpstreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._send(200, {"ok": True, "service": "ingestion", "schemes": ["http", "https"]})
+        if self.path == "/health":
+            self._send(200, {"ok": True, "service": "ingestion", "schemes": ["http", "https"]})
+        elif self.path.startswith("/history?"):
+            self._send(200, {"ok": True, "entries": [{"event_name": "ingestion.completed"}]})
+        else:
+            self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -59,6 +64,11 @@ class IngestionGatewayRouteTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=3) as response:
                 preview = json.loads(response.read())
             self.assertEqual(preview["preview"], "https://example.org/report.pdf")
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{gateway.server_port}/api/v1/ingestion/history?limit=10", timeout=3
+            ) as response:
+                history = json.loads(response.read())
+            self.assertEqual(history["entries"][0]["event_name"], "ingestion.completed")
         finally:
             gateway.shutdown()
             gateway.server_close()
