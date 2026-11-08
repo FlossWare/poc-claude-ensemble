@@ -1,6 +1,12 @@
+import sys
 import unittest
+from pathlib import Path
 
-from orchestrator import CollaborationOrchestrator
+services_root = Path(__file__).resolve().parents[1]
+if str(services_root) not in sys.path:
+    sys.path.insert(0, str(services_root))
+
+from collaboration import CollaborationOrchestrator
 
 
 class InteractionEventTests(unittest.TestCase):
