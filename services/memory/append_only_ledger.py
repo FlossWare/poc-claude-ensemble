@@ -32,7 +32,7 @@ def validate_envelope(record: dict[str, Any], ledger_id: str) -> None:
                 "previous_entry_sha256", "entry_sha256", "provenance"}
     if not isinstance(record, dict) or not required.issubset(record):
         raise ValueError("invalid ledger envelope: required field missing")
-    if record["schema_version"] != 1 or isinstance(record["sequence"], bool) or not isinstance(record["sequence"], int) or record["sequence"] < 1:
+    if isinstance(record["schema_version"], bool) or record["schema_version"] != 1 or isinstance(record["sequence"], bool) or not isinstance(record["sequence"], int) or record["sequence"] < 1:
         raise ValueError("invalid ledger envelope version or sequence")
     if record["ledger_id"] != ledger_id:
         raise ValueError("ledger envelope identity mismatch")
@@ -47,9 +47,16 @@ def validate_envelope(record: dict[str, Any], ledger_id: str) -> None:
         raise ValueError("invalid ledger envelope correlation_id")
     if not isinstance(record["provenance"], dict):
         raise ValueError("invalid ledger envelope provenance")
+    for field in ("payload_sha256", "entry_sha256"):
+        value = record[field]
+        if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("invalid ledger envelope hash field: " + field)
+    previous_hash = record["previous_entry_sha256"]
+    if previous_hash is not None and (not isinstance(previous_hash, str) or len(previous_hash) != 64 or any(char not in "0123456789abcdef" for char in previous_hash)):
+        raise ValueError("invalid ledger envelope previous hash")
     if record["payload_sha256"] != digest(record["payload"]):
         raise ValueError("payload hash mismatch")
-    if not isinstance(record["entry_sha256"], str) or not hmac.compare_digest(record["entry_sha256"], envelope_hash(record)):
+    if not hmac.compare_digest(record["entry_sha256"], envelope_hash(record)):
         raise ValueError("entry hash mismatch")
 
 
