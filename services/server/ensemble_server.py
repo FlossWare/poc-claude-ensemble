@@ -981,6 +981,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, **kwargs: 
 
 class EnsembleRequestHandler(BaseHTTPRequestHandler):
     server_version = "ClaudeEnsembleREST/1"
+    protocol_version = "HTTP/1.1"
     def do_GET(self): self.server.application.handle(self)  # type: ignore[attr-defined]
     def do_POST(self): self.server.application.handle(self)  # type: ignore[attr-defined]
     def do_PUT(self): self.server.application.handle(self)  # type: ignore[attr-defined]
