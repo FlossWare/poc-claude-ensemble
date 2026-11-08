@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 
-from append_only_ledger import JsonlAppendOnlyLedger, LedgerImportError, digest
+from append_only_ledger import JsonlAppendOnlyLedger, LedgerImportError, digest, envelope_hash
 
 
 def event(event_id, payload=None, event_type="prompt", source="poc"):
@@ -104,6 +104,7 @@ def test_import_is_idempotent_and_conflicts_are_preflighted(tmp_path):
     before = ledger.status()["head_sequence"]
     conflict = dict(second, payload={"changed": True})
     conflict["payload_sha256"] = digest(conflict["payload"])
+    conflict["entry_sha256"] = envelope_hash(conflict)
     try:
         ledger.import_batch(source.ledger_id, [event("would-be-prefix"), conflict])
         assert False, "expected conflict"
