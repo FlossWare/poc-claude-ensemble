@@ -672,24 +672,24 @@ class EnsembleApplication:
                 handler.send_header("Connection", "keep-alive")
                 handler.send_header("X-Accel-Buffering", "no")
                 handler.end_headers()
-                handler.wfile.write(b"retry: 1000\\n")
+                handler.wfile.write(b"retry: 1000\n")
                 handler.wfile.flush()
                 while True:
                     status, payload = self._interaction_history(cursor, 100)
                     if status != HTTPStatus.OK or payload.get("ok") is not True:
-                        handler.wfile.write(b"event: error\\ndata: {\\"error\\":\\"history unavailable\\"}\\n\\n")
+                        handler.wfile.write(b"event: error\ndata: {\\"error\\":\\"history unavailable\\"}\n\n")
                         handler.wfile.flush()
                         return
                     entries = payload.get("entries", [])
                     for sequence, entry in enumerate(entries, start=cursor):
                         data = json.dumps(entry, sort_keys=True, ensure_ascii=False)
-                        frame = f"id: {sequence}\\nevent: model_interaction\\ndata: {data}\\n\\n"
+                        frame = f"id: {sequence}\nevent: model_interaction\ndata: {data}\n\n"
                         handler.wfile.write(frame.encode("utf-8"))
                     cursor += len(entries)
                     if entries:
                         handler.wfile.flush()
                     else:
-                        handler.wfile.write(b": keep-alive\\n\\n")
+                        handler.wfile.write(b": keep-alive\n\n")
                         handler.wfile.flush()
                         time.sleep(1.0)
             except (BrokenPipeError, ConnectionResetError, OSError):
