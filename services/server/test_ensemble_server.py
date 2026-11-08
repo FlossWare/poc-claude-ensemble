@@ -172,6 +172,17 @@ def run():
                                memory_url=f"http://127.0.0.1:{memory.http_port}")
         kt=threading.Thread(target=gateway.serve_forever,daemon=True); kt.start()
         try:
+            # The gateway serves the graphical Control Center separately from its JSON API.
+            for dashboard_path in ("/", "/dashboard", "/dashboard/"):
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{gateway.server_port}{dashboard_path}", timeout=3
+                ) as response:
+                    dashboard_html = response.read().decode("utf-8")
+                    assert response.status == 200
+                    assert response.headers.get_content_type() == "text/html"
+                    assert "POC Ensemble" in dashboard_html
+                    assert "Processing pipeline" in dashboard_html
+
             # A failure after a forwarded response starts must not send a second status line.
             import server.ensemble_server as boundary_module
             class BrokenWriter:

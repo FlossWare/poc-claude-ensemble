@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>POC Ensemble · Control Center</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e8edf5;background:#0b1020;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 15% 0%,#172647 0,transparent 42%),#0b1020}
+button{font:inherit;color:inherit;cursor:pointer}.shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+aside{padding:28px 18px;border-right:1px solid #202b40;background:#0c1425}.brand{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:#8ea6cc;font-weight:750}.brand strong{display:block;color:#f4f7fc;font-size:19px;letter-spacing:0;margin-top:7px}
+nav{display:grid;gap:7px;margin-top:42px}nav button{border:0;text-align:left;padding:12px 14px;border-radius:9px;background:transparent;color:#9eabc1}nav button.active,nav button:hover{background:#1a2943;color:#fff}
+.aside-note{position:sticky;top:calc(100vh - 110px);margin-top:52px;color:#71819b;font-size:12px;line-height:1.5}
+main{padding:34px clamp(18px,4vw,54px);max-width:1500px;width:100%;margin:auto}
+.top{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:28px}.eyebrow{color:#8da6cc;text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:700}
+h1{font-size:clamp(25px,3vw,36px);margin:7px 0 5px;letter-spacing:-.035em}.sub{color:#91a0b8;font-size:14px}
+.actions{display:flex;gap:9px;align-items:center}.btn{border:1px solid #31415d;background:#14213a;padding:9px 13px;border-radius:8px;font-size:13px}.btn:hover{background:#203453}.stamp{font-size:12px;color:#8493ab}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}.panel{background:linear-gradient(145deg,#151f33,#111a2b);border:1px solid #26344d;border-radius:13px;padding:18px;min-width:0}.metric-label{font-size:12px;color:#92a2bc}.metric{font-size:30px;font-weight:720;letter-spacing:-.04em;margin:9px 0 4px}.metric-foot{font-size:12px;color:#71829e}.section{margin-top:18px}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:16px;margin:0}.muted{color:#8494ad;font-size:12px}
+.content{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);gap:14px}.service-list{display:grid;gap:0}.service{display:grid;grid-template-columns:minmax(130px,1fr) 100px 90px;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid #26344a;font-size:13px}.service:last-child{border:0}.service-name{font-weight:620}.service-role{font-size:11px;color:#8292ab;margin-top:3px}.status{display:inline-flex;align-items:center;gap:7px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#9cabc2}.dot{width:7px;height:7px;border-radius:50%;background:#718096}.healthy .dot{background:#48d6a0;box-shadow:0 0 9px #48d6a055}.degraded .dot{background:#f2b45f}.latency{text-align:right;color:#a4b1c6;font-variant-numeric:tabular-nums}
+.storage-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #26344a;font-size:13px}.storage-row:last-child{border:0}.storage-row span:last-child{font-weight:650;font-variant-numeric:tabular-nums}
+.callout{border:1px dashed #3a4b68;border-radius:10px;padding:15px;color:#a4b2c8;font-size:12px;line-height:1.55}.callout strong{color:#e6edf8}.error{color:#ffb5a9}.hidden{display:none}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:12px 9px;border-bottom:1px solid #26344a}th{color:#8fa0ba;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.pipeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.stage{border:1px solid #30405b;background:#111c30;border-radius:10px;padding:14px;min-height:92px}.stage b{display:block;font-size:13px;margin-bottom:8px}.stage small{color:#8495af;line-height:1.4}
+footer{margin-top:24px;color:#687993;font-size:11px}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.content{grid-template-columns:1fr}.pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){.shell{grid-template-columns:1fr}aside{padding:16px;border-right:0;border-bottom:1px solid #202b40}.brand strong{display:inline;margin-left:8px}nav{display:flex;overflow:auto;margin-top:16px}nav button{white-space:nowrap;padding:9px 11px}.aside-note{display:none}main{padding:22px 15px}.top{align-items:flex-start;flex-direction:column}.actions{width:100%;justify-content:space-between}.grid{gap:9px}.panel{padding:14px}.metric{font-size:25px}.service{grid-template-columns:minmax(110px,1fr) 85px 65px;gap:6px}.pipeline{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside>
+  <div class="brand">FlossWare<strong>POC Ensemble</strong></div>
+  <nav aria-label="Control Center sections">
+    <button class="active" data-view="overview">Overview</button>
+    <button data-view="services">Services</button>
+    <button data-view="storage">Storage</button>
+    <button data-view="pipeline">Pipeline</button>
+  </nav>
+  <div class="aside-note">Read-only operational view<br>Data comes from the running POC gateway.</div>
+</aside>
+<main>
+  <header class="top">
+    <div><div class="eyebrow">Control Center / POC</div><h1 id="view-title">System overview</h1><div class="sub">A live view of the local service fleet and its exposed metrics.</div></div>
+    <div class="actions"><span class="stamp" id="updated">Waiting for first refresh</span><button class="btn" id="refresh">↻ Refresh</button></div>
+  </header>
+  <section id="overview">
+    <div class="grid">
+      <article class="panel"><div class="metric-label">Healthy services</div><div class="metric" id="healthy">—</div><div class="metric-foot" id="health-foot">of discovered services</div></article>
+      <article class="panel"><div class="metric-label">Degraded</div><div class="metric" id="degraded">—</div><div class="metric-foot">Responding with an unhealthy result</div></article>
+      <article class="panel"><div class="metric-label">Unavailable</div><div class="metric" id="unavailable">—</div><div class="metric-foot">No usable health response</div></article>
+      <article class="panel"><div class="metric-label">Vector records</div><div class="metric" id="vectors">—</div><div class="metric-foot" id="collections">Collection count unavailable</div></article>
+    </div>
+    <div class="content">
+      <section class="panel"><div class="section-head"><h2>Service health</h2><span class="muted" id="service-count">—</span></div><div class="service-list" id="service-preview"><div class="muted">Loading service inventory…</div></div></section>
+      <section class="panel"><div class="section-head"><h2>Storage snapshot</h2><span class="muted">Read-only</span></div><div id="storage-preview"><div class="muted">Loading storage metrics…</div></div></section>
+    </div>
+  </section>
+  <section id="services" class="hidden section"><div class="panel"><div class="section-head"><h2>Service inventory</h2><span class="muted">Health endpoint and probe latency</span></div><div id="service-table"></div></div></section>
+  <section id="storage" class="hidden section"><div class="content"><div class="panel"><div class="section-head"><h2>Vector database</h2><span class="muted">ChromaDB</span></div><div id="storage-detail"></div></div><div class="panel"><h2 style="font-size:16px;margin-top:0">Storage coverage</h2><div class="callout">Only metrics returned by a service are displayed. Graph database inventory and Thompson state are not currently part of the operational dashboard API, so they are intentionally not represented as live metrics here.</div></div></div></section>
+  <section id="pipeline" class="hidden section"><div class="panel"><div class="section-head"><h2>Processing pipeline</h2><span class="muted">Capability map, not a live trace</span></div><div class="pipeline">
+    <div class="stage"><b>1 · Tokenization</b><small>Versioned analyzers</small></div><div class="stage"><b>2 · Chunking</b><small>Deterministic chunk profiles</small></div><div class="stage"><b>3 · Embedding</b><small>Nomic 768-dimensional vectors</small></div><div class="stage"><b>4 · Indexing</b><small>Source revisions and tombstones</small></div>
+    <div class="stage"><b>5 · Retrieval</b><small>Vector and lexical search</small></div><div class="stage"><b>6 · Hybrid</b><small>Reciprocal-rank fusion</small></div><div class="stage"><b>7 · Reranking</b><small>Cross-encoder relevance scoring</small></div><div class="stage"><b>8 · Knowledge</b><small>Sourced records and provenance</small></div>
+  </div><div class="callout" style="margin-top:14px"><strong>Live execution tracing is not yet exposed.</strong> This view documents the configured processing stages. It does not imply that a particular document or query is currently moving through them. Durable ingestion-run accounting and per-stage trace events are needed for a true pipeline inspector.</div></div></section>
+  <footer>POC Control Center · Read-only · Refreshes every 30 seconds · No service controls or data mutations</footer>
+</main>
+</div>
+<script>
+const API='/api/v1';
+const $=id=>document.getElementById(id);
+let snapshot=null, inventory=null;
+function fmt(n){return Number.isFinite(n)?n.toLocaleString():'—'}
+function statusClass(s){return s==='healthy'?'healthy':s==='degraded'?'degraded':'unavailable'}
+function serviceMarkup(s){return '<div class="service"><div><div class="service-name">'+esc(s.name)+'</div><div class="service-role">'+esc(s.role)+'</div></div><span class="status '+statusClass(s.status)+'"><i class="dot"></i>'+esc(s.status)+'</span><span class="latency">'+(s.health&&s.health.latency_ms!=null?fmt(s.health.latency_ms)+' ms':'—')+'</span></div>'}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function storageMarkup(st){if(!st||!st.available)return '<div class="callout">Vector metrics unavailable. '+esc(st?.reason||'The vector service has not returned collection metrics.')+'</div>';const rows=Object.entries(st.collection_counts||{}).map(([name,count])=>'<div class="storage-row"><span>'+esc(name)+'</span><span>'+fmt(count)+'</span></div>').join('');return '<div class="storage-row"><span>Collections</span><span>'+fmt(st.collections)+'</span></div><div class="storage-row"><span>Total vectors</span><span>'+fmt(st.vectors)+'</span></div>'+ (rows?'<div class="muted" style="margin:15px 0 5px">By collection</div>'+rows:'')}
+async function refresh(){ $('refresh').disabled=true;$('updated').textContent='Refreshing…';try{const [d,s]=await Promise.all([fetch(API+'/dashboard',{cache:'no-store'}),fetch(API+'/services',{cache:'no-store'})]);if(!d.ok||!s.ok)throw new Error('Gateway returned HTTP '+(!d.ok?d.status:s.status));snapshot=await d.json();inventory=await s.json();render();$('updated').textContent='Updated '+new Date().toLocaleTimeString()}catch(e){$('updated').innerHTML='<span class="error">Gateway unavailable: '+esc(e.message)+'</span>'}finally{$('refresh').disabled=false}}
+function render(){const c=snapshot.services||{};$('healthy').textContent=fmt(c.healthy);$('degraded').textContent=fmt(c.degraded);$('unavailable').textContent=fmt(c.unavailable);$('health-foot').textContent='of '+fmt(c.total)+' discovered services';const st=snapshot.storage||{};$('vectors').textContent=st.available?fmt(st.vectors):'—';$('collections').textContent=st.available?fmt(st.collections)+' collections':'Vector metrics unavailable';const list=inventory.services||[];$('service-count').textContent=list.length+' services';$('service-preview').innerHTML=list.slice(0,7).map(serviceMarkup).join('')||'<div class="muted">No services discovered.</div>';$('service-table').innerHTML='<table><thead><tr><th>Service</th><th>Status</th><th>HTTP</th><th>Latency</th></tr></thead><tbody>'+list.map(s=>'<tr><td><strong>'+esc(s.name)+'</strong><div class="muted">'+esc(s.role)+'</div></td><td><span class="status '+statusClass(s.status)+'"><i class="dot"></i>'+esc(s.status)+'</span></td><td>'+fmt(s.health?.http_status)+'</td><td>'+ (s.health?.latency_ms!=null?fmt(s.health.latency_ms)+' ms':'—')+'</td></tr>').join('')+'</tbody></table>';$('storage-preview').innerHTML=storageMarkup(st);$('storage-detail').innerHTML=storageMarkup(st)}
+function show(view){document.querySelectorAll('main>section[id]').forEach(s=>s.classList.toggle('hidden',s.id!==view));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));$('view-title').textContent=({overview:'System overview',services:'Service inventory',storage:'Storage',pipeline:'Processing pipeline'})[view]}
+document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>show(b.dataset.view)));$('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
+</script>
+</body>
+</html>

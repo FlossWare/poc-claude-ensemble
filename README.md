@@ -158,6 +158,23 @@ The services run from `shared/` in the working deployment and are copied here as
 - Not yet built: worker/arbiter quality monitoring.
 
 
+## Graphical Control Center
+
+The gateway serves a read-only browser interface at
+`http://127.0.0.1:8080/dashboard` (also available at `/`). It uses the
+operational dashboard REST API below and refreshes the service inventory and
+storage snapshot every 30 seconds.
+
+The Control Center includes:
+- Overview of healthy, degraded, and unavailable services.
+- Service inventory with HTTP health status and probe latency.
+- ChromaDB collection and vector counts when exposed by the vector service.
+- A documented processing-stage map.
+
+The pipeline view is currently a capability map, not a live execution trace.
+Graph database and Thompson metrics are not yet included in this dashboard API.
+The UI is read-only and does not restart services or mutate stored data.
+
 ## Operational dashboard API
 
 The gateway exposes a read-only operational view of the POC service fleet at
