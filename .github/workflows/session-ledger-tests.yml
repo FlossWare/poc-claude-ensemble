@@ -2,7 +2,7 @@ name: Session Ledger REST Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/ledger-pull-parity]
     paths:
       - "services/memory/**"
       - ".github/workflows/session-ledger-tests.yml"
