@@ -677,7 +677,7 @@ class EnsembleApplication:
                 while True:
                     status, payload = self._interaction_history(cursor, 100)
                     if status != HTTPStatus.OK or payload.get("ok") is not True:
-                        handler.wfile.write(b"event: error\ndata: {\\"error\\":\\"history unavailable\\"}\n\n")
+                        handler.wfile.write(b'event: error\ndata: {"error":"history unavailable"}\n\n')
                         handler.wfile.flush()
                         return
                     entries = payload.get("entries", [])
@@ -1114,6 +1114,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, **kwargs: 
 
 class EnsembleRequestHandler(BaseHTTPRequestHandler):
     server_version = "ClaudeEnsembleREST/1"
+    protocol_version = "HTTP/1.1"
     def do_GET(self): self.server.application.handle(self)  # type: ignore[attr-defined]
     def do_POST(self): self.server.application.handle(self)  # type: ignore[attr-defined]
     def do_PUT(self): self.server.application.handle(self)  # type: ignore[attr-defined]
