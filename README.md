@@ -21,6 +21,7 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Ranking (`services/ranking`) | 8780 | Explainable reciprocal rank fusion |
 | Knowledge (`services/knowledge`) | 8781 | Sourced records; revisions checked against Index |
 | Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
+| Ingestion (`services/ingestion`) | 8782 | URI, uploaded document, and inline-text ingestion |
 
 ## Session history API
 
@@ -155,7 +156,7 @@ The services run from `shared/` in the working deployment and are copied here as
 - Keyword analysis: index text and queries go through the Tokenization service (`lexical-v1`). Existing databases are upgraded with `services/embeddings/migrate_lexical_tokenization.py`, run with the lexical service stopped.
 - Sourced documents: `services/embeddings/build_knowledge_chunks.py` stores each document as a Knowledge record, chunks it through Chunking, and writes vectors to `knowledge_chunks` and exact-match rows to the knowledge lexical index. Transcript sessions are indexed in the transcript lexical index.
 - Transcript outcomes: finished turns are recorded to Thompson during ingest (`services/embeddings/turn_outcomes.py`). Send `"record_outcomes": false` in the `POST /sessions/ingest` body to skip this.
-- Not yet built: worker/arbiter quality monitoring.
+- Collaboration execution events are appended to the existing session-events ledger; the Control Center exposes historical and live model interaction review.
 
 
 ## Graphical Control Center
@@ -211,6 +212,60 @@ curl -fsS http://127.0.0.1:8080/api/v1/services/vector/metrics | jq
 The inventory probes services concurrently with a bounded worker pool and
 short per-service timeout. It is observational only: it does not restart
 services, write to stores, or change live configuration.
+
+## Source ingestion
+
+The POC gateway exposes a first-class source ingestion API through the Ingestion
+service on loopback port 8782. The request contract accepts a remote `uri`,
+an uploaded file (`filename` plus `content_base64`), or inline `text`.
+Transport resolution is separate from content extraction.
+
+The current POC connector registry supports HTTP and HTTPS on their standard
+ports. FTP, SFTP, and object-storage schemes are not advertised as supported
+until their fetchers are implemented and tested. Remote fetching rejects
+credentials in URIs, non-public DNS results, non-standard ports, unsafe
+redirect targets, oversized responses, and unsupported schemes. PDF extraction
+uses `pdftotext`; HTML extraction omits script/style content.
+
+- `GET /api/v1/ingestion/health` reports the supported schemes and extractors.
+- `POST /api/v1/ingestion/preview` resolves and extracts a source without persisting it.
+- `POST /api/v1/ingestion/ingest` stores the source in Knowledge, chunks it,
+  embeds it, and updates the lexical and vector knowledge indexes.
+
+Example preview:
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/v1/ingestion/preview \
+  -H 'content-type: application/json' \
+  -d '{"uri":"https://example.org/document.pdf"}' | jq
+```
+
+Start the ingestion service with:
+
+```bash
+python3 services/ingestion/ingestion_service.py
+```
+
+The service is loopback-only and uses the existing Knowledge, Chunking,
+Embedding, Lexical, Vector, and Memory services. It does not create a parallel
+document store. Successful ingestion appends a metadata-only event to the
+existing session-events ledger.
+
+## Model interaction history
+
+The collaboration orchestrator records metadata-only lifecycle events for
+Arbiter decisions, solver workers, reviewers, and model provider exchanges.
+Events are appended idempotently through the Memory service to the existing
+append-only session-events ledger. Prompt and response bodies, credentials,
+authorization headers, and raw provider payloads are not captured.
+
+- `GET /api/v1/interactions?limit=50&cursor=0` reads historical events.
+- `GET /api/v1/interactions/stream` streams new events using Server-Sent Events.
+- SSE sequence cursors support reconnect through `Last-Event-ID`.
+
+Open `http://127.0.0.1:8080/dashboard` and select **Interactions** to inspect
+the historical timeline and watch new activity. Select **Ingest** to preview
+and submit supported sources.
 
 ## Knowledge retrieval
 
