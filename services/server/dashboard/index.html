@@ -76,7 +76,7 @@ footer{margin-top:24px;color:#687993;font-size:11px}
   <section id="ingest" class="hidden section">
     <div class="panel">
       <div class="section-head"><h2>Source ingestion</h2><span class="muted">Preview before persistence</span></div>
-      <div class="muted" style="margin-bottom:16px">The source API is URI-agnostic. This POC currently supports HTTP(S), uploaded PDF/text/HTML/Markdown, and pasted text. FTP/SFTP are not enabled yet.</div>
+      <div class="muted" style="margin-bottom:16px">The source API is URI-agnostic. This POC supports HTTP(S), uploaded PDF/text/HTML/Markdown, and pasted text. Anonymous FTP is optional, unencrypted, and must be explicitly enabled; SFTP is not implemented yet.</div>
       <label for="ingest-kind" class="muted">Source type</label>
       <select id="ingest-kind" style="display:block;width:100%;max-width:320px;margin:6px 0 16px;background:#0c1425;border:1px solid #31415d;border-radius:8px;padding:10px;color:#e8edf5">
         <option value="uri">Remote URI</option><option value="file">Upload file</option><option value="text">Pasted text / Markdown</option>
