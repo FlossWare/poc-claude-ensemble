@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "services/memory/**"
+      - "services/server/**"
       - ".github/workflows/session-ledger-tests.yml"
 
 permissions:
