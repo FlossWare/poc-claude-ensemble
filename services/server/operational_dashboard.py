@@ -107,7 +107,8 @@ class OperationalDashboard:
             "status": "healthy" if healthy else ("unavailable" if status == 0 else "degraded"),
             "health": {
                 "http_status": status or None,
-                "response": payload,
+                "ok": healthy,
+                "service": payload.get("service") if isinstance(payload.get("service"), str) else None,
                 "latency_ms": latency,
             },
             "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
