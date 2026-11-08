@@ -74,7 +74,7 @@ def parse_time(value: str | None):
 def validate_event(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("entry must be an object")
-    event_id = value.get("event_id") or str(uuid.uuid4())
+    event_id = value.get("event_id", str(uuid.uuid4()))
     event_type = value.get("event_type", value.get("kind"))
     source = value.get("source", value.get("producer"))
     payload = value.get("payload")
@@ -286,7 +286,7 @@ class JsonlAppendOnlyLedger:
                         previous = record.get("entry_sha256")
                     else:
                         legacy_seen = True
-                        legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                        legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
                         previous = legacy_digest
                 continue
             if sequence != expected:
@@ -297,7 +297,7 @@ class JsonlAppendOnlyLedger:
                 legacy_seen = True
                 verified += 1
                 expected += 1
-                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
                 previous = legacy_digest
                 continue
             try:
