@@ -40,6 +40,7 @@ DEFAULT_SERVICE_URLS = {
     "learning": "http://127.0.0.1:8768",
     "arbitration": None,
     "thompson": "http://127.0.0.1:8769",
+    "ingestion": "http://127.0.0.1:8782",
 }
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
@@ -287,6 +288,9 @@ def _forward(
         # Public gateway health paths are service-scoped; concrete services
         # expose their health endpoint at the root.
         target_path = "/health"
+    elif path.startswith("/ingestion/"):
+        # The POC ingestion service owns a compact /health, /preview, /ingest API.
+        target_path = path[len("/ingestion"):]
     else:
         target_path = path
     request = urllib.request.Request(base.rstrip("/") + target_path, data=body, method=method)
