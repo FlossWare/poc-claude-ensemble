@@ -368,6 +368,11 @@ class CollaborationOrchestrator:
 
         def one(item: tuple[str, Reviewer], candidate: Candidate) -> ReviewRecord:
             reviewer_name, reviewer = item
+            started = time.monotonic()
+            self._emit_interaction(
+                "review.started", reviewer=reviewer_name, candidate_id=candidate.candidate_id,
+                round=self.state.round,
+            )
             try:
                 result = reviewer.review(
                     candidate_id=candidate.candidate_id,
@@ -375,8 +380,19 @@ class CollaborationOrchestrator:
                     context=review_context,
                     focus=focus,
                 )
+                self._emit_interaction(
+                    "review.responded", reviewer=reviewer_name, candidate_id=candidate.candidate_id,
+                    round=self.state.round, provider=getattr(result, "provider", None),
+                    model=getattr(result, "model", None), status=getattr(result, "status", "complete"),
+                    latency_ms=round((time.monotonic() - started) * 1000, 2),
+                )
                 return self._record(candidate.candidate_id, result)
             except Exception as exc:
+                self._emit_interaction(
+                    "review.failed", reviewer=reviewer_name, candidate_id=candidate.candidate_id,
+                    round=self.state.round, status="failed", error_type=type(exc).__name__,
+                    latency_ms=round((time.monotonic() - started) * 1000, 2),
+                )
                 return ReviewRecord(
                     candidate.candidate_id,
                     reviewer_name,
