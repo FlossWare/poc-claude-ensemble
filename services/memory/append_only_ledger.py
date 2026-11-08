@@ -167,6 +167,28 @@ class JsonlAppendOnlyLedger:
                 "legacy_prefix_sequence_count": legacy_count,
                 "legacy_prefix_sha256": legacy_digest if legacy_count else None}
 
+    def _public_entry(self, sequence: int, record: dict[str, Any], raw: bytes) -> dict[str, Any]:
+        if "schema_version" in record:
+            return record
+        original = dict(record)
+        event_id = record.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            event_id = "legacy-" + hashlib.sha256(raw.rstrip(b"\\r\\n")).hexdigest()
+        event_type = record.get("event_type", record.get("kind", "legacy.unknown"))
+        source = record.get("source", record.get("producer", "legacy"))
+        payload = record.get("payload", original)
+        timestamp = record.get("timestamp")
+        captured_at = record.get("captured_at") or timestamp or "1970-01-01T00:00:00Z"
+        return {
+            "schema_version": 0, "ledger_id": self.ledger_id, "sequence": sequence,
+            "event_id": event_id, "event_type": event_type, "source": source,
+            "timestamp": timestamp, "captured_at": captured_at,
+            "correlation_id": record.get("correlation_id"), "payload": payload,
+            "payload_sha256": digest(payload), "previous_entry_sha256": None,
+            "entry_sha256": None,
+            "provenance": {"assurance": "legacy_unverified", "legacy_record": original},
+        }
+
     def append(self, value: dict[str, Any]):
         event = validate_event(value)
         with self._locked():
@@ -238,7 +260,7 @@ class JsonlAppendOnlyLedger:
             if since and (event_time is None or event_time < since): matches = False
             if until and (event_time is None or event_time > until): matches = False
             if matches:
-                entries.append(record)
+                entries.append(self._public_entry(sequence, record, _))
             if scanned_count >= limit:
                 break
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head,
@@ -251,9 +273,10 @@ class JsonlAppendOnlyLedger:
         return self.pull(after_sequence, through_sequence, limit)
 
     def get(self, event_id):
-        for _, record, _ in self._scan():
-            if record.get("event_id") == event_id:
-                return record
+        for sequence, record, raw in self._scan():
+            public = self._public_entry(sequence, record, raw)
+            if public.get("event_id") == event_id:
+                return public
         return None
 
     def verify(self, from_sequence=1, through_sequence=None, checkpoint=None):
