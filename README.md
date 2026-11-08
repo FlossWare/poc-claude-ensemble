@@ -174,7 +174,7 @@ The Control Center includes:
 
 The pipeline view is currently a capability map, not a live execution trace.
 Graph database and Thompson metrics are not yet included in this dashboard API.
-The UI is read-only and does not restart services or mutate stored data.
+Operational views are read-only and do not restart services or mutate stored data. The separate Ingest workbench writes only after a successful preview and explicit operator confirmation.
 
 ## Operational dashboard API
 
@@ -197,9 +197,9 @@ The inventory covers embedding, vector, lexical, hybrid, reranking, chunking,
 tokenization, index, extraction, intent, ranking, knowledge, memory, and ingestion.
 Vector metrics report collection names and counts from the existing
 `GET /collections` endpoint. Services without a metrics endpoint report
-metrics as unavailable. Ingestion totals are intentionally unavailable until
-the ingestion pipeline records durable run accounting; the dashboard does not
-guess counts from logs or process state.
+metrics as unavailable. Ingestion history is exposed separately from the
+append-only session-events ledger; aggregate ingestion metrics remain unavailable
+rather than being inferred from logs or process state.
 
 Example:
 
