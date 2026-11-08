@@ -134,3 +134,45 @@ def test_shared_contract_fixture(tmp_path):
     assert [item["event_id"] for item in filtered["entries"]] == fixture["expectations"]["filtered_event_ids"]
     assert [item["event_id"] for item in ledger.replay(limit=10)["entries"]] == fixture["expectations"]["event_ids"]
     assert ledger.verify()["ok"]
+
+def test_tampered_entry_hash_and_broken_chain_are_reported(tmp_path):
+    path = tmp_path / "events.jsonl"
+    ledger = JsonlAppendOnlyLedger(path)
+    ledger.append(event("one"))
+    ledger.append(event("two"))
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    records[1]["previous_entry_sha256"] = "f" * 64
+    path.write_text("\\n".join(json.dumps(item) for item in records) + "\\n", encoding="utf-8")
+    result = ledger.verify()
+    assert not result["ok"] and result["failure_category"] == "broken_hash_chain"
+
+
+def test_missing_sequence_and_malformed_record_are_explicit(tmp_path):
+    path = tmp_path / "events.jsonl"
+    ledger = JsonlAppendOnlyLedger(path)
+    ledger.append(event("one"))
+    ledger.append(event("two"))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(lines[1] + "\\n", encoding="utf-8")
+    result = ledger.verify()
+    assert not result["ok"] and result["failure_category"] == "sequence_gap"
+    path.write_text('{"broken":\\n', encoding="utf-8")
+    result = ledger.verify()
+    assert not result["ok"] and result["failure_category"] == "malformed_record"
+
+
+def test_legacy_prefix_checkpoint_is_explicitly_unverified(tmp_path):
+    path = tmp_path / "events.jsonl"
+    legacy = {"event_id": "legacy", "kind": "session_end", "producer": "claude-code", "payload": {"old": True}}
+    path.write_text(json.dumps(legacy) + "\\n", encoding="utf-8")
+    ledger = JsonlAppendOnlyLedger(path)
+    first = ledger.append(event("new"))["entry"]
+    status = ledger.status()
+    checkpoint = {
+        "ledger_id": status["ledger_id"], "sequence": 1,
+        "legacy_prefix_sha256": status["legacy_prefix_sha256"],
+        "legacy_prefix_sequence_count": status["legacy_prefix_sequence_count"],
+    }
+    result = ledger.verify(from_sequence=2, checkpoint=checkpoint)
+    assert result["ok"]
+    assert "legacy_prefix_unverified" in result["assurance"]
