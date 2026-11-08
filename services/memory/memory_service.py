@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # Allow execution from the repository without requiring package installation.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from append_only_ledger import JsonlAppendOnlyLedger
+from append_only_ledger import JsonlAppendOnlyLedger, LedgerImportError
 from execution.context import ExecutionContext
 from shared.runtime_config import log_dir, memory_dir, runtime_dir, socket_path
 
@@ -1128,6 +1128,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 try:
                     result = self.server.memory_service.ledger.import_batch(body.get("source_ledger_id"), body.get("entries"))
                     self._send(200, {"ok": True, **result})
+                except LedgerImportError as exc:
+                    self._send(500, {"ok": False, "error": str(exc),
+                                     "committed_prefix": exc.committed_prefix,
+                                     "retry_after_source_sequence": exc.retry_after_source_sequence})
                 except ValueError as exc:
                     self._send(409 if "conflict" in str(exc) else 400, {"ok": False, "error": str(exc)})
                 return
