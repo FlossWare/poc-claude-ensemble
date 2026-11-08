@@ -26,7 +26,7 @@ class MemoryHistoryHandler(BaseHTTPRequestHandler):
         else:
             body = {"ok": False, "error": "not found"}
             status = 404
-        data = (json.dumps(body) + "\\n").encode()
+        data = (json.dumps(body) + "\n").encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
