@@ -799,8 +799,9 @@ class EnsembleApplication:
                 except Exception:
                     LOG.exception("Unable to append model interaction event")
 
+            interaction_parent_event_id = str(uuid.uuid4())
             record_interaction({
-                "event_id": str(uuid.uuid4()),
+                "event_id": interaction_parent_event_id,
                 "event_type": "model_interaction",
                 "event_name": "interaction.started",
                 "source": "collaboration-orchestrator",
@@ -825,6 +826,7 @@ class EnsembleApplication:
                 max_review_calls=max_review_calls,
                 max_arbiter_calls=max_arbiter_calls,
                 execution_id=execution_id,
+                parent_event_id=interaction_parent_event_id,
                 event_sink=record_interaction,
             )
             result = loop.run(context=context)
