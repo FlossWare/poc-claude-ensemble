@@ -48,6 +48,7 @@ class OperationalMemoryWriterTest(unittest.TestCase):
         self.assertIn("operational-learning.outcome-", payload["name"])
         self.assertIn("task-1", payload["content"])
 
+    @patch.dict("os.environ", {"POC_CLAUDE_ENSEMBLE_MEMORY_GATEWAY_URL": ""})
     @patch("shared.operational_memory.urllib.request.urlopen")
     def test_append_ledger_event_uses_existing_append_once_endpoint(self, urlopen):
         class Response:
