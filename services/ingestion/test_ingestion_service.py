@@ -153,5 +153,29 @@ class IngestionSourceTests(unittest.TestCase):
         self.assertIn("/memory/append-once", paths)
 
 
+class IngestionLedgerPrivacyTests(unittest.TestCase):
+    def _recorded_entry(self, source_id: str) -> dict:
+        source = {"source_id": source_id, "title": "doc.pdf", "origin": "remote-uri", "media_type": "application/pdf"}
+        captured: list[dict] = []
+
+        def fake_post(base, path, payload, timeout=60):
+            captured.append(payload["entry"])
+            return {"ok": True}
+
+        with patch.object(ingestion, "_post_json", side_effect=fake_post):
+            ingestion._record_ingestion_event(source, "ingestion-1", "ingestion.started", status="running")
+        return captured[0]
+
+    def test_ledger_entry_drops_query_string_and_fragment_from_remote_locator(self):
+        entry = self._recorded_entry("https://files.example/doc.pdf?X-Amz-Signature=SECRET123&token=abc#frag")
+        self.assertEqual(entry["source_id"], "https://files.example/doc.pdf")
+        self.assertNotIn("SECRET123", json.dumps(entry))
+        self.assertNotIn("token=abc", json.dumps(entry))
+
+    def test_ledger_entry_keeps_non_url_locators_unchanged(self):
+        entry = self._recorded_entry("upload://sha256/" + "a" * 64 + "/doc.pdf")
+        self.assertEqual(entry["source_id"], "upload://sha256/" + "a" * 64 + "/doc.pdf")
+
+
 if __name__ == "__main__":
     unittest.main()

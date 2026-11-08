@@ -351,6 +351,7 @@ def _post_json(base: str, path: str, payload: dict[str, Any], timeout: int = 60)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise IngestionError(f"downstream service returned HTTP {exc.code}", 502, "downstream_failure") from exc
     except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
         raise IngestionError("a required ingestion capability is unavailable", 503, "dependency_unavailable") from exc
@@ -492,6 +493,14 @@ def ingest(body: dict[str, Any]) -> dict[str, Any]:
         raise
 
 
+def _ledger_locator(value: str) -> str:
+    """Drop query strings and fragments: they can carry signed tokens or other secrets."""
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme.lower() in {"http", "https", "ftp"} and parsed.hostname:
+        return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc, parsed.path, "", ""))
+    return value
+
+
 def _record_ingestion_event(
     source: dict[str, Any],
     ingestion_id: str,
@@ -514,7 +523,7 @@ def _record_ingestion_event(
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "correlation_id": ingestion_id,
         "execution_id": ingestion_id,
-        "source_id": source["source_id"],
+        "source_id": _ledger_locator(source["source_id"]),
         "title": source["title"],
         "origin": source["origin"],
         "media_type": source["media_type"],
