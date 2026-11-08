@@ -706,12 +706,20 @@ class EnsembleApplication:
             if set(params) - {"limit", "cursor"} or any(len(v) != 1 for v in params.values()):
                 raise ValueError("supported filters are limit and cursor")
             raw_limit = params.get("limit", ["50"])[0]
-            raw_cursor = params.get("cursor", ["0"])[0]
-            if not raw_limit.isdigit() or not raw_cursor.isdigit():
+            raw_cursor = params.get("cursor", [None])[0]
+            if not raw_limit.isdigit() or (raw_cursor is not None and not raw_cursor.isdigit()):
                 raise ValueError("limit and cursor must be non-negative integers")
-            limit, cursor = int(raw_limit), int(raw_cursor)
+            limit = int(raw_limit)
             if limit < 1 or limit > 100:
                 raise ValueError("limit must be between 1 and 100")
+            if raw_cursor is None:
+                initial_status, initial = self._interaction_history(handler, 0, 1)
+                if initial_status != HTTPStatus.OK:
+                    _send(handler, initial_status, initial)
+                    return
+                cursor = max(0, int(initial.get("pagination", {}).get("total", 0)) - limit)
+            else:
+                cursor = int(raw_cursor)
             status, payload = self._interaction_history(handler, cursor, limit)
             _send(handler, status, payload)
         except ValueError as exc:
