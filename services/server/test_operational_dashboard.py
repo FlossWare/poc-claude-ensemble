@@ -50,7 +50,7 @@ class OperationalDashboardTests(unittest.TestCase):
         result = OperationalDashboard().dashboard()
         self.assertFalse(result["processing"]["available"])
         self.assertEqual(result["storage"]["vectors"], 7)
-        self.assertEqual(get_json.call_count, 14)
+        self.assertEqual(get_json.call_count, 15)
 
     def test_unknown_service_returns_none(self):
         dashboard = OperationalDashboard()
