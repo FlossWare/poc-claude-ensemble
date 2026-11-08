@@ -307,10 +307,18 @@ class JsonlAppendOnlyLedger:
                         "assurance": "unverified_partial_range"}
             previous = checkpoint.get("entry_sha256")
             if not isinstance(previous, str) or len(previous) != 64:
-                return {"ok": False, "first_failing_sequence": from_sequence,
-                        "failure_category": "invalid_checkpoint", "verified_count": 0,
-                        "assurance": "unverified_partial_range"}
-        expected, verified, legacy_seen = from_sequence, 0, False
+                previous = checkpoint.get("legacy_prefix_sha256")
+                if (not isinstance(previous, str) or len(previous) != 64
+                        or checkpoint.get("legacy_prefix_sequence_count") != from_sequence - 1):
+                    return {"ok": False, "first_failing_sequence": from_sequence,
+                            "failure_category": "invalid_checkpoint", "verified_count": 0,
+                            "assurance": "unverified_partial_range"}
+                legacy_checkpoint = True
+            else:
+                legacy_checkpoint = False
+        else:
+            legacy_checkpoint = False
+        expected, verified, legacy_seen = from_sequence, 0, legacy_checkpoint
         legacy_digest = hashlib.sha256(b"").hexdigest()
         seen_event_ids = set()
         first_failure = None
@@ -396,8 +404,8 @@ class JsonlAppendOnlyLedger:
                     raise ValueError("import source ledger identity mismatch")
                 if incoming.get("payload_sha256") is not None and incoming["payload_sha256"] != digest(event["payload"]):
                     raise ValueError("import payload hash mismatch")
-                if incoming.get("entry_sha256") is not None and incoming["entry_sha256"] != envelope_hash(incoming):
-                    raise ValueError("import entry hash mismatch")
+                if incoming.get("entry_sha256") is not None:
+                    validate_envelope(incoming, source_ledger_id)
                 event_id = event["event_id"]
                 prior = seen.get(event_id)
                 if prior is not None:
