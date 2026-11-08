@@ -1119,7 +1119,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 return
             if ledger_path == "/api/v1/ledger/verify":
                 try:
-                    result = self.server.memory_service.ledger.verify(body.get("from_sequence", 1), body.get("through_sequence"))
+                    result = self.server.memory_service.ledger.verify(body.get("from_sequence", 1), body.get("through_sequence"), body.get("checkpoint"))
                     self._send(200, {"ok": True, **result})
                 except ValueError as exc:
                     self._send(400, {"ok": False, "error": str(exc)})
