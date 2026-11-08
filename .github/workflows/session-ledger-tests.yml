@@ -47,10 +47,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: services
-      POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
-      POC_CLAUDE_ENSEMBLE_MEMORY_DIR: ${{ runner.temp }}/memory
-      POC_CLAUDE_ENSEMBLE_LOG_DIR: ${{ runner.temp }}/logs
-      POC_CLAUDE_ENSEMBLE_RUNTIME_DIR: ${{ runner.temp }}/runtime
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
