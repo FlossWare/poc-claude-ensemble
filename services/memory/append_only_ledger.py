@@ -26,6 +26,32 @@ def digest(value: Any) -> str:
 def envelope_hash(value: dict[str, Any]) -> str:
     return digest({key: item for key, item in value.items() if key != "entry_sha256"})
 
+def validate_envelope(record: dict[str, Any], ledger_id: str) -> None:
+    required = {"schema_version", "ledger_id", "sequence", "event_id", "event_type", "source",
+                "timestamp", "captured_at", "correlation_id", "payload", "payload_sha256",
+                "previous_entry_sha256", "entry_sha256", "provenance"}
+    if not isinstance(record, dict) or not required.issubset(record):
+        raise ValueError("invalid ledger envelope: required field missing")
+    if record["schema_version"] != 1 or isinstance(record["sequence"], bool) or not isinstance(record["sequence"], int) or record["sequence"] < 1:
+        raise ValueError("invalid ledger envelope version or sequence")
+    if record["ledger_id"] != ledger_id:
+        raise ValueError("ledger envelope identity mismatch")
+    for field, maximum in (("event_id", 256), ("event_type", 256), ("source", 512)):
+        value = record[field]
+        if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+            raise ValueError("invalid ledger envelope field: " + field)
+    if record["timestamp"] is not None:
+        parse_time(record["timestamp"])
+    parse_time(record["captured_at"])
+    if record["correlation_id"] is not None and not isinstance(record["correlation_id"], str):
+        raise ValueError("invalid ledger envelope correlation_id")
+    if not isinstance(record["provenance"], dict):
+        raise ValueError("invalid ledger envelope provenance")
+    if record["payload_sha256"] != digest(record["payload"]):
+        raise ValueError("payload hash mismatch")
+    if not isinstance(record["entry_sha256"], str) or not hmac.compare_digest(record["entry_sha256"], envelope_hash(record)):
+        raise ValueError("entry hash mismatch")
+
 
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -145,6 +171,9 @@ class JsonlAppendOnlyLedger:
         event = validate_event(value)
         with self._locked():
             head, previous_hash, legacy_digest, legacy_count = self._head()
+            integrity = self.verify()
+            if not integrity["ok"]:
+                raise RuntimeError("refusing append to an invalid ledger: " + integrity["failure_category"])
             for _, existing, _ in self._scan():
                 if existing.get("event_id") == event["event_id"]:
                     same = (digest(existing.get("payload")) == digest(event["payload"]) and
@@ -211,6 +240,12 @@ class JsonlAppendOnlyLedger:
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head,
                 "has_more": scanned < upper}
 
+    def replay(self, after_sequence=0, through_sequence=None, limit=1000):
+        return self.pull(after_sequence, through_sequence, limit)
+
+    def export(self, after_sequence=0, through_sequence=None, limit=1000):
+        return self.pull(after_sequence, through_sequence, limit)
+
     def get(self, event_id):
         for _, record, _ in self._scan():
             if record.get("event_id") == event_id:
@@ -261,8 +296,11 @@ class JsonlAppendOnlyLedger:
                 legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
                 previous = legacy_digest
                 continue
-            if record.get("payload_sha256") != digest(record.get("payload")):
-                first_failure = (sequence, "payload_hash_mismatch"); break
+            try:
+                validate_envelope(record, self.ledger_id)
+            except ValueError as exc:
+                category = "payload_hash_mismatch" if "payload hash" in str(exc) else ("entry_hash_mismatch" if "entry hash" in str(exc) else "invalid_envelope")
+                first_failure = (sequence, category); break
             if record.get("previous_entry_sha256") != previous:
                 first_failure = (sequence, "broken_hash_chain"); break
             if not hmac.compare_digest(record.get("entry_sha256", ""), envelope_hash(record)):
@@ -286,6 +324,9 @@ class JsonlAppendOnlyLedger:
         imported, duplicates, last_source = [], [], 0
         with self._locked():
             head, previous_hash, legacy_digest, legacy_count = self._head()
+            integrity = self.verify()
+            if not integrity["ok"]:
+                raise RuntimeError("refusing import into an invalid ledger: " + integrity["failure_category"])
             previous = previous_hash or (legacy_digest if head else None)
             prepared, seen = [], {}
             for incoming in entries:
