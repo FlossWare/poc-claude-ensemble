@@ -158,7 +158,7 @@ class JsonlAppendOnlyLedger:
                 if "schema_version" in record or "sequence" in record or last_hash is not None:
                     raise RuntimeError(f"ledger envelope is incomplete or legacy data follows hashed data at sequence {sequence}")
                 legacy_count += 1
-                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\\r\\n")).hexdigest()
+                legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
         return sequence, last_hash, legacy_digest, legacy_count
 
     def status(self):
@@ -194,8 +194,12 @@ class JsonlAppendOnlyLedger:
             record["entry_sha256"] = envelope_hash(record)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a+b") as handle:
-                if handle.tell() and not self.path.read_bytes().endswith(b"\n"):
-                    raise RuntimeError("cannot append: JSONL ledger has an unterminated final record")
+                if handle.tell():
+                    handle.seek(0, os.SEEK_END)
+                    handle.seek(-1, os.SEEK_END)
+                    if handle.read(1) != b"\n":
+                        raise RuntimeError("cannot append: JSONL ledger has an unterminated final record")
+                    handle.seek(0, os.SEEK_END)
                 handle.write(canonical(record) + b"\n")
                 handle.flush()
                 os.fsync(handle.fileno())
