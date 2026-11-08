@@ -25,7 +25,7 @@ Environment="POC_CLAUDE_ENSEMBLE_MEMORY_URL=http://127.0.0.1:8767"
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
