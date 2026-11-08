@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import re
+import select
 import socket
 import ssl
 import threading
@@ -216,6 +217,47 @@ def _fetch_ftp(uri: str) -> tuple[bytes, str, str]:
 FETCHERS = {"http": _fetch_http, "https": _fetch_http, "ftp": _fetch_ftp}
 
 
+def _pdf_text(path: str) -> bytes:
+    """Run pdftotext with a hard output cap and a wall-clock timeout."""
+    try:
+        process = subprocess.Popen(
+            ["pdftotext", "-q", path, "-"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise IngestionError("PDF extraction tool is unavailable", 503, "extractor_unavailable") from exc
+    assert process.stdout is not None
+    output = bytearray()
+    deadline = time.monotonic() + 60
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired("pdftotext", 60)
+            readable, _, _ = select.select([process.stdout], [], [], min(remaining, 1.0))
+            if readable:
+                block = os.read(process.stdout.fileno(), 64 * 1024)
+                if not block:
+                    break
+                output.extend(block)
+                if len(output) > MAX_TEXT_CHARS * 4:
+                    raise IngestionError("PDF extracted text exceeds the output limit", 413, "text_too_large")
+            elif process.poll() is not None:
+                continue
+        return_code = process.wait(timeout=2)
+        if return_code != 0:
+            raise IngestionError("PDF text extraction failed", 422, "extraction_failed")
+        return bytes(output)
+    except subprocess.TimeoutExpired as exc:
+        raise IngestionError("PDF extraction timed out", 503, "extractor_timeout") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        process.stdout.close()
+
+
 def _extract(data: bytes, media_type: str, filename: str = "") -> tuple[str, str]:
     if len(data) > MAX_SOURCE_BYTES:
         raise IngestionError("source exceeds the 8 MiB limit", 413, "source_too_large")
@@ -224,16 +266,8 @@ def _extract(data: bytes, media_type: str, filename: str = "") -> tuple[str, str
         with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
             handle.write(data)
             handle.flush()
-            try:
-                result = subprocess.run(
-                    ["pdftotext", "-q", handle.name, "-"],
-                    capture_output=True, timeout=60, check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                raise IngestionError("PDF extraction tool is unavailable or timed out", 503, "extractor_unavailable") from exc
-        if result.returncode != 0:
-            raise IngestionError("PDF text extraction failed", 422, "extraction_failed")
-        text = result.stdout.decode("utf-8", errors="replace")
+            extracted = _pdf_text(handle.name)
+        text = extracted.decode("utf-8", errors="replace")
         resolved_type = "application/pdf"
     elif media_type in {"text/html", "application/xhtml+xml"} or suffix in {".html", ".htm"}:
         parser = _VisibleText()
