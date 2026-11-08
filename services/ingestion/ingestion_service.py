@@ -25,11 +25,12 @@ import urllib.request
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
+from urllib.parse import parse_qs, urlencode, urlsplit
 from typing import Any
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8782
-MAX_BODY_BYTES = 10 * 1024 * 1024
+MAX_BODY_BYTES = 12 * 1024 * 1024
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 4_000_000
 FETCH_TIMEOUT = 15
@@ -393,11 +394,31 @@ class IngestionHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/health":
             self._send(200, {"ok": True, "service": "ingestion", "schemes": ["http", "https"],
                              "media_types": ["application/pdf", "text/html", "text/plain", "text/markdown"]})
-        else:
-            self._send(404, {"ok": False, "error": "not found"})
+            return
+        if parsed.path == "/history":
+            try:
+                params = parse_qs(parsed.query, strict_parsing=True) if parsed.query else {}
+                if set(params) - {"limit", "cursor"} or any(len(values) != 1 for values in params.values()):
+                    raise IngestionError("history supports only limit and cursor")
+                limit = int(params.get("limit", ["50"])[0])
+                cursor = int(params.get("cursor", ["0"])[0])
+                if limit < 1 or limit > 100 or cursor < 0:
+                    raise IngestionError("limit must be 1..100 and cursor must be non-negative")
+                query = urlencode({"event_type": "ingestion", "limit": str(limit), "cursor": str(cursor)})
+                request = urllib.request.Request(MEMORY_URL.rstrip("/") + "/history?" + query, method="GET")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                self._send(200, result)
+            except IngestionError as exc:
+                self._send(exc.status, {"ok": False, "error_code": exc.code, "error": str(exc)})
+            except (ValueError, urllib.error.URLError, OSError, json.JSONDecodeError):
+                self._send(503, {"ok": False, "error_code": "history_unavailable", "error": "ingestion history unavailable"})
+            return
+        self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:
         try:
