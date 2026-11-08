@@ -18,7 +18,7 @@ import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from capability_health import CapabilityHealthView
 from experiments import Experiment, ExperimentStore, evaluate as evaluate_experiment
@@ -40,6 +40,7 @@ DEFAULT_SERVICE_URLS = {
     "learning": "http://127.0.0.1:8768",
     "arbitration": None,
     "thompson": "http://127.0.0.1:8769",
+    "ingestion": "http://127.0.0.1:8782",
 }
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
@@ -287,6 +288,9 @@ def _forward(
         # Public gateway health paths are service-scoped; concrete services
         # expose their health endpoint at the root.
         target_path = "/health"
+    elif path.startswith("/ingestion/"):
+        # The POC ingestion service owns a compact /health, /preview, /ingest API.
+        target_path = path[len("/ingestion"):]
     else:
         target_path = path
     request = urllib.request.Request(base.rstrip("/") + target_path, data=body, method=method)
@@ -400,6 +404,9 @@ class EnsembleApplication:
             return
         if service == "models":
             self._handle_models(handler, remainder)
+            return
+        if service == "interactions":
+            self._handle_interactions(handler, remainder, parsed.query)
             return
         if service == "collaboration":
             self._handle_collaboration(handler, remainder)
@@ -622,6 +629,102 @@ class EnsembleApplication:
                 return
         _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "experiment endpoint not found"})
 
+    def _interaction_history(self, handler: BaseHTTPRequestHandler, cursor: int, limit: int = 100) -> tuple[int, dict[str, Any]]:
+        query = urlencode({"event_type": "model_interaction", "limit": str(limit), "cursor": str(cursor)})
+        status, raw = _forward(self.service_urls.get("memory"), "GET", "/history?" + query, None,
+                               handler)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return HTTPStatus.BAD_GATEWAY, {"ok": False, "error": "memory returned invalid history data"}
+        if not isinstance(payload, dict):
+            return HTTPStatus.BAD_GATEWAY, {"ok": False, "error": "memory returned invalid history data"}
+        return status, payload
+
+    def _handle_interactions(self, handler: BaseHTTPRequestHandler, path: str, query: str = "") -> None:
+        """Historical and live read-only view of POC model interaction events."""
+        if handler.command != "GET":
+            _send(handler, HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
+            return
+        if path == "/stream":
+            try:
+                params = parse_qs(query, strict_parsing=True) if query else {}
+                if set(params) - {"cursor"} or any(len(v) != 1 for v in params.values()):
+                    raise ValueError("only one cursor parameter is supported")
+                raw_cursor = params.get("cursor", [None])[0]
+                last_event_id = handler.headers.get("Last-Event-ID", "")
+                if raw_cursor is None and last_event_id.isdigit():
+                    cursor = int(last_event_id) + 1
+                elif raw_cursor is None:
+                    status, initial = self._interaction_history(handler, 0, 1)
+                    if status != HTTPStatus.OK:
+                        _send(handler, status, initial)
+                        return
+                    cursor = int(initial.get("pagination", {}).get("total", 0))
+                else:
+                    if not raw_cursor.isdigit():
+                        raise ValueError("cursor must be a non-negative integer")
+                    cursor = int(raw_cursor)
+                setattr(handler, "_ensemble_response_started", True)
+                handler.send_response(HTTPStatus.OK)
+                handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                handler.send_header("Cache-Control", "no-cache, no-transform")
+                handler.send_header("Connection", "keep-alive")
+                handler.send_header("X-Accel-Buffering", "no")
+                handler.end_headers()
+                handler.wfile.write(b"retry: 1000\n")
+                handler.wfile.flush()
+                while True:
+                    status, payload = self._interaction_history(handler, cursor, 100)
+                    if status != HTTPStatus.OK or payload.get("ok") is not True:
+                        handler.wfile.write(b'event: error\ndata: {"error":"history unavailable"}\n\n')
+                        handler.wfile.flush()
+                        return
+                    entries = payload.get("entries", [])
+                    for sequence, entry in enumerate(entries, start=cursor):
+                        data = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+                        frame = f"id: {sequence}\nevent: model_interaction\ndata: {data}\n\n"
+                        handler.wfile.write(frame.encode("utf-8"))
+                    cursor += len(entries)
+                    if entries:
+                        handler.wfile.flush()
+                    else:
+                        handler.wfile.write(b": keep-alive\n\n")
+                        handler.wfile.flush()
+                        time.sleep(1.0)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+            except ValueError as exc:
+                if not getattr(handler, "_ensemble_response_started", False):
+                    _send(handler, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        if path != "/":
+            _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "interaction endpoint not found"})
+            return
+        try:
+            params = parse_qs(query, strict_parsing=True) if query else {}
+            if set(params) - {"limit", "cursor"} or any(len(v) != 1 for v in params.values()):
+                raise ValueError("supported filters are limit and cursor")
+            raw_limit = params.get("limit", ["50"])[0]
+            raw_cursor = params.get("cursor", [None])[0]
+            if not raw_limit.isdigit() or (raw_cursor is not None and not raw_cursor.isdigit()):
+                raise ValueError("limit and cursor must be non-negative integers")
+            limit = int(raw_limit)
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be between 1 and 100")
+            if raw_cursor is None:
+                initial_status, initial = self._interaction_history(handler, 0, 1)
+                if initial_status != HTTPStatus.OK:
+                    _send(handler, initial_status, initial)
+                    return
+                cursor = max(0, int(initial.get("pagination", {}).get("total", 0)) - limit)
+            else:
+                cursor = int(raw_cursor)
+            status, payload = self._interaction_history(handler, cursor, limit)
+            _send(handler, status, payload)
+        except ValueError as exc:
+            _send(handler, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+
     def _handle_collaboration(self, handler: BaseHTTPRequestHandler, path: str) -> None:
         if handler.command != "POST" or path != "/run":
             _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "collaboration endpoint not found"})
@@ -687,6 +790,29 @@ class EnsembleApplication:
             arbiter_provider = self.models.registry.resolve(arbiter)
             arbiter_model_id = self.models.registry.resolve_model(arbiter)[1]
             reviewer_adapters = {name: MCPReviewer(name) for name in reviewers}
+            execution_id = handler.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+            def record_interaction(event: dict[str, Any]) -> None:
+                try:
+                    event_id = str(event.get("event_id") or uuid.uuid4())
+                    self.memory_writer.append_ledger_event(event_id, event)
+                except Exception:
+                    LOG.exception("Unable to append model interaction event")
+
+            interaction_parent_event_id = str(uuid.uuid4())
+            record_interaction({
+                "event_id": interaction_parent_event_id,
+                "event_type": "model_interaction",
+                "event_name": "interaction.started",
+                "source": "collaboration-orchestrator",
+                "producer": "poc-claude-ensemble",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "correlation_id": execution_id,
+                "execution_id": execution_id,
+                "task_type": "collaboration",
+                "solver_count": len(solvers),
+                "reviewer_count": len(reviewers),
+            })
             loop = CollaborationOrchestrator(
                 task,
                 solvers=solver_providers,
@@ -699,14 +825,31 @@ class EnsembleApplication:
                 max_solver_calls=max_solver_calls,
                 max_review_calls=max_review_calls,
                 max_arbiter_calls=max_arbiter_calls,
+                execution_id=execution_id,
+                parent_event_id=interaction_parent_event_id,
+                event_sink=record_interaction,
             )
             result = loop.run(context=context)
+            record_interaction({
+                "event_id": str(uuid.uuid4()),
+                "event_type": "model_interaction",
+                "event_name": "interaction.completed",
+                "source": "collaboration-orchestrator",
+                "producer": "poc-claude-ensemble",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "correlation_id": execution_id,
+                "execution_id": execution_id,
+                "status": result.status,
+                "candidate_count": len(result.state.candidates),
+                "review_count": len(result.state.reviews),
+                "round_count": result.state.round,
+                "selected_candidate": result.selected_candidate.candidate_id if result.selected_candidate else None,
+            })
 
             # Knowledge persistence is best effort. By default it stores only bounded,
             # structured collaboration outcomes. Full proposal/review/adjudication text is
             # deployment-owned and requires explicit opt-in because model output can contain
             # user-supplied workspace data or secrets.
-            execution_id = handler.headers.get("X-Request-ID") or str(uuid.uuid4())
             selected = result.selected_candidate
             persist_full_text = os.environ.get(
                 "POC_CLAUDE_ENSEMBLE_COLLABORATION_PERSIST_FULL_TEXT", ""
