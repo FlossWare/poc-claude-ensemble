@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from providers import ClaudeCodeProvider, ModelProvider, ModelRequest, build_model_request
+from shared import thompson_shadow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -194,6 +195,7 @@ class ModelPool:
 
         selected = available[:count]
         self.used_workers.update(selected)
+        thompson_shadow.record("worker", selected, available, source="code_review")
         return selected
 
     def get_arbiter(self, tier: str = "expensive") -> str:
@@ -220,6 +222,7 @@ class ModelPool:
             )
         arbiter = available[0]
         self.used_arbiters.add(arbiter)
+        thompson_shadow.record("arbiter", [arbiter], available, source="code_review")
         return arbiter
 
 
