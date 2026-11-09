@@ -17,8 +17,9 @@ The active repository-local reviewer tooling remains here:
 - `tools/` and related integration scripts
 
 The retired Alert and Messenger service implementations were moved to
-`archive/legacy-core/`. They are not started, installed, or used by the POC
-runtime.
+`archive/legacy-core/`; their Messenger-only tests were moved to
+`archive/legacy-core-tests/`. They are not started, installed, or used by the
+POC runtime.
 
 For service inventory, startup, API contracts, and test instructions, use the
 [root README](../README.md).
