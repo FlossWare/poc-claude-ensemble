@@ -48,9 +48,19 @@ class GatewaySecurityTests(unittest.TestCase):
         )
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
-                return response.status, json.loads(response.read())
+                raw = response.read()
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    payload = raw.decode("utf-8", "replace")
+                return response.status, payload
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read())
+            raw = exc.read()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                payload = raw.decode("utf-8", "replace")
+            return exc.code, payload
 
     def test_health_is_public_but_dashboard_requires_bearer_token(self):
         status, payload = self.request("GET", "/api/v1/health")
