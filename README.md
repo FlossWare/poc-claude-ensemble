@@ -2,6 +2,27 @@
 
 Proof-of-concept services for Claude Ensemble, the local REST services behind prompt-time memory, transcript search, and ingestion. This repository is the baseline the next Ensemble work branches from. The previous implementation is archived at FlossWare-Archives/claude-ensemble-legacy.
 
+## Python dependencies
+
+Install the pinned service runtime dependencies from the repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Local cross-encoder reranking and the OpenVINO embedding backend are optional.
+Install those heavier inference dependencies only when using those backends:
+
+```bash
+python3 -m pip install -r requirements-ml.txt
+```
+
+Pinned test and lint tooling is in `requirements-dev.txt`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 ## Services
 
 Each service is a standard-library HTTP server bound to loopback, with its own tests.
