@@ -2,6 +2,27 @@
 
 Proof-of-concept services for Claude Ensemble, the local REST services behind prompt-time memory, transcript search, and ingestion. This repository is the baseline the next Ensemble work branches from. The previous implementation is archived at FlossWare-Archives/claude-ensemble-legacy.
 
+## Python dependencies
+
+Install the pinned service runtime dependencies from the repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Local cross-encoder reranking and the OpenVINO embedding backend are optional.
+Install those heavier inference dependencies only when using those backends:
+
+```bash
+python3 -m pip install -r requirements-ml.txt
+```
+
+Pinned test and lint tooling is in `requirements-dev.txt`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 ## Services
 
 Each service is a standard-library HTTP server bound to loopback, with its own tests.
@@ -22,6 +43,21 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Knowledge (`services/knowledge`) | 8781 | Sourced records; revisions checked against Index |
 | Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
 | Ingestion (`services/ingestion`) | 8782 | URI, uploaded document, and inline-text ingestion |
+
+## Source layout
+
+`services/` is the authoritative implementation of the POC's REST services and
+their tests. Do not implement service changes independently in `core/`.
+
+`core/` is retained as a compatibility mirror for the historical package
+layout and for repository-local reviewer tooling (`core/reviewer-mcp`,
+`core/claude-code-skills`, and related tools). When a module exists in both
+trees, update `services/` first and copy the exact file to `core/`. CI checks
+that all shared non-test Python modules remain byte-identical; the independent
+test configuration files are intentionally excluded.
+
+The retired Alert and Messenger service implementations are archived under
+`archive/legacy-core/`. They are not part of the active POC service set.
 
 ## Session history API
 
@@ -174,10 +210,9 @@ event-stream requests. The optional `POC_CLAUDE_ENSEMBLE_ALLOWED_HOSTS` is a
 comma-separated list of additional trusted DNS hostnames; loopback and private
 IP literals are accepted by default. The gateway rejects unexpected Host
 values, foreign Origin headers, and state-changing requests without a JSON
-content type. Configure the host
-firewall to allow TCP 8080 only from the trusted subnet. This exposes the REST
-API as well as the dashboard; do not port-forward it or expose it to the
-public internet.
+content type. Configure the host firewall to allow TCP 8080 only from the
+trusted subnet. This exposes the REST API as well as the dashboard; do not
+port-forward it or expose it to the public internet.
 
 
 The gateway serves a read-only browser interface at
