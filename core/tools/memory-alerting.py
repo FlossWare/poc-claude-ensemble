@@ -46,7 +46,7 @@ def check_cost_anomalies():
             print(f"   Deviation: {((latest - mean) / mean * 100):.1f}% above normal")
             return True
 
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, ZeroDivisionError, KeyError, AttributeError):
         pass
 
     return False
@@ -78,7 +78,7 @@ def check_service_health():
                     print(f"   - {service}")
                 return True
 
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, ZeroDivisionError, KeyError, AttributeError):
         pass
 
     return False
@@ -111,7 +111,7 @@ def check_learning_stagnation():
             print(f"   Decline: {decline:.1f}%")
             return True
 
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, ZeroDivisionError, KeyError, AttributeError):
         pass
 
     return False

@@ -35,6 +35,7 @@ def _prepare_review_context(
     target: str,
     target_branch: str,
     context_dir: str | None,
+    whole_repo: bool = False,
 ) -> tuple[Path, str]:
     if target.startswith("PR#"):
         number = target[3:]
@@ -58,6 +59,10 @@ def _prepare_review_context(
             # Include the complete requested file even if it has no diff against the target.
             orch.context_manager.load_files([target_path])
             subject = f"file {relative} in {repo_path.name}"
+        elif whole_repo:
+            # Review the complete code base instead of only the diff against the target.
+            orch.context_manager.load_directory(repo_path, max_files=200)
+            subject = f"the whole code base in {repo_path.name}"
         else:
             orch.context_manager.load_git_diff(repo_path, target_branch)
             subject = f"changes in {repo_path.name} against {target_branch}"
@@ -79,28 +84,26 @@ def _prepare_review_context(
 def cmd_code_review(args: argparse.Namespace) -> None:
     """Run one or more worker/arbiter review tiers."""
     prior_report = ""
+    whole_repo = bool(getattr(args, "whole_repo", False))
     for tier in range(1, args.tiers + 1):
-        orch = ArbitrationOrchestrator(
-            TaskType.CODE_REVIEW,
-            (
-                f"Review {args.repo_path} for correctness, security, performance, "
-                f"and test coverage. Tier {tier} of {args.tiers}."
-                + (
-                    "\n\nCritically re-review the previous tier's report. Verify each "
-                    "finding against the supplied source; reject unsupported claims.\n\n"
-                    + prior_report
-                    if prior_report
-                    else ""
-                )
-            ),
+        description = (
+            f"Review {args.repo_path} for correctness, security, performance, "
+            f"and test coverage. Tier {tier} of {args.tiers}."
         )
+        if prior_report:
+            description += (
+                "\n\nCritically re-review the previous tier's report. Verify each "
+                "finding against the supplied source; reject unsupported claims.\n\n"
+                + prior_report
+            )
+        orch = ArbitrationOrchestrator(TaskType.CODE_REVIEW, description)
         _, subject = _prepare_review_context(
-            orch, args.repo_path, args.target_branch, args.context_dir
+            orch, args.repo_path, args.target_branch, args.context_dir, whole_repo
         )
         logger.info("Starting code review tier %s/%s: %s", tier, args.tiers, subject)
         orch.auto_phases(num_phases=args.phases)
         orch.run()
-        prior_report = orch.report()
+        prior_report = orch.report() or ""
         print(f"\n=== REVIEW TIER {tier}/{args.tiers} ===\n")
         print(prior_report)
 

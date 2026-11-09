@@ -584,7 +584,7 @@ def perplexity(p):
 
 
 def github_branch_sha(repository, branch, deadline=None):
-    token = os.environ.get("GITHUB_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "claude-ensemble-reviewer-mcp",
@@ -849,18 +849,18 @@ def candidate_review_all(p):
                 results[name] = future.result()
             except Exception as exc:
                 results[name] = fail(name, providers[name], time.monotonic(), exc)
-    return [results[name] for name in ("grok", "perplexity", "jules") if name in results]
+    ordered = [
+        results[name]
+        for name in ("grok", "perplexity", "jules")
+        if name in results
+    ]
+    _maybe_open_issues(p, ordered)
+    return ordered
 
 
-def package(repository, pr_number, focus=""):
+def package(repository, pr_number, focus="", open_issues=False, max_issues=10):
     require_allowed_repository(repository)
-    token = os.environ.get("GITHUB_TOKEN", "")
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "claude-ensemble-reviewer-mcp",
-    }
-    if token:
-        headers["Authorization"] = "Bearer " + token
+    headers = _github_headers()
     url = "https://api.github.com/repos/{}/pulls/{}".format(repository, pr_number)
     metadata = json_call(url, headers=headers)
     diff_headers = dict(headers)
@@ -876,8 +876,161 @@ def package(repository, pr_number, focus=""):
         "base_ref": metadata["base"]["ref"],
         "head_ref": metadata["head"]["ref"],
         "focus": focus,
+        "open_issues": bool(open_issues),
+        "max_issues": max_issues,
         "diff": diff,
     }
+
+
+LOTSE_ISSUE_PREFIX = "[Lotse]"
+
+
+def _github_headers(accept="application/vnd.github+json"):
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+    headers = {
+        "Accept": accept,
+        "User-Agent": "claude-ensemble-reviewer-mcp",
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+def _github_post(url, headers, payload):
+    import json
+    import urllib.request
+
+    request_headers = dict(headers)
+    request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=request_headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body else {}
+
+def _existing_issue_titles(repository):
+    """Fetch open issue titles so model findings do not create duplicates."""
+    url = "https://api.github.com/repos/{}/issues?state=open&per_page=100".format(repository)
+    issues = json_call(url, headers=_github_headers())
+    if not isinstance(issues, list):
+        raise RuntimeError("GitHub returned an invalid open-issues response")
+    return {
+        " ".join(issue.get("title", "").casefold().split())
+        for issue in issues
+        if isinstance(issue, dict)
+        and "pull_request" not in issue
+        and isinstance(issue.get("title"), str)
+    }
+
+
+def issue_description(text):
+    """Return an issue description whose first part is the [Lotse] marker."""
+    description = (text or "").strip()
+    if description.startswith(LOTSE_ISSUE_PREFIX):
+        return description
+    return (LOTSE_ISSUE_PREFIX + " " + description).strip()
+
+
+def open_issue(repository, title, description, labels=None):
+    """Open a single GitHub issue whose description starts with [Lotse]."""
+    require_allowed_repository(repository)
+    payload = {"title": str(title), "body": issue_description(description)}
+    if labels:
+        payload["labels"] = list(labels)
+    url = "https://api.github.com/repos/{}/issues".format(repository)
+    return _github_post(url, _github_headers(), payload)
+
+
+def issues_from_review(review):
+    """Build issue payloads from every supported finding in a review."""
+    issues = []
+    findings = review.get("findings") if isinstance(review, dict) else None
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        title = finding.get("title") or finding.get("summary")
+        description = finding.get("description") or finding.get("detail") or title
+        if not title and not description:
+            continue
+        issues.append(
+            {
+                "title": str(title or description).strip()[:120],
+                "description": str(description or title).strip(),
+            }
+        )
+    return issues
+
+
+def open_review_issues(repository, review):
+    """Open one GitHub issue per finding in a normalised review."""
+    return [
+        open_issue(repository, issue["title"], issue["description"])
+        for issue in issues_from_review(review)
+    ]
+
+
+def _maybe_open_issues(p, reviews):
+    """File findings with an explicit cap and open-issue title de-duplication."""
+    summary = {"created": [], "failed": [], "skipped": []}
+    if not p.get("open_issues"):
+        return summary
+    repository = p.get("repository")
+    if not repository:
+        summary["failed"].append({"error": "repository is required for issue filing"})
+        p["issue_filing"] = summary
+        return summary
+
+    max_issues = p.get("max_issues", 10)
+    if isinstance(max_issues, bool) or not isinstance(max_issues, int) or max_issues < 1:
+        summary["failed"].append({"error": "max_issues must be an integer between 1 and 10"})
+        p["issue_filing"] = summary
+        return summary
+    max_issues = min(max_issues, 10)
+
+    try:
+        seen_titles = _existing_issue_titles(repository)
+    except Exception as exc:
+        # Fail closed: without a successful duplicate check, do not create issues.
+        summary["failed"].append({"error": "could not check existing open issues; no issues were created: "
+                                  + type(exc).__name__ + ": " + str(exc)})
+        p["issue_filing"] = summary
+        return summary
+
+    candidates = []
+    for review in reviews:
+        if isinstance(review, dict):
+            candidates.extend(issues_from_review(review))
+
+    attempted = 0
+    for issue in candidates:
+        title_key = " ".join(issue["title"].casefold().split())
+        if title_key in seen_titles:
+            summary["skipped"].append({"title": issue["title"], "reason": "duplicate title"})
+            continue
+        if attempted >= max_issues:
+            summary["skipped"].append({"title": issue["title"], "reason": "max_issues limit reached"})
+            continue
+        # Reserve the title before creation to suppress duplicate findings in this batch.
+        seen_titles.add(title_key)
+        attempted += 1
+        try:
+            created = open_issue(repository, issue["title"], issue["description"])
+            summary["created"].append({
+                "title": issue["title"],
+                "number": created.get("number"),
+                "url": created.get("html_url"),
+            })
+        except Exception as exc:
+            summary["failed"].append({
+                "title": issue["title"],
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    p["issue_filing"] = summary
+    return summary
 
 
 def review_all(p):
@@ -892,7 +1045,9 @@ def review_all(p):
                 results[name] = future.result()
             except Exception as exc:
                 results[name] = fail(name, providers[name], time.monotonic(), exc)
-    return [results[name] for name in ("grok", "perplexity", "jules")]
+    ordered = [results[name] for name in ("grok", "perplexity", "jules")]
+    _maybe_open_issues(p, ordered)
+    return ordered
 
 
 PR_SCHEMA = {
@@ -901,6 +1056,8 @@ PR_SCHEMA = {
         "repository": {"type": "string"},
         "pr_number": {"type": "integer", "minimum": 1},
         "focus": {"type": "string"},
+        "open_issues": {"type": "boolean", "default": False},
+        "max_issues": {"type": "integer", "minimum": 1, "maximum": 10, "default": 10},
     },
     "required": ["repository", "pr_number"],
 }
@@ -915,6 +1072,7 @@ CANDIDATE_SCHEMA = {
         "repository": {"type": "string"},
         "head_ref": {"type": "string"},
         "reviewer": {"type": "string", "enum": ["grok", "perplexity", "jules"]},
+        "open_issues": {"type": "boolean", "default": False},
     },
     "required": ["candidate"],
 }
@@ -953,22 +1111,37 @@ def handle(request):
             args = request.get("params", {}).get("arguments", {})
             name = request["params"]["name"]
             if name == "review_candidate":
-                result = candidate_review_all(args)
-                result = result[0] if len(result) == 1 else {"reviews": result}
+                reviews = candidate_review_all(args)
+                result = reviews[0] if len(reviews) == 1 else {"reviews": reviews}
+                if args.get("open_issues"):
+                    result["issue_filing"] = args.get("issue_filing", {"created": [], "failed": []})
             else:
                 package_data = package(
-                    args["repository"], int(args["pr_number"]), args.get("focus", "")
+                    args["repository"],
+                    int(args["pr_number"]),
+                    args.get("focus", ""),
+                    open_issues=bool(args.get("open_issues", False)),
+                    max_issues=args.get("max_issues", 10),
                 )
                 if name == "review_all":
-                    result = {"reviews": review_all(package_data)}
+                    reviews = review_all(package_data)
+                    result = {"reviews": reviews}
                 elif name == "review_grok":
-                    result = grok(package_data)
+                    review = grok(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 elif name == "review_perplexity":
-                    result = perplexity(package_data)
+                    review = perplexity(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 elif name == "review_jules":
-                    result = jules(package_data)
+                    review = jules(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 else:
                     raise ValueError("unknown tool")
+                if package_data.get("open_issues"):
+                    result["issue_filing"] = package_data.get("issue_filing", {"created": [], "failed": []})
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,

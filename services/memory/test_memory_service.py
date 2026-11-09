@@ -719,7 +719,8 @@ class MemoryServiceRestIdempotencyTest(unittest.TestCase):
                 })
                 self.assertEqual(status, 500)
                 self.assertFalse(payload["ok"])
-                self.assertIn("malformed record", payload["error"])
+                self.assertEqual(payload["error"], "internal server error")
+                self.assertNotIn("malformed record", payload["error"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -905,7 +906,8 @@ class MemoryServiceRestStatusTest(unittest.TestCase):
                     self.assertEqual(raised.exception.code, 500)
                     body = json.loads(raised.exception.read().decode("utf-8"))
                     self.assertFalse(body["ok"])
-                    self.assertIn("disk failure during enrichment", body["error"])
+                    self.assertEqual(body["error"], "internal server error")
+                    self.assertNotIn("disk failure during enrichment", body["error"])
             finally:
                 server.shutdown()
                 server.server_close()

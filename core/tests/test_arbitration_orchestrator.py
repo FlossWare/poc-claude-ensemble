@@ -113,7 +113,7 @@ def test_arbiter_receives_all_worker_results():
         request.prompt for request in provider.requests if request.model == "opus"
     )
     assert "### Worker sonnet" in arbiter_prompt
-    assert "### Worker haiku" in arbiter_prompt
+    assert "### Worker rits/zai-org/glm-5-3" in arbiter_prompt
 
 
 def test_configured_stage_count_controls_termination():
@@ -266,7 +266,7 @@ def test_multistage_handoff_preserves_real_loaded_source_artifact():
     assert all(source in prompt for prompt in stage_two_prompts)
 
     assert all("worker analysis from sonnet" in prompt for prompt in stage_two_prompts)
-    assert all("worker analysis from haiku" in prompt for prompt in stage_two_prompts)
+    assert all("worker analysis from rits/zai-org/glm-5-3" in prompt for prompt in stage_two_prompts)
     assert all("stage result for opus" in prompt for prompt in stage_two_prompts)
     assert all("Selected worker: sonnet" in prompt for prompt in stage_two_prompts)
     assert all("Evidence: worker evidence" in prompt for prompt in stage_two_prompts)
