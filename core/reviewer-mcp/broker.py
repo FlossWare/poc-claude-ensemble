@@ -885,7 +885,7 @@ LOTSE_ISSUE_PREFIX = "[Lotse]"
 
 
 def _github_headers(accept="application/vnd.github+json"):
-    token = os.environ.get("GITHUB_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
     headers = {
         "Accept": accept,
         "User-Agent": "claude-ensemble-reviewer-mcp",
