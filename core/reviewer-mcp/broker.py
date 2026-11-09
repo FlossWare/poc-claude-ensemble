@@ -1005,16 +1005,18 @@ def _maybe_open_issues(p, reviews):
         if isinstance(review, dict):
             candidates.extend(issues_from_review(review))
 
+    attempted = 0
     for issue in candidates:
         title_key = " ".join(issue["title"].casefold().split())
         if title_key in seen_titles:
             summary["skipped"].append({"title": issue["title"], "reason": "duplicate title"})
             continue
-        if len(summary["created"]) >= max_issues:
+        if attempted >= max_issues:
             summary["skipped"].append({"title": issue["title"], "reason": "max_issues limit reached"})
             continue
         # Reserve the title before creation to suppress duplicate findings in this batch.
         seen_titles.add(title_key)
+        attempted += 1
         try:
             created = open_issue(repository, issue["title"], issue["description"])
             summary["created"].append({
