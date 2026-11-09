@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - "services/**"
+      - "core/**"
+      - "scripts/**"
       - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
   push:
     branches: [main, feature/ledger-pull-parity]
     paths:
       - "services/**"
+      - "core/**"
+      - "scripts/**"
       - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
 
@@ -40,7 +44,12 @@ jobs:
           PYTHONPATH: services
           POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
         run: python -m pytest services/memory/test_append_only_ledger.py services/memory/test_ledger_http_transfer.py -q
-
+      - name: Test Memory error response sanitization
+        env:
+          PYTHONPATH: services
+        run: >-
+          python -m pytest services/memory/test_memory_service.py
+          -k "generic_memory_routes_map_failure_to_non_2xx_status or semantic_search_enrichment_read_failure_returns_500" -q
 
   poc-ingestion-interactions:
     runs-on: ubuntu-latest
@@ -66,6 +75,8 @@ jobs:
 
   operational-dashboard:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: services
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,6 +84,8 @@ jobs:
           python-version: "3.11"
       - name: Test operational dashboard
         run: python -m unittest discover -s services/server -p "test_operational_dashboard.py" -v
+      - name: Test gateway security boundaries
+        run: python -m unittest discover -s services/server -p "test_gateway_security.py" -v
 
   full-service-suite:
     runs-on: ubuntu-latest
@@ -118,3 +131,39 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write(summary)
           PY
+
+  bare-except-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned Ruff
+        run: python -m pip install -r requirements-dev.txt
+      - name: Reject bare except handlers in production code
+        run: ruff check --select E722 --extend-exclude '**/test*.py' services core
+
+  core-service-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify compatibility mirror matches canonical services
+        run: python scripts/check-core-service-sync.py
+
+  core-compatibility-tests:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: core:services
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned dependencies and test runner
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run core compatibility tests
+        run: python -m pytest core -q
