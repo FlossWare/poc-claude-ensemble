@@ -107,7 +107,7 @@ def _require_collaboration_auth(handler: BaseHTTPRequestHandler) -> None:
         )
     supplied = handler.headers.get("Authorization", "")
     scheme, _, token = supplied.partition(" ")
-    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
+    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
         raise AuthenticationRequired("invalid collaboration authorization")
 
 def _validate_host_origin(handler: BaseHTTPRequestHandler) -> None:
@@ -182,7 +182,7 @@ def _require_gateway_auth(handler: BaseHTTPRequestHandler) -> None:
             token = password if separator else ""
         except (ValueError, UnicodeDecodeError, binascii.Error):
             token = ""
-    if not token or not hmac.compare_digest(token, expected):
+    if not token or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
         raise AuthenticationRequired("gateway bearer token is required")
 
 
