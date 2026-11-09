@@ -5,12 +5,13 @@ on:
     branches: [main]
     paths:
       - "services/**"
-      - "requirements.txt"
+      - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
   push:
     branches: [main, feature/ledger-pull-parity]
     paths:
       - "services/**"
+      - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
 
 permissions:
