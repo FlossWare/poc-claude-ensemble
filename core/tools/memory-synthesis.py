@@ -30,7 +30,7 @@ def synthesize_insights():
             print(f"\n📚 Learnings Captured: {len(entries)}")
             for e in entries[-3:]:  # Last 3
                 print(f"   • {e.get('title', 'learning')}")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     # Costs
@@ -43,7 +43,7 @@ def synthesize_insights():
                 print(f"\n💰 Spending: ${latest.get('total_cost', 0):.2f}")
                 print(f"   Models: {', '.join(latest.get('models_used', []))}")
                 print(f"   Avg per call: ${latest.get('avg_cost_per_call', 0):.4f}")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     # Thompson
@@ -59,7 +59,7 @@ def synthesize_insights():
                 if scores:
                     for model, score in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]:
                         print(f"   • {model}: {score:.3f}")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     # Learning
@@ -75,7 +75,7 @@ def synthesize_insights():
                 models = latest.get('models_analyzed', [])
                 if models:
                     print(f"   Analyzed: {', '.join(models)}")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     # Architecture
@@ -87,7 +87,7 @@ def synthesize_insights():
                 print(f"\n🏗️  Architecture Decisions: {len(entries)}")
                 for e in entries[-2:]:
                     print(f"   • {e.get('decision', 'decision')[:60]}")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     # Integration
@@ -100,7 +100,7 @@ def synthesize_insights():
                 status = latest.get('service_status', {})
                 active = sum(1 for v in status.values() if v == 'active')
                 print(f"\n🔧 Services: {active}/{len(status)} active")
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
             pass
 
     print("\n" + "=" * 70)
