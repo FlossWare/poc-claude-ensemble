@@ -23,6 +23,21 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
 | Ingestion (`services/ingestion`) | 8782 | URI, uploaded document, and inline-text ingestion |
 
+## Source layout
+
+`services/` is the authoritative implementation of the POC's REST services and
+their tests. Do not implement service changes independently in `core/`.
+
+`core/` is retained as a compatibility mirror for the historical package
+layout and for repository-local reviewer tooling (`core/reviewer-mcp`,
+`core/claude-code-skills`, and related tools). When a module exists in both
+trees, update `services/` first and copy the exact file to `core/`. CI checks
+that all shared non-test Python modules remain byte-identical; the independent
+test configuration files are intentionally excluded.
+
+The retired Alert and Messenger service implementations are archived under
+`archive/legacy-core/`. They are not part of the active POC service set.
+
 ## Session history API
 
 The Memory service exposes the existing append-only session-events ledger
