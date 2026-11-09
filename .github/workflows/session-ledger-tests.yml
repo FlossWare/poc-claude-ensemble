@@ -4,27 +4,16 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "services/memory/**"
-      - "services/server/**"
-      - "services/collaboration/**"
-      - "services/ingestion/**"
-      - "services/shared/**"
-      - "services/learning/**"
-      - "services/learning-service/**"
-      - "core/**"
-      - "services/learning/**"
-      - "services/learning-service/**"
+      - "services/**"
       - "core/**"
       - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
   push:
     branches: [main, feature/ledger-pull-parity]
     paths:
-      - "services/memory/**"
-      - "services/server/**"
-      - "services/collaboration/**"
-      - "services/ingestion/**"
-      - "services/shared/**"
+      - "services/**"
+      - "core/**"
+      - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
 
 permissions:
