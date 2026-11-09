@@ -7,6 +7,7 @@ independently deployable and are integrated through HTTP/JSON only.
 from __future__ import annotations
 import json
 import hmac
+import base64
 import ipaddress
 import logging
 import os
@@ -171,8 +172,16 @@ def _require_gateway_auth(handler: BaseHTTPRequestHandler) -> None:
     if handler.command == "GET" and urlsplit(handler.path).path == "/api/v1/health":
         return
     supplied = handler.headers.get("Authorization", "")
-    scheme, _, token = supplied.partition(" ")
-    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
+    scheme, _, credential = supplied.partition(" ")
+    token = credential if scheme.lower() == "bearer" else ""
+    if scheme.lower() == "basic" and credential:
+        try:
+            decoded = base64.b64decode(credential, validate=True).decode("utf-8")
+            _, separator, password = decoded.partition(":")
+            token = password if separator else ""
+        except (ValueError, UnicodeDecodeError):
+            token = ""
+    if not token or not hmac.compare_digest(token, expected):
         raise AuthenticationRequired("gateway bearer token is required")
 
 
@@ -430,7 +439,12 @@ class EnsembleApplication:
             self._dispatch(handler)
         except AuthenticationRequired:
             if not getattr(handler, "_ensemble_response_started", False):
-                _send(handler, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "authentication required"})
+                _send(
+                    handler,
+                    HTTPStatus.UNAUTHORIZED,
+                    {"ok": False, "error": "authentication required"},
+                    {"WWW-Authenticate": 'Basic realm="POC Control Center", Bearer'},
+                )
         except PermissionError:
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden"})
