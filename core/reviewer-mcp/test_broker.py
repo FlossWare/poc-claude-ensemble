@@ -34,6 +34,7 @@ class BrokerTests(unittest.TestCase):
     def test_issue_filing_is_explicitly_opt_in(self):
         self.assertEqual(broker.PR_SCHEMA["properties"]["open_issues"]["type"], "boolean")
         self.assertEqual(broker.CANDIDATE_SCHEMA["properties"]["open_issues"]["type"], "boolean")
+        self.assertEqual(broker.PR_SCHEMA["properties"]["max_issues"]["maximum"], 10)
 
     def test_issue_description_always_starts_with_lotse_marker(self):
         self.assertEqual(broker.issue_description("finding details"), "[Lotse] finding details")
@@ -57,7 +58,7 @@ class BrokerTests(unittest.TestCase):
                 {"title": "Second defect", "description": "Another confirmed defect."},
             ]
         }
-        with patch.object(
+        with patch.object(broker, "_existing_issue_titles", return_value=set()), patch.object(
             broker,
             "open_issue",
             side_effect=[
@@ -74,6 +75,45 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(summary["failed"][0]["title"], "Second defect")
         self.assertIn("GitHub API unavailable", summary["failed"][0]["error"])
 
+    def test_issue_filing_skips_existing_and_duplicate_titles_and_enforces_cap(self):
+        payload = {"repository": "FlossWare/poc-claude-ensemble", "open_issues": True, "max_issues": 1}
+        review = {"findings": [
+            {"title": "Already tracked", "description": "existing"},
+            {"title": "New defect", "description": "new"},
+            {"title": " new   DEFECT ", "description": "same finding"},
+            {"title": "Another defect", "description": "over cap"},
+        ]}
+        with patch.object(broker, "_existing_issue_titles", return_value={"already tracked"}):
+            with patch.object(broker, "open_issue", return_value={"number": 52, "html_url": "https://example.invalid/52"}) as create:
+                summary = broker._maybe_open_issues(payload, [review])
+        create.assert_called_once()
+        self.assertEqual(summary["created"][0]["title"], "New defect")
+        self.assertEqual([item["reason"] for item in summary["skipped"]], [
+            "duplicate title", "duplicate title", "max_issues limit reached"
+        ])
+
+    def test_issue_filing_fails_closed_when_duplicate_check_fails(self):
+        payload = {"repository": "FlossWare/poc-claude-ensemble", "open_issues": True}
+        with patch.object(broker, "_existing_issue_titles", side_effect=RuntimeError("API unavailable")):
+            with patch.object(broker, "open_issue") as create:
+                summary = broker._maybe_open_issues(payload, [{"findings": [
+                    {"title": "Potential flood", "description": "finding"}
+                ]}])
+        create.assert_not_called()
+        self.assertIn("no issues were created", summary["failed"][0]["error"])
+
+    def test_issue_filing_cap_limits_attempts_even_when_creation_fails(self):
+        payload = {"repository": "FlossWare/poc-claude-ensemble", "open_issues": True, "max_issues": 1}
+        review = {"findings": [
+            {"title": "First finding", "description": "first"},
+            {"title": "Second finding", "description": "second"},
+        ]}
+        with patch.object(broker, "_existing_issue_titles", return_value=set()):
+            with patch.object(broker, "open_issue", side_effect=RuntimeError("failed")) as create:
+                summary = broker._maybe_open_issues(payload, [review])
+        create.assert_called_once()
+        self.assertEqual(len(summary["failed"]), 1)
+        self.assertEqual(summary["skipped"][0]["reason"], "max_issues limit reached")
     def test_result_shape_and_normalization(self):
         value = broker.complete(
             "grok", "xai", "grok-4.7", broker.time.monotonic(),
