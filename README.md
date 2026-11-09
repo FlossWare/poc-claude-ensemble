@@ -363,3 +363,8 @@ without overwriting existing values. The backfill log is written to
 Options: `--workers N` sets how many batches are posted to the lexical service at once
 (default 4). `--start-offset N` resumes a run at a record offset, for example after an
 interrupted run. `--limit N` stops early for trial runs.
+
+
+## Python dependencies
+
+Install the pinned runtime dependencies from the repository root with `python3 -m pip install -r requirements.txt`.
