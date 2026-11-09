@@ -7,6 +7,8 @@ independently deployable and are integrated through HTTP/JSON only.
 from __future__ import annotations
 import json
 import hmac
+import base64
+import binascii
 import ipaddress
 import logging
 import os
@@ -107,6 +109,81 @@ def _require_collaboration_auth(handler: BaseHTTPRequestHandler) -> None:
     scheme, _, token = supplied.partition(" ")
     if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
         raise AuthenticationRequired("invalid collaboration authorization")
+
+def _validate_host_origin(handler: BaseHTTPRequestHandler) -> None:
+    """Reject untrusted Host values and cross-origin or non-JSON mutations."""
+    raw_host = handler.headers.get("Host", "")
+    if not raw_host:
+        raise PermissionError("Host header is required")
+    try:
+        parsed_host = urlsplit("//" + raw_host)
+        host = (parsed_host.hostname or "").lower().rstrip(".")
+        port = parsed_host.port
+    except ValueError as exc:
+        raise PermissionError("invalid Host header") from exc
+    if (not host or parsed_host.username or parsed_host.password
+            or parsed_host.path not in {"", "/"} or parsed_host.query or parsed_host.fragment):
+        raise PermissionError("invalid Host header")
+
+    server_port = int(handler.server.server_port)
+    if port is not None and port != server_port:
+        raise PermissionError("Host port does not match gateway port")
+
+    allowed_hosts = getattr(handler.server, "allowed_hosts", set())
+    trusted_host = host in {"localhost", "127.0.0.1", "::1"} or host in allowed_hosts
+    if not trusted_host:
+        try:
+            address = ipaddress.ip_address(host)
+            trusted_host = address.is_loopback or address.is_private
+        except ValueError:
+            trusted_host = False
+    if not trusted_host:
+        raise PermissionError("Host is not an allowed local address")
+
+    origin = handler.headers.get("Origin")
+    if origin:
+        if origin.strip().lower() == "null":
+            raise PermissionError("opaque origins are not allowed")
+        try:
+            parsed_origin = urlsplit(origin)
+            origin_host = (parsed_origin.hostname or "").lower().rstrip(".")
+            origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
+        except ValueError as exc:
+            raise PermissionError("invalid Origin header") from exc
+        host_port = port or server_port
+        if (parsed_origin.scheme not in {"http", "https"} or not origin_host
+                or parsed_origin.username or parsed_origin.password
+                or parsed_origin.path not in {"", "/"} or parsed_origin.query or parsed_origin.fragment
+                or (origin_host, origin_port) != (host, host_port)):
+            raise PermissionError("cross-origin request is not allowed")
+
+    if handler.command in {"POST", "PUT", "PATCH", "DELETE"}:
+        content_type = handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        is_json = content_type == "application/json" or (
+            content_type.startswith("application/") and content_type.endswith("+json")
+        )
+        if not is_json:
+            raise PermissionError("state-changing requests require a JSON content type")
+
+
+def _require_gateway_auth(handler: BaseHTTPRequestHandler) -> None:
+    expected = getattr(handler.server, "auth_token", "")
+    if not expected:
+        return
+    if handler.command == "GET" and urlsplit(handler.path).path == "/api/v1/health":
+        return
+    supplied = handler.headers.get("Authorization", "")
+    scheme, _, credential = supplied.partition(" ")
+    token = credential if scheme.lower() == "bearer" else ""
+    if scheme.lower() == "basic" and credential:
+        try:
+            decoded = base64.b64decode(credential, validate=True).decode("utf-8")
+            _, separator, password = decoded.partition(":")
+            token = password if separator else ""
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            token = ""
+    if not token or not hmac.compare_digest(token, expected):
+        raise AuthenticationRequired("gateway bearer token is required")
 
 
 def _accepts_media_type(handler: BaseHTTPRequestHandler, media_type: str) -> bool:
@@ -358,10 +435,17 @@ class EnsembleApplication:
             if not any(client_ip in network for network in allowed_networks):
                 _send(handler, HTTPStatus.FORBIDDEN, {"ok": False, "error": "client address is not allowed"})
                 return
+            _validate_host_origin(handler)
+            _require_gateway_auth(handler)
             self._dispatch(handler)
         except AuthenticationRequired:
             if not getattr(handler, "_ensemble_response_started", False):
-                _send(handler, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "authentication required"})
+                _send(
+                    handler,
+                    HTTPStatus.UNAUTHORIZED,
+                    {"ok": False, "error": "authentication required"},
+                    {"WWW-Authenticate": 'Basic realm="POC Control Center", Bearer'},
+                )
         except PermissionError:
             if not getattr(handler, "_ensemble_response_started", False):
                 _send(handler, HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden"})
@@ -1163,15 +1247,32 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, **kwargs: 
     allowed_networks = tuple(dict.fromkeys((*loopback_networks, *configured_networks)))
 
     loopback_hosts = {"127.0.0.1", "::1", "localhost"}
-    if host not in loopback_hosts and not raw_networks:
+    try:
+        bind_is_loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        bind_is_loopback = host.lower() in loopback_hosts
+    if not bind_is_loopback and not raw_networks:
         raise ValueError(
             "non-loopback binding requires POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"
         )
-    if host not in loopback_hosts and not configured_networks:
+    if not bind_is_loopback and not configured_networks:
         raise ValueError("at least one allowed client network must be configured")
+
+    auth_token = os.environ.get("POC_CLAUDE_ENSEMBLE_AUTH_TOKEN", "")
+    if not bind_is_loopback and not auth_token:
+        raise ValueError(
+            "non-loopback binding requires POC_CLAUDE_ENSEMBLE_AUTH_TOKEN"
+        )
+    allowed_hosts = {
+        item.strip().lower().rstrip(".")
+        for item in os.environ.get("POC_CLAUDE_ENSEMBLE_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
 
     server = ThreadingHTTPServer((host, port), EnsembleRequestHandler)
     server.allowed_networks = allowed_networks  # type: ignore[attr-defined]
+    server.allowed_hosts = allowed_hosts  # type: ignore[attr-defined]
+    server.auth_token = auth_token  # type: ignore[attr-defined]
     server.application = EnsembleApplication(**kwargs)  # type: ignore[attr-defined]
     return server
 
