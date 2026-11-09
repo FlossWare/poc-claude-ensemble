@@ -907,7 +907,7 @@ def _github_post(url, headers, payload):
         headers=request_headers,
         method="POST",
     )
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, timeout=20) as response:
         body = response.read().decode("utf-8")
     return json.loads(body) if body else {}
 
