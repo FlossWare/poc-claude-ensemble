@@ -72,6 +72,8 @@ jobs:
 
   operational-dashboard:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: services
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -79,3 +81,5 @@ jobs:
           python-version: "3.11"
       - name: Test operational dashboard
         run: python -m unittest discover -s services/server -p "test_operational_dashboard.py" -v
+      - name: Test gateway security boundaries
+        run: python -m unittest discover -s services/server -p "test_gateway_security.py" -v
