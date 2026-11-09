@@ -101,6 +101,19 @@ class BrokerTests(unittest.TestCase):
                 ]}])
         create.assert_not_called()
         self.assertIn("no issues were created", summary["failed"][0]["error"])
+
+    def test_issue_filing_cap_limits_attempts_even_when_creation_fails(self):
+        payload = {"repository": "FlossWare/poc-claude-ensemble", "open_issues": True, "max_issues": 1}
+        review = {"findings": [
+            {"title": "First finding", "description": "first"},
+            {"title": "Second finding", "description": "second"},
+        ]}
+        with patch.object(broker, "_existing_issue_titles", return_value=set()):
+            with patch.object(broker, "open_issue", side_effect=RuntimeError("failed")) as create:
+                summary = broker._maybe_open_issues(payload, [review])
+        create.assert_called_once()
+        self.assertEqual(len(summary["failed"]), 1)
+        self.assertEqual(summary["skipped"][0]["reason"], "max_issues limit reached")
     def test_result_shape_and_normalization(self):
         value = broker.complete(
             "grok", "xai", "grok-4.7", broker.time.monotonic(),
