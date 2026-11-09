@@ -968,8 +968,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/ledger/status":
             try:
                 self._send(200, {"ok": True, **service.ledger.status()})
-            except Exception as exc:
-                self._send(500, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("Memory ledger status request failed")
+                self._send(500, {"ok": False, "error": "internal server error"})
             return
         if parsed.path == "/api/v1/ledger/entries":
             try:
@@ -989,8 +990,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, **result})
             except ValueError as exc:
                 self._send(400, {"ok": False, "error": str(exc)})
-            except Exception as exc:
-                self._send(500, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("Memory ledger pull request failed")
+                self._send(500, {"ok": False, "error": "internal server error"})
             return
         if parsed.path.startswith("/api/v1/ledger/entries/"):
             try:
@@ -998,8 +1000,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 entry = service.ledger.get(event_id)
                 if entry is None: self._send(404, {"ok": False, "error": "ledger event not found"})
                 else: self._send(200, {"ok": True, "entry": entry})
-            except Exception as exc:
-                self._send(500, {"ok": False, "error": str(exc)})
+            except Exception:
+                logger.exception("Memory ledger entry request failed")
+                self._send(500, {"ok": False, "error": "internal server error"})
             return
 
         if parsed.path == "/history":
@@ -1129,7 +1132,8 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                     result = self.server.memory_service.ledger.import_batch(body.get("source_ledger_id"), body.get("entries"))
                     self._send(200, {"ok": True, **result})
                 except LedgerImportError as exc:
-                    self._send(500, {"ok": False, "error": str(exc),
+                    logger.exception("Memory ledger import failed")
+                    self._send(500, {"ok": False, "error": "ledger import failed",
                                      "committed_prefix": exc.committed_prefix,
                                      "retry_after_source_sequence": exc.retry_after_source_sequence})
                 except ValueError as exc:
@@ -1170,8 +1174,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                     status = 409 if "event_id already exists" in str(exc) else 400
                     self._send(status, {"ok": False, "error": str(exc)})
                     return
-                except RuntimeError as exc:
-                    self._send(500, {"ok": False, "error": str(exc)})
+                except RuntimeError:
+                    logger.exception("Memory append-once operation failed")
+                    self._send(500, {"ok": False, "error": "internal server error"})
                     return
                 self._send(200, {"ok": True, **result})
                 return
@@ -1233,9 +1238,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             self._send(status, result)
         except (ValueError, json.JSONDecodeError) as exc:
             self._send(400, {"ok": False, "error": str(exc)})
-        except Exception as exc:
+        except Exception:
             logger.exception("Memory REST request failed")
-            self._send(500,{"ok":False,"error":str(exc)})
+            self._send(500, {"ok": False, "error": "internal server error"})
 
     def log_message(self, fmt: str, *args: Any) -> None: return
 
