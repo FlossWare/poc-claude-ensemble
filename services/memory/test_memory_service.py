@@ -905,7 +905,8 @@ class MemoryServiceRestStatusTest(unittest.TestCase):
                     self.assertEqual(raised.exception.code, 500)
                     body = json.loads(raised.exception.read().decode("utf-8"))
                     self.assertFalse(body["ok"])
-                    self.assertIn("disk failure during enrichment", body["error"])
+                    self.assertEqual(body["error"], "internal server error")
+                    self.assertNotIn("disk failure during enrichment", body["error"])
             finally:
                 server.shutdown()
                 server.server_close()
