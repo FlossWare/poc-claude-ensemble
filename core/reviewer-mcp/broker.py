@@ -849,18 +849,18 @@ def candidate_review_all(p):
                 results[name] = future.result()
             except Exception as exc:
                 results[name] = fail(name, providers[name], time.monotonic(), exc)
-    return [results[name] for name in ("grok", "perplexity", "jules") if name in results]
+    ordered = [
+        results[name]
+        for name in ("grok", "perplexity", "jules")
+        if name in results
+    ]
+    _maybe_open_issues(p, ordered)
+    return ordered
 
 
 def package(repository, pr_number, focus=""):
     require_allowed_repository(repository)
-    token = os.environ.get("GITHUB_TOKEN", "")
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "claude-ensemble-reviewer-mcp",
-    }
-    if token:
-        headers["Authorization"] = "Bearer " + token
+    headers = _github_headers()
     url = "https://api.github.com/repos/{}/pulls/{}".format(repository, pr_number)
     metadata = json_call(url, headers=headers)
     diff_headers = dict(headers)
@@ -880,6 +880,101 @@ def package(repository, pr_number, focus=""):
     }
 
 
+LOTSE_ISSUE_PREFIX = "[Lotse]"
+
+
+def _github_headers(accept="application/vnd.github+json"):
+    token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {
+        "Accept": accept,
+        "User-Agent": "claude-ensemble-reviewer-mcp",
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+def _github_post(url, headers, payload):
+    import json
+    import urllib.request
+
+    request_headers = dict(headers)
+    request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=request_headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request) as response:
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body else {}
+
+
+def issue_description(text):
+    """Return an issue description whose first part is the [Lotse] marker."""
+    description = (text or "").strip()
+    if description.startswith(LOTSE_ISSUE_PREFIX):
+        return description
+    return (LOTSE_ISSUE_PREFIX + " " + description).strip()
+
+
+def open_issue(repository, title, description, labels=None):
+    """Open a single GitHub issue whose description starts with [Lotse]."""
+    require_allowed_repository(repository)
+    payload = {"title": str(title), "body": issue_description(description)}
+    if labels:
+        payload["labels"] = list(labels)
+    url = "https://api.github.com/repos/{}/issues".format(repository)
+    return _github_post(url, _github_headers(), payload)
+
+
+def issues_from_review(review):
+    """Build issue payloads from every supported finding in a review."""
+    issues = []
+    findings = review.get("findings") if isinstance(review, dict) else None
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        title = finding.get("title") or finding.get("summary")
+        description = finding.get("description") or finding.get("detail") or title
+        if not title and not description:
+            continue
+        issues.append(
+            {
+                "title": str(title or description).strip()[:120],
+                "description": str(description or title).strip(),
+            }
+        )
+    return issues
+
+
+def open_review_issues(repository, review):
+    """Open one GitHub issue per finding in a normalised review."""
+    return [
+        open_issue(repository, issue["title"], issue["description"])
+        for issue in issues_from_review(review)
+    ]
+
+
+def _maybe_open_issues(p, reviews):
+    """Best-effort issue filing when the caller opted in with open_issues."""
+    if not p.get("open_issues"):
+        return
+    repository = p.get("repository")
+    if not repository:
+        return
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        for issue in issues_from_review(review):
+            try:
+                open_issue(repository, issue["title"], issue["description"])
+            except Exception:
+                # Filing issues is best effort; it must never fail the review.
+                continue
+
+
 def review_all(p):
     funcs = {"grok": grok, "perplexity": perplexity, "jules": jules}
     providers = {"grok": "xai", "perplexity": "perplexity", "jules": "google-jules"}
@@ -892,7 +987,9 @@ def review_all(p):
                 results[name] = future.result()
             except Exception as exc:
                 results[name] = fail(name, providers[name], time.monotonic(), exc)
-    return [results[name] for name in ("grok", "perplexity", "jules")]
+    ordered = [results[name] for name in ("grok", "perplexity", "jules")]
+    _maybe_open_issues(p, ordered)
+    return ordered
 
 
 PR_SCHEMA = {
