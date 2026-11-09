@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 _SERVICES_ROOT = Path(__file__).resolve().parents[1] / "services"
-for _service_path in (
+_SERVICE_PATHS = [
     _SERVICES_ROOT,
     _SERVICES_ROOT / "memory-service",
     _SERVICES_ROOT / "learning-service",
@@ -21,12 +21,21 @@ for _service_path in (
     _SERVICES_ROOT / "learning",
     _SERVICES_ROOT / "server",
     _SERVICES_ROOT / "collaboration",
-):
+]
+for _service_path in _SERVICE_PATHS:
     if str(_service_path) not in sys.path:
         sys.path.insert(0, str(_service_path))
 
+# Subprocess-based integration tests must inherit the same canonical service paths.
+_existing_pythonpath = os.environ.get("PYTHONPATH", "")
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    [*(str(path) for path in _SERVICE_PATHS), *([_existing_pythonpath] if _existing_pythonpath else [])]
+)
+
 _TEST_ROOT = tempfile.mkdtemp(prefix="ce-core-test-")
 os.environ.setdefault("POC_CLAUDE_ENSEMBLE_SELECTION_LEDGER", os.path.join(_TEST_ROOT, "selections.jsonl"))
+Path(os.environ["POC_CLAUDE_ENSEMBLE_SELECTION_LEDGER"]).parent.mkdir(parents=True, exist_ok=True)
+Path(os.environ["POC_CLAUDE_ENSEMBLE_SELECTION_LEDGER"]).touch(exist_ok=True)
 with socket.socket() as _probe:
     _probe.bind(("127.0.0.1", 0))
     os.environ.setdefault("POC_CLAUDE_ENSEMBLE_THOMPSON_URL", f"http://127.0.0.1:{_probe.getsockname()[1]}")
