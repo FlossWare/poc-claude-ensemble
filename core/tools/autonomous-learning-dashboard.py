@@ -89,7 +89,7 @@ class AutonomousLearningDashboard:
             try:
                 with open(latest_file) as f:
                     latest_outcome = json.load(f)
-            except:
+            except (OSError, json.JSONDecodeError):
                 pass
 
         return {
