@@ -584,7 +584,7 @@ def perplexity(p):
 
 
 def github_branch_sha(repository, branch, deadline=None):
-    token = os.environ.get("GITHUB_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "claude-ensemble-reviewer-mcp",
@@ -858,7 +858,7 @@ def candidate_review_all(p):
     return ordered
 
 
-def package(repository, pr_number, focus=""):
+def package(repository, pr_number, focus="", open_issues=False):
     require_allowed_repository(repository)
     headers = _github_headers()
     url = "https://api.github.com/repos/{}/pulls/{}".format(repository, pr_number)
@@ -876,6 +876,7 @@ def package(repository, pr_number, focus=""):
         "base_ref": metadata["base"]["ref"],
         "head_ref": metadata["head"]["ref"],
         "focus": focus,
+        "open_issues": bool(open_issues),
         "diff": diff,
     }
 
@@ -958,21 +959,33 @@ def open_review_issues(repository, review):
 
 
 def _maybe_open_issues(p, reviews):
-    """Best-effort issue filing when the caller opted in with open_issues."""
+    """File confirmed findings when requested and return an explicit result summary."""
+    summary = {"created": [], "failed": []}
     if not p.get("open_issues"):
-        return
+        return summary
     repository = p.get("repository")
     if not repository:
-        return
+        summary["failed"].append({"error": "repository is required for issue filing"})
+        p["issue_filing"] = summary
+        return summary
     for review in reviews:
         if not isinstance(review, dict):
             continue
         for issue in issues_from_review(review):
             try:
-                open_issue(repository, issue["title"], issue["description"])
-            except Exception:
-                # Filing issues is best effort; it must never fail the review.
-                continue
+                created = open_issue(repository, issue["title"], issue["description"])
+                summary["created"].append({
+                    "title": issue["title"],
+                    "number": created.get("number"),
+                    "url": created.get("html_url"),
+                })
+            except Exception as exc:
+                summary["failed"].append({
+                    "title": issue["title"],
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+    p["issue_filing"] = summary
+    return summary
 
 
 def review_all(p):
@@ -998,6 +1011,7 @@ PR_SCHEMA = {
         "repository": {"type": "string"},
         "pr_number": {"type": "integer", "minimum": 1},
         "focus": {"type": "string"},
+        "open_issues": {"type": "boolean", "default": false},
     },
     "required": ["repository", "pr_number"],
 }
@@ -1012,6 +1026,7 @@ CANDIDATE_SCHEMA = {
         "repository": {"type": "string"},
         "head_ref": {"type": "string"},
         "reviewer": {"type": "string", "enum": ["grok", "perplexity", "jules"]},
+        "open_issues": {"type": "boolean", "default": false},
     },
     "required": ["candidate"],
 }
@@ -1050,22 +1065,36 @@ def handle(request):
             args = request.get("params", {}).get("arguments", {})
             name = request["params"]["name"]
             if name == "review_candidate":
-                result = candidate_review_all(args)
-                result = result[0] if len(result) == 1 else {"reviews": result}
+                reviews = candidate_review_all(args)
+                result = reviews[0] if len(reviews) == 1 else {"reviews": reviews}
+                if args.get("open_issues"):
+                    result["issue_filing"] = args.get("issue_filing", {"created": [], "failed": []})
             else:
                 package_data = package(
-                    args["repository"], int(args["pr_number"]), args.get("focus", "")
+                    args["repository"],
+                    int(args["pr_number"]),
+                    args.get("focus", ""),
+                    open_issues=bool(args.get("open_issues", False)),
                 )
                 if name == "review_all":
-                    result = {"reviews": review_all(package_data)}
+                    reviews = review_all(package_data)
+                    result = {"reviews": reviews}
                 elif name == "review_grok":
-                    result = grok(package_data)
+                    review = grok(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 elif name == "review_perplexity":
-                    result = perplexity(package_data)
+                    review = perplexity(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 elif name == "review_jules":
-                    result = jules(package_data)
+                    review = jules(package_data)
+                    result = {"review": review}
+                    _maybe_open_issues(package_data, [review])
                 else:
                     raise ValueError("unknown tool")
+                if package_data.get("open_issues"):
+                    result["issue_filing"] = package_data.get("issue_filing", {"created": [], "failed": []})
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
