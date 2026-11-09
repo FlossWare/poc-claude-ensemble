@@ -858,7 +858,7 @@ def candidate_review_all(p):
     return ordered
 
 
-def package(repository, pr_number, focus="", open_issues=False):
+def package(repository, pr_number, focus="", open_issues=False, max_issues=10):
     require_allowed_repository(repository)
     headers = _github_headers()
     url = "https://api.github.com/repos/{}/pulls/{}".format(repository, pr_number)
@@ -877,6 +877,7 @@ def package(repository, pr_number, focus="", open_issues=False):
         "head_ref": metadata["head"]["ref"],
         "focus": focus,
         "open_issues": bool(open_issues),
+        "max_issues": max_issues,
         "diff": diff,
     }
 
@@ -910,6 +911,20 @@ def _github_post(url, headers, payload):
     with urllib.request.urlopen(request, timeout=20) as response:
         body = response.read().decode("utf-8")
     return json.loads(body) if body else {}
+
+def _existing_issue_titles(repository):
+    """Fetch open issue titles so model findings do not create duplicates."""
+    url = "https://api.github.com/repos/{}/issues?state=open&per_page=100".format(repository)
+    issues = json_call(url, headers=_github_headers())
+    if not isinstance(issues, list):
+        raise RuntimeError("GitHub returned an invalid open-issues response")
+    return {
+        " ".join(issue.get("title", "").casefold().split())
+        for issue in issues
+        if isinstance(issue, dict)
+        and "pull_request" not in issue
+        and isinstance(issue.get("title"), str)
+    }
 
 
 def issue_description(text):
@@ -959,8 +974,8 @@ def open_review_issues(repository, review):
 
 
 def _maybe_open_issues(p, reviews):
-    """File confirmed findings when requested and return an explicit result summary."""
-    summary = {"created": [], "failed": []}
+    """File findings with an explicit cap and open-issue title de-duplication."""
+    summary = {"created": [], "failed": [], "skipped": []}
     if not p.get("open_issues"):
         return summary
     repository = p.get("repository")
@@ -968,22 +983,50 @@ def _maybe_open_issues(p, reviews):
         summary["failed"].append({"error": "repository is required for issue filing"})
         p["issue_filing"] = summary
         return summary
+
+    max_issues = p.get("max_issues", 10)
+    if isinstance(max_issues, bool) or not isinstance(max_issues, int) or max_issues < 1:
+        summary["failed"].append({"error": "max_issues must be an integer between 1 and 10"})
+        p["issue_filing"] = summary
+        return summary
+    max_issues = min(max_issues, 10)
+
+    try:
+        seen_titles = _existing_issue_titles(repository)
+    except Exception as exc:
+        # Fail closed: without a successful duplicate check, do not create issues.
+        summary["failed"].append({"error": "could not check existing open issues; no issues were created: "
+                                  + type(exc).__name__ + ": " + str(exc)})
+        p["issue_filing"] = summary
+        return summary
+
+    candidates = []
     for review in reviews:
-        if not isinstance(review, dict):
+        if isinstance(review, dict):
+            candidates.extend(issues_from_review(review))
+
+    for issue in candidates:
+        title_key = " ".join(issue["title"].casefold().split())
+        if title_key in seen_titles:
+            summary["skipped"].append({"title": issue["title"], "reason": "duplicate title"})
             continue
-        for issue in issues_from_review(review):
-            try:
-                created = open_issue(repository, issue["title"], issue["description"])
-                summary["created"].append({
-                    "title": issue["title"],
-                    "number": created.get("number"),
-                    "url": created.get("html_url"),
-                })
-            except Exception as exc:
-                summary["failed"].append({
-                    "title": issue["title"],
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+        if len(summary["created"]) >= max_issues:
+            summary["skipped"].append({"title": issue["title"], "reason": "max_issues limit reached"})
+            continue
+        # Reserve the title before creation to suppress duplicate findings in this batch.
+        seen_titles.add(title_key)
+        try:
+            created = open_issue(repository, issue["title"], issue["description"])
+            summary["created"].append({
+                "title": issue["title"],
+                "number": created.get("number"),
+                "url": created.get("html_url"),
+            })
+        except Exception as exc:
+            summary["failed"].append({
+                "title": issue["title"],
+                "error": f"{type(exc).__name__}: {exc}",
+            })
     p["issue_filing"] = summary
     return summary
 
@@ -1012,6 +1055,7 @@ PR_SCHEMA = {
         "pr_number": {"type": "integer", "minimum": 1},
         "focus": {"type": "string"},
         "open_issues": {"type": "boolean", "default": False},
+        "max_issues": {"type": "integer", "minimum": 1, "maximum": 10, "default": 10},
     },
     "required": ["repository", "pr_number"],
 }
@@ -1075,6 +1119,7 @@ def handle(request):
                     int(args["pr_number"]),
                     args.get("focus", ""),
                     open_issues=bool(args.get("open_issues", False)),
+                    max_issues=args.get("max_issues", 10),
                 )
                 if name == "review_all":
                     reviews = review_all(package_data)
