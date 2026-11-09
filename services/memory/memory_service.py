@@ -1632,9 +1632,13 @@ class MemoryService:
             return json.dumps({"ok": False, "error": "Invalid JSON", "error_type": "validation"})
         except (ValueError, TypeError, KeyError) as e:
             return json.dumps({"ok": False, "error": str(e), "error_type": "validation"})
-        except Exception as e:
-            logger.error(f"Request error: {e}")
-            return json.dumps({"ok": False, "error": str(e), "error_type": "internal"})
+        except Exception:
+            logger.exception("Memory request failed")
+            return json.dumps({
+                "ok": False,
+                "error": "internal server error",
+                "error_type": "internal",
+            })
 
 
 if __name__ == "__main__":
