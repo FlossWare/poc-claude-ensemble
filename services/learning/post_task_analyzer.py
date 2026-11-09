@@ -445,7 +445,7 @@ Respond with ONLY a single number 1-5, no explanation.
                 data = json.loads(outcome_file.read_text())
                 if data["outcome"]["timestamp"] > cutoff:
                     outcomes.append(data)
-            except:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 pass
 
         return outcomes
