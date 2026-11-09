@@ -7,6 +7,7 @@ independently deployable and are integrated through HTTP/JSON only.
 from __future__ import annotations
 import json
 import hmac
+import ipaddress
 import logging
 import os
 import sys
@@ -33,6 +34,7 @@ from operational_dashboard import OperationalDashboard
 LOG = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
+DEFAULT_ALLOWED_NETWORKS = ("127.0.0.0/8", "::1/128")
 API_PREFIX = "/api/v1"
 DEFAULT_SERVICE_URLS = {
     "graph": "http://127.0.0.1:8766",
@@ -351,6 +353,11 @@ class EnsembleApplication:
         """Dispatch one request behind a common structured error boundary."""
         setattr(handler, "_ensemble_response_started", False)
         try:
+            client_ip = ipaddress.ip_address(handler.client_address[0].split("%", 1)[0])
+            allowed_networks = getattr(handler.server, "allowed_networks", ())
+            if not any(client_ip in network for network in allowed_networks):
+                _send(handler, HTTPStatus.FORBIDDEN, {"ok": False, "error": "client address is not allowed"})
+                return
             self._dispatch(handler)
         except AuthenticationRequired:
             if not getattr(handler, "_ensemble_response_started", False):
@@ -1146,9 +1153,25 @@ class EnsembleApplication:
         _send(handler, status, result)
 
 def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, **kwargs: Any) -> ThreadingHTTPServer:
-    if host not in {"127.0.0.1", "::1", "localhost"}:
-        raise ValueError("Ensemble REST server must bind to loopback")
+    raw_networks = os.environ.get("POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS")
+    configured_networks = tuple(
+        ipaddress.ip_network(item.strip(), strict=False)
+        for item in (raw_networks.split(",") if raw_networks else DEFAULT_ALLOWED_NETWORKS)
+        if item.strip()
+    )
+    loopback_networks = tuple(ipaddress.ip_network(item) for item in DEFAULT_ALLOWED_NETWORKS)
+    allowed_networks = tuple(dict.fromkeys((*loopback_networks, *configured_networks)))
+
+    loopback_hosts = {"127.0.0.1", "::1", "localhost"}
+    if host not in loopback_hosts and not raw_networks:
+        raise ValueError(
+            "non-loopback binding requires POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"
+        )
+    if host not in loopback_hosts and not configured_networks:
+        raise ValueError("at least one allowed client network must be configured")
+
     server = ThreadingHTTPServer((host, port), EnsembleRequestHandler)
+    server.allowed_networks = allowed_networks  # type: ignore[attr-defined]
     server.application = EnsembleApplication(**kwargs)  # type: ignore[attr-defined]
     return server
 
