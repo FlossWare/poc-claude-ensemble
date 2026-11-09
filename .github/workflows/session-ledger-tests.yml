@@ -44,7 +44,12 @@ jobs:
           PYTHONPATH: services
           POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
         run: python -m pytest services/memory/test_append_only_ledger.py services/memory/test_ledger_http_transfer.py -q
-
+      - name: Test Memory error response sanitization
+        env:
+          PYTHONPATH: services
+        run: >-
+          python -m pytest services/memory/test_memory_service.py
+          -k "generic_memory_routes_map_failure_to_non_2xx_status or semantic_search_enrichment_read_failure_returns_500" -q
 
   poc-ingestion-interactions:
     runs-on: ubuntu-latest
@@ -70,6 +75,8 @@ jobs:
 
   operational-dashboard:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: services
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,6 +84,65 @@ jobs:
           python-version: "3.11"
       - name: Test operational dashboard
         run: python -m unittest discover -s services/server -p "test_operational_dashboard.py" -v
+      - name: Test gateway security boundaries
+        run: python -m unittest discover -s services/server -p "test_gateway_security.py" -v
+
+  full-service-suite:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: services
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install POC service dependencies and test runner
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run every POC service test
+        run: |
+          python -m pytest services -q --junitxml="$RUNNER_TEMP/service-tests.xml"
+      - name: Publish test and skip counts
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path(os.environ["RUNNER_TEMP"]) / "service-tests.xml"
+          if not report.exists():
+              summary = "## POC service test results\n\nJUnit report was not produced."
+          else:
+              root = ET.parse(report).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              tests = sum(int(suite.attrib.get("tests", 0)) for suite in suites)
+              failures = sum(int(suite.attrib.get("failures", 0)) for suite in suites)
+              errors = sum(int(suite.attrib.get("errors", 0)) for suite in suites)
+              skipped = sum(int(suite.attrib.get("skipped", 0)) for suite in suites)
+              passed = tests - failures - errors - skipped
+              summary = (
+                  "## POC service test results\n\n"
+                  f"- Tests: **{tests}**\n"
+                  f"- Passed: **{passed}**\n"
+                  f"- Skipped: **{skipped}**\n"
+                  f"- Failures: **{failures}**\n"
+                  f"- Errors: **{errors}**\n"
+              )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write(summary)
+          PY
+
+  bare-except-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned Ruff
+        run: python -m pip install -r requirements-dev.txt
+      - name: Reject bare except handlers in production code
+        run: ruff check --select E722 --extend-exclude '**/test*.py' services core
 
   core-service-sync:
     runs-on: ubuntu-latest
