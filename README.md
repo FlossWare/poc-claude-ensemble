@@ -2,6 +2,27 @@
 
 Proof-of-concept services for Claude Ensemble, the local REST services behind prompt-time memory, transcript search, and ingestion. This repository is the baseline the next Ensemble work branches from. The previous implementation is archived at FlossWare-Archives/claude-ensemble-legacy.
 
+## Python dependencies
+
+Install the pinned service runtime dependencies from the repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Local cross-encoder reranking and the OpenVINO embedding backend are optional.
+Install those heavier inference dependencies only when using those backends:
+
+```bash
+python3 -m pip install -r requirements-ml.txt
+```
+
+Pinned test and lint tooling is in `requirements-dev.txt`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 ## Services
 
 Each service is a standard-library HTTP server bound to loopback, with its own tests.
@@ -22,6 +43,21 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Knowledge (`services/knowledge`) | 8781 | Sourced records; revisions checked against Index |
 | Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
 | Ingestion (`services/ingestion`) | 8782 | URI, uploaded document, and inline-text ingestion |
+
+## Source layout
+
+`services/` is the authoritative implementation of the POC's REST services and
+their tests. Do not implement service changes independently in `core/`.
+
+`core/` is retained as a compatibility mirror for the historical package
+layout and for repository-local reviewer tooling (`core/reviewer-mcp`,
+`core/claude-code-skills`, and related tools). When a module exists in both
+trees, update `services/` first and copy the exact file to `core/`. CI checks
+that all shared non-test Python modules remain byte-identical; the independent
+test configuration files are intentionally excluded.
+
+The retired Alert and Messenger service implementations are archived under
+`archive/legacy-core/`. They are not part of the active POC service set.
 
 ## Session history API
 
@@ -162,11 +198,20 @@ The services run from `shared/` in the working deployment and are copied here as
 ## Graphical Control Center
 
 The gateway defaults to loopback-only. Optional home-LAN access requires
-`POC_CLAUDE_ENSEMBLE_HTTP_HOST=0.0.0.0` and an explicit
-`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS=192.168.1.0/24,192.168.2.0/24` (replace with the
-trusted LAN CIDR). The gateway enforces this client allowlist and always
-permits loopback. Configure the host firewall to allow TCP 8080 only from
-that subnet. This exposes the REST API as well as the dashboard; do not
+`POC_CLAUDE_ENSEMBLE_HTTP_HOST=0.0.0.0`, an explicit
+`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS` client CIDR allowlist, and
+`POC_CLAUDE_ENSEMBLE_AUTH_TOKEN`. A non-loopback bind refuses to start without
+the bearer token. Send it as `Authorization: Bearer <token>` on every route
+except `GET /api/v1/health`. API clients send the bearer token in
+`Authorization`. Browsers can use the HTTP Basic authentication prompt when
+opening the dashboard; enter any username and use the gateway token as the
+password. The same-origin browser session then authenticates dashboard API and
+event-stream requests. The optional `POC_CLAUDE_ENSEMBLE_ALLOWED_HOSTS` is a
+comma-separated list of additional trusted DNS hostnames; loopback and private
+IP literals are accepted by default. The gateway rejects unexpected Host
+values, foreign Origin headers, and state-changing requests without a JSON
+content type. Configure the host firewall to allow TCP 8080 only from the
+trusted subnet. This exposes the REST API as well as the dashboard; do not
 port-forward it or expose it to the public internet.
 
 
@@ -363,26 +408,3 @@ without overwriting existing values. The backfill log is written to
 Options: `--workers N` sets how many batches are posted to the lexical service at once
 (default 4). `--start-offset N` resumes a run at a record offset, for example after an
 interrupted run. `--limit N` stops early for trial runs.
-
-
-## Python dependencies
-
-Install the pinned service runtime dependencies from the repository root:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-Local cross-encoder reranking and the OpenVINO embedding backend are optional.
-Install those heavier inference dependencies only when using those backends:
-
-```bash
-python3 -m pip install -r requirements-ml.txt
-```
-
-Pinned test and lint tooling is in `requirements-dev.txt`:
-
-```bash
-python3 -m pip install -r requirements-dev.txt
-```
-
