@@ -55,7 +55,7 @@ class GATuningDashboard:
         try:
             with open(fitness_file) as f:
                 history = json.load(f)
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             return {}
 
         if not history:
@@ -82,7 +82,7 @@ class GATuningDashboard:
         try:
             with open(best_file) as f:
                 best = json.load(f)
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             return {}
 
         result = {}
@@ -101,7 +101,7 @@ class GATuningDashboard:
         try:
             with open(summary_file) as f:
                 return json.load(f)
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             return {}
 
     def print_report(self):
