@@ -163,7 +163,7 @@ The services run from `shared/` in the working deployment and are copied here as
 
 The gateway defaults to loopback-only. Optional home-LAN access requires
 `POC_CLAUDE_ENSEMBLE_HTTP_HOST=0.0.0.0` and an explicit
-`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS=192.168.1.0/24` (replace with the
+`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS=192.168.1.0/24,192.168.2.0/24` (replace with the
 trusted LAN CIDR). The gateway enforces this client allowlist and always
 permits loopback. Configure the host firewall to allow TCP 8080 only from
 that subnet. This exposes the REST API as well as the dashboard; do not
