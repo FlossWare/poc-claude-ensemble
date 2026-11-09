@@ -13,7 +13,7 @@ from pathlib import Path
 _SERVICES_ROOT = Path(__file__).resolve().parents[1] / "services"
 _SERVICE_PATHS = [
     _SERVICES_ROOT,
-    _SERVICES_ROOT / "memory-service",
+    _SERVICES_ROOT / "memory",
     _SERVICES_ROOT / "learning-service",
     _SERVICES_ROOT / "thompson-service",
     _SERVICES_ROOT / "graph-service",
