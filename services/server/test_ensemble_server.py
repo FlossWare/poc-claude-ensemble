@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end tests for the canonical Ensemble REST gateway."""
 from __future__ import annotations
+import ipaddress
 import json, os, tempfile, threading, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,6 +92,29 @@ def run():
     from memory_service import MemoryService
     from server.ensemble_server import create_server as gateway_server, _forward
     from learning.arbitration_advisor import ArbitrationAdvisor
+
+    # LAN binding is opt-in and must carry an explicit client-network allowlist.
+    previous_networks = os.environ.pop("POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS", None)
+    try:
+        try:
+            gateway_server("0.0.0.0", 0)
+            raise AssertionError("non-loopback binding unexpectedly accepted without an allowlist")
+        except ValueError as exc:
+            assert "POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS" in str(exc)
+        os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = "192.168.1.0/24"
+        lan_gateway = gateway_server("0.0.0.0", 0)
+        try:
+            assert any(
+                ipaddress.ip_network("192.168.1.0/24") == network
+                for network in lan_gateway.allowed_networks
+            )
+        finally:
+            lan_gateway.server_close()
+    finally:
+        if previous_networks is None:
+            os.environ.pop("POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS", None)
+        else:
+            os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = previous_networks
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp)
         graph=graph_server("127.0.0.1",0,root/"graph.json")
