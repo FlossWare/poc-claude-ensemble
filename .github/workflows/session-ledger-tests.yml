@@ -98,6 +98,6 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Ruff
-        run: python -m pip install ruff
+        run: python -m pip install -r requirements-dev.txt
       - name: Reject bare except handlers in production code
         run: ruff check --select E722 --extend-exclude '**/test*.py' services core
