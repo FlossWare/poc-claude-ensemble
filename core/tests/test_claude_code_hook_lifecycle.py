@@ -220,7 +220,7 @@ class ClaudeCodeHookLifecycleTests(unittest.TestCase):
             memory_dir = temp_path / "memory"
             socket_path = temp_path / "memory.sock"
 
-            sys.path.insert(0, str(ROOT / "memory-service"))
+            sys.path.insert(0, str(ROOT.parent / "services" / "memory-service"))
             from memory_service import MemoryService, create_http_server
 
             service = MemoryService(socket_path, memory_dir)
