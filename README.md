@@ -367,4 +367,22 @@ interrupted run. `--limit N` stops early for trial runs.
 
 ## Python dependencies
 
-Install the pinned runtime dependencies from the repository root with `python3 -m pip install -r requirements.txt`.
+Install the pinned service runtime dependencies from the repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Local cross-encoder reranking and the OpenVINO embedding backend are optional.
+Install those heavier inference dependencies only when using those backends:
+
+```bash
+python3 -m pip install -r requirements-ml.txt
+```
+
+Pinned test and lint tooling is in `requirements-dev.txt`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
