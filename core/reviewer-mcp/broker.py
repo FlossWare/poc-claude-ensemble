@@ -1011,7 +1011,7 @@ PR_SCHEMA = {
         "repository": {"type": "string"},
         "pr_number": {"type": "integer", "minimum": 1},
         "focus": {"type": "string"},
-        "open_issues": {"type": "boolean", "default": false},
+        "open_issues": {"type": "boolean", "default": False},
     },
     "required": ["repository", "pr_number"],
 }
@@ -1026,7 +1026,7 @@ CANDIDATE_SCHEMA = {
         "repository": {"type": "string"},
         "head_ref": {"type": "string"},
         "reviewer": {"type": "string", "enum": ["grok", "perplexity", "jules"]},
-        "open_issues": {"type": "boolean", "default": false},
+        "open_issues": {"type": "boolean", "default": False},
     },
     "required": ["candidate"],
 }
