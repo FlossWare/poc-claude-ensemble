@@ -1,6 +1,7 @@
 """Security boundary tests for the POC HTTP gateway."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -59,6 +60,12 @@ class GatewaySecurityTests(unittest.TestCase):
         status, payload = self.request(
             "GET", "/dashboard",
             headers={"Authorization": "Bearer gateway-test-token"},
+        )
+        self.assertEqual(status, 200, payload)
+        basic = base64.b64encode(b"dashboard:gateway-test-token").decode("ascii")
+        status, payload = self.request(
+            "GET", "/dashboard",
+            headers={"Authorization": "Basic " + basic},
         )
         self.assertEqual(status, 200, payload)
 
