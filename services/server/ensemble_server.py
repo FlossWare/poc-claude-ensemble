@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hmac
 import base64
+import binascii
 import ipaddress
 import logging
 import os
@@ -179,7 +180,7 @@ def _require_gateway_auth(handler: BaseHTTPRequestHandler) -> None:
             decoded = base64.b64decode(credential, validate=True).decode("utf-8")
             _, separator, password = decoded.partition(":")
             token = password if separator else ""
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, binascii.Error):
             token = ""
     if not token or not hmac.compare_digest(token, expected):
         raise AuthenticationRequired("gateway bearer token is required")
