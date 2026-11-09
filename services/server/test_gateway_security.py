@@ -8,6 +8,7 @@ import threading
 import urllib.error
 import urllib.request
 import unittest
+from unittest.mock import patch
 
 from server.ensemble_server import AuthenticationRequired, _require_collaboration_auth, create_server
 
