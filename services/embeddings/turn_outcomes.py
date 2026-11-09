@@ -25,8 +25,10 @@ THOMPSON_TIMEOUT = 5
 TASK_TYPE = "claude_code_turn"
 LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_OUTCOME_LEDGER",
                                            "~/.FlossWare/ledger/outcomes/outcomes.jsonl"))
-PRICING_PATH = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_PRICING_PATH",
-                                                 "~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py"))
+DEFAULT_PRICING_PATH = Path(__file__).resolve().parents[1] / "cost_tracking" / "pricing.py"
+PRICING_PATH = os.path.expanduser(
+    os.environ.get("POC_CLAUDE_ENSEMBLE_PRICING_PATH", str(DEFAULT_PRICING_PATH))
+)
 GATEWAY_ARMS = {
     "rits/zai-org/glm-5-3": "glm-5-3",
     "rits/deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
