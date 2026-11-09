@@ -22,4 +22,4 @@ The retired Alert and Messenger service implementations were moved to
 POC runtime.
 
 For service inventory, startup, API contracts, and test instructions, use the
-[root README](../README.md).
+repository-root README.md.
