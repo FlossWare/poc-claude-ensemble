@@ -95,6 +95,7 @@ def run():
 
     # LAN binding is opt-in and must carry an explicit client-network allowlist.
     previous_networks = os.environ.pop("POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS", None)
+    previous_auth_token = os.environ.pop("POC_CLAUDE_ENSEMBLE_AUTH_TOKEN", None)
     try:
         try:
             gateway_server("0.0.0.0", 0)
@@ -102,6 +103,12 @@ def run():
         except ValueError as exc:
             assert "POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS" in str(exc)
         os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = "192.168.1.0/24,192.168.2.0/24"
+        try:
+            gateway_server("0.0.0.0", 0)
+            raise AssertionError("non-loopback binding unexpectedly accepted without an auth token")
+        except ValueError as exc:
+            assert "POC_CLAUDE_ENSEMBLE_AUTH_TOKEN" in str(exc)
+        os.environ["POC_CLAUDE_ENSEMBLE_AUTH_TOKEN"] = "test-lan-token"
         lan_gateway = gateway_server("0.0.0.0", 0)
         try:
             assert all(
@@ -115,6 +122,10 @@ def run():
             os.environ.pop("POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS", None)
         else:
             os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = previous_networks
+        if previous_auth_token is None:
+            os.environ.pop("POC_CLAUDE_ENSEMBLE_AUTH_TOKEN", None)
+        else:
+            os.environ["POC_CLAUDE_ENSEMBLE_AUTH_TOKEN"] = previous_auth_token
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp)
         graph=graph_server("127.0.0.1",0,root/"graph.json")
