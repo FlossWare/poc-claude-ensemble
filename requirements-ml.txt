@@ -1,0 +1,4 @@
+# Optional local inference backends. Install only when using the local reranker
+# or OpenVINO embedding backend.
+openvino==2026.4.1
+sentence-transformers==6.2.0
