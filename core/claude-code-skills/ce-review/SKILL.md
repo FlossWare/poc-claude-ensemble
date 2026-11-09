@@ -85,12 +85,61 @@ Distinguish confirmed defects from questions and suggestions. Verify every findi
 
 Only when `--open-issues` was requested, open one GitHub issue per confirmed finding. The issue description must have `[Lotse]` as its first part:
 
+Do **not** require or invoke the GitHub CLI (`gh`). Lotse environments may not have it installed. Create issues directly through the GitHub REST API using Python's standard library and a token already supplied in the environment.
+
+For each confirmed finding, use this procedure (the repository is derived from the checked-out `origin` remote; no repository source is sent to an external reviewer):
+
 ```bash
-gh issue create --title "$TITLE" --body "[Lotse] $DESCRIPTION"
+export ISSUE_TITLE="$TITLE"
+export ISSUE_BODY="[Lotse] $DESCRIPTION"
+python3 - <<'PY'
+import json
+import os
+import re
+import subprocess
+import urllib.error
+import urllib.request
+
+token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+if not token:
+    raise SystemExit("Cannot open issue: set GITHUB_TOKEN or GH_TOKEN with repository issue-write permission.")
+
+remote = subprocess.check_output(
+    ["git", "remote", "get-url", "origin"], text=True
+).strip()
+match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", remote)
+if not match:
+    raise SystemExit("Cannot open issue: origin is not a GitHub repository.")
+repository = match.group(1)
+payload = {
+    "title": os.environ["ISSUE_TITLE"],
+    "body": os.environ["ISSUE_BODY"],
+}
+request = urllib.request.Request(
+    f"https://api.github.com/repos/{repository}/issues",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Lotse-CE-review",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+        issue = json.load(response)
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode("utf-8", "replace")
+    raise SystemExit(f"GitHub issue creation failed ({exc.code}): {detail[:1000]}")
+print(issue["html_url"])
+PY
 ```
 
-- Open issues only for findings you verified against the supplied source; never for unverified questions or suggestions.
-- Include file/line references and the relevant command/report context in the description.
-- If the description would not already begin with `[Lotse]`, prepend it.
-- Report the URL of every issue that was opened.
+- Open issues only for findings verified against the supplied source; never for unverified questions or suggestions.
+- Include file/line references and relevant command/report context in the description.
+- Ensure the body begins with `[Lotse]`.
+- Report the URL returned by GitHub for every issue opened.
+- If the token is missing or GitHub rejects the request, report the failure. Do not claim the issue was opened.
 - Do not open issues when `--open-issues` was not requested.
