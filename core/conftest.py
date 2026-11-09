@@ -22,14 +22,20 @@ _SERVICE_PATHS = [
     _SERVICES_ROOT / "server",
     _SERVICES_ROOT / "collaboration",
 ]
+_CORE_ROOT = Path(__file__).resolve().parent
 for _service_path in _SERVICE_PATHS:
     if str(_service_path) not in sys.path:
         sys.path.insert(0, str(_service_path))
+if str(_CORE_ROOT) in sys.path:
+    sys.path.remove(str(_CORE_ROOT))
+sys.path.insert(0, str(_CORE_ROOT))
 
-# Subprocess-based integration tests must inherit the same canonical service paths.
+# Core packages must win import resolution; subprocess tests still need explicit
+# paths for service modules that are not present in the compatibility tree.
 _existing_pythonpath = os.environ.get("PYTHONPATH", "")
 os.environ["PYTHONPATH"] = os.pathsep.join(
-    [*(str(path) for path in _SERVICE_PATHS), *([_existing_pythonpath] if _existing_pythonpath else [])]
+    [str(_CORE_ROOT), *(str(path) for path in _SERVICE_PATHS),
+     *([_existing_pythonpath] if _existing_pythonpath else [])]
 )
 
 _TEST_ROOT = tempfile.mkdtemp(prefix="ce-core-test-")
