@@ -148,10 +148,10 @@ def test_jira_context_flows_through_real_review_cli_to_workers_and_arbiter(
         assert "Acceptance criteria: missing input must return zero" in request.prompt
         assert "SOURCE_CONTEXT_MARKER" in request.prompt
     assert "Worker sonnet" in arbiter_request.prompt
-    assert "Worker haiku" in arbiter_request.prompt
+    assert "Worker rits/zai-org/glm-5-3" in arbiter_request.prompt
     assert "JIRA_CONTEXT_MARKER" in arbiter_request.prompt
     assert "Mock findings from sonnet" in arbiter_request.prompt
-    assert "Mock findings from haiku" in arbiter_request.prompt
+    assert "Mock findings from rits/zai-org/glm-5-3" in arbiter_request.prompt
 
 
 def test_review_with_no_diff_fails_closed_before_any_model_call(
