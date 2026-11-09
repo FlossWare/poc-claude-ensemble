@@ -101,12 +101,12 @@ def run():
             raise AssertionError("non-loopback binding unexpectedly accepted without an allowlist")
         except ValueError as exc:
             assert "POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS" in str(exc)
-        os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = "192.168.1.0/24"
+        os.environ["POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS"] = "192.168.1.0/24,192.168.2.0/24"
         lan_gateway = gateway_server("0.0.0.0", 0)
         try:
-            assert any(
-                ipaddress.ip_network("192.168.1.0/24") == network
-                for network in lan_gateway.allowed_networks
+            assert all(
+                ipaddress.ip_network(cidr) in lan_gateway.allowed_networks
+                for cidr in ("192.168.1.0/24", "192.168.2.0/24")
             )
         finally:
             lan_gateway.server_close()
