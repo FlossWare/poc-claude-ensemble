@@ -138,7 +138,7 @@ class AlertManager:
                     final = data["comparison"].get("final_rating")
                     if final:
                         ratings.append(final)
-            except:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 pass
 
         if not ratings:
