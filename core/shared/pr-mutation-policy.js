@@ -23,7 +23,7 @@ export const PR_MUTATION_ACTIONS = Object.freeze([
   'close',
 ])
 
-const DEFAULT_BASE_BRANCHES = ['main', 'master']
+const DEFAULT_BASE_BRANCHES = Object.freeze(['main', 'master'])
 
 function parseList(value) {
   return (value || '')
@@ -42,7 +42,8 @@ function configuredRepositories(env = process.env) {
 
 function configuredBaseBranches(env = process.env) {
   const branches = parseList(env.CLAUDE_ENSEMBLE_PR_BASE_BRANCHES)
-  return branches.length > 0 ? branches : DEFAULT_BASE_BRANCHES
+  // Return a fresh array so callers can never mutate the shared default.
+  return branches.length > 0 ? branches : [...DEFAULT_BASE_BRANCHES]
 }
 
 export function authorizePRMutation({
@@ -51,7 +52,7 @@ export function authorizePRMutation({
   baseBranch,
   env = process.env,
 }) {
-  if (!PR_MUTATION_ACTIONS.includes(action)) {
+  if (typeof action !== 'string' || !PR_MUTATION_ACTIONS.includes(action)) {
     return { allowed: false, reason: 'Unknown PR mutation action: ' + action }
   }
 
