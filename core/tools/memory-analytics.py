@@ -41,7 +41,7 @@ def show_cost_trends():
             print(f"\nLatest session:")
             print(f"  Cost: ${last.get('total_cost', 0):.2f}")
             print(f"  Models: {', '.join(last.get('models_used', []))}")
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
         pass
 
 
@@ -73,7 +73,7 @@ def show_thompson_stats():
                     print(f"  {i}. {model}: {score:.3f}")
 
             print(f"\nBest performing: {latest.get('best_model', 'unknown')}")
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
         pass
 
 
@@ -103,7 +103,7 @@ def show_learning_progress():
             models = latest.get('models_analyzed', [])
             if models:
                 print(f"Models studied: {', '.join(models)}")
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
         pass
 
 
@@ -132,7 +132,7 @@ def show_integration_health():
             for service, state in services.items():
                 symbol = '✓' if state == 'active' else '✗'
                 print(f"  {symbol} {service}: {state}")
-    except:
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError):
         pass
 
 
