@@ -4,8 +4,10 @@
 
 This repository is a proof of concept. The HTTP gateway defaults to loopback-only.
 LAN access is opt-in and requires an explicit client CIDR allowlist and
-`POC_CLAUDE_ENSEMBLE_AUTH_TOKEN`. Host and Origin validation are applied at the
-gateway boundary.
+`POC_CLAUDE_ENSEMBLE_AUTH_TOKEN`. Set `POC_CLAUDE_ENSEMBLE_ALLOWED_HOSTS` to a
+comma-separated list of trusted DNS hostnames when clients access the gateway
+by hostname; otherwise Host validation may reject those requests. Host and
+Origin validation are applied at the gateway boundary.
 
 Do not expose the gateway directly to the public internet or configure router
 port forwarding for it. The gateway's HTTP transport is not encrypted; use it
