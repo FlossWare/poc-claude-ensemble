@@ -605,7 +605,7 @@ RH AI Toolkit Monitoring
             try:
                 req_data = json.loads(request_str)
                 ctx.method = req_data.get('op', 'unknown')
-            except:
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
             response = self._process_request(request_str, ctx)
@@ -618,7 +618,7 @@ RH AI Toolkit Monitoring
             ctx.log_exit(status='timeout', error_code='timeout')
             try:
                 conn.sendall(b'{"ok": false, "error": "timeout"}\n')
-            except:
+            except OSError:
                 pass
         except Exception as e:
             logger.error(f"{ctx} Client error: {e}")
@@ -626,12 +626,12 @@ RH AI Toolkit Monitoring
             ctx.log_exit(status='error', error_code='client_error')
             try:
                 conn.sendall(b'{"ok": false, "error": "server error"}\n')
-            except:
+            except OSError:
                 pass
         finally:
             try:
                 conn.close()
-            except:
+            except OSError:
                 pass
 
     def _process_request(self, request: str, ctx: RequestContext = None) -> str:
