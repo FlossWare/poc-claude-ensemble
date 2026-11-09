@@ -15,6 +15,7 @@ on:
       - "services/learning/**"
       - "services/learning-service/**"
       - "core/**"
+      - "requirements*.txt"
       - ".github/workflows/session-ledger-tests.yml"
   push:
     branches: [main, feature/ledger-pull-parity]
