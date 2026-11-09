@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import unittest
 
-from server.ensemble_server import create_server
+from server.ensemble_server import AuthenticationRequired, _require_collaboration_auth, create_server
 
 
 class GatewaySecurityTests(unittest.TestCase):
@@ -79,6 +79,25 @@ class GatewaySecurityTests(unittest.TestCase):
         )
         self.assertEqual(status, 200, payload)
 
+    def test_gateway_accepts_non_ascii_basic_password_without_500(self):
+        previous = self.server.auth_token
+        self.server.auth_token = "pässword"
+        try:
+            basic = base64.b64encode("dashboard:pässword".encode("utf-8")).decode("ascii")
+            status, payload = self.request("GET", "/dashboard", headers={"Authorization": "Basic " + basic})
+            self.assertEqual(status, 200, payload)
+        finally:
+            self.server.auth_token = previous
+
+    def test_collaboration_auth_compares_non_ascii_credentials_as_bytes(self):
+        from types import SimpleNamespace
+
+        with patch.dict(os.environ, {"POC_CLAUDE_ENSEMBLE_COLLABORATION_AUTH_TOKEN": "pässword"}):
+            handler = SimpleNamespace(headers={"Authorization": "Bearer pässword"})
+            _require_collaboration_auth(handler)
+            handler.headers["Authorization"] = "Bearer wrong"
+            with self.assertRaises(AuthenticationRequired):
+                _require_collaboration_auth(handler)
     def test_rejects_untrusted_host(self):
         status, _ = self.request(
             "GET", "/api/v1/health",
