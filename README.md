@@ -198,11 +198,20 @@ The services run from `shared/` in the working deployment and are copied here as
 ## Graphical Control Center
 
 The gateway defaults to loopback-only. Optional home-LAN access requires
-`POC_CLAUDE_ENSEMBLE_HTTP_HOST=0.0.0.0` and an explicit
-`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS=192.168.1.0/24,192.168.2.0/24` (replace with the
-trusted LAN CIDR). The gateway enforces this client allowlist and always
-permits loopback. Configure the host firewall to allow TCP 8080 only from
-that subnet. This exposes the REST API as well as the dashboard; do not
+`POC_CLAUDE_ENSEMBLE_HTTP_HOST=0.0.0.0`, an explicit
+`POC_CLAUDE_ENSEMBLE_ALLOWED_NETWORKS` client CIDR allowlist, and
+`POC_CLAUDE_ENSEMBLE_AUTH_TOKEN`. A non-loopback bind refuses to start without
+the bearer token. Send it as `Authorization: Bearer <token>` on every route
+except `GET /api/v1/health`. API clients send the bearer token in
+`Authorization`. Browsers can use the HTTP Basic authentication prompt when
+opening the dashboard; enter any username and use the gateway token as the
+password. The same-origin browser session then authenticates dashboard API and
+event-stream requests. The optional `POC_CLAUDE_ENSEMBLE_ALLOWED_HOSTS` is a
+comma-separated list of additional trusted DNS hostnames; loopback and private
+IP literals are accepted by default. The gateway rejects unexpected Host
+values, foreign Origin headers, and state-changing requests without a JSON
+content type. Configure the host firewall to allow TCP 8080 only from the
+trusted subnet. This exposes the REST API as well as the dashboard; do not
 port-forward it or expose it to the public internet.
 
 
