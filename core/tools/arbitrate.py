@@ -80,29 +80,27 @@ def cmd_code_review(args: argparse.Namespace) -> None:
     """Run one or more worker/arbiter review tiers."""
     prior_report = ""
     for tier in range(1, args.tiers + 1):
-        orch = ArbitrationOrchestrator(
-            TaskType.CODE_REVIEW,
-            (
-                f"Review {args.repo_path} for correctness, security, performance, "
-                f"and test coverage. Tier {tier} of {args.tiers}."
-                + (
-                    "\n\nCritically re-review the previous tier's report. Verify each "
-                    "finding against the supplied source; reject unsupported claims.\n\n"
-                    + prior_report
-                    if prior_report
-                    else ""
-                )
-            ),
+        description = (
+            f"Review {args.repo_path} for correctness, security, performance, "
+            f"and test coverage. Tier {tier} of {args.tiers}."
         )
+        if prior_report:
+            description += (
+                "\n\nCritically re-review the previous tier's report. Verify each "
+                "finding against the supplied source; reject unsupported claims.\n\n"
+                + prior_report
+            )
+        orch = ArbitrationOrchestrator(TaskType.CODE_REVIEW, description)
         _, subject = _prepare_review_context(
             orch, args.repo_path, args.target_branch, args.context_dir
         )
         logger.info("Starting code review tier %s/%s: %s", tier, args.tiers, subject)
         orch.auto_phases(num_phases=args.phases)
         orch.run()
-        prior_report = orch.report()
+        prior_report = orch.report() or ""
         print(f"\n=== REVIEW TIER {tier}/{args.tiers} ===\n")
         print(prior_report)
+
 
 
 def _run_file_analysis(args: argparse.Namespace, task_type: TaskType, description: str) -> None:
