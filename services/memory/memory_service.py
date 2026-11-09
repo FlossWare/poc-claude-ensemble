@@ -27,6 +27,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 # Allow execution from the repository without requiring package installation.
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+from append_only_ledger import JsonlAppendOnlyLedger, LedgerImportError
 from execution.context import ExecutionContext
 from shared.runtime_config import log_dir, memory_dir, runtime_dir, socket_path
 
@@ -963,6 +965,43 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/v1/ledger/status":
+            try:
+                self._send(200, {"ok": True, **service.ledger.status()})
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/v1/ledger/entries":
+            try:
+                params = parse_qs(parsed.query, strict_parsing=True)
+                allowed = {"after_sequence", "through_sequence", "limit", "event_id", "event_type", "source", "correlation_id", "since", "until"}
+                unknown = set(params) - allowed
+                if unknown or any(len(values) != 1 for values in params.values()):
+                    raise ValueError("invalid or repeated ledger query parameter")
+                def integer(name, default):
+                    raw = params.get(name, [str(default)])[0]
+                    if not raw.isdigit(): raise ValueError(name + " must be a non-negative integer")
+                    return int(raw)
+                filters = {key: values[0] for key, values in params.items() if key not in {"after_sequence", "through_sequence", "limit"}}
+                result = service.ledger.pull(integer("after_sequence", 0),
+                    integer("through_sequence", service.ledger.status()["head_sequence"]) if "through_sequence" in params else None,
+                    integer("limit", 100), **filters)
+                self._send(200, {"ok": True, **result})
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path.startswith("/api/v1/ledger/entries/"):
+            try:
+                event_id = unquote(parsed.path[len("/api/v1/ledger/entries/"):])
+                entry = service.ledger.get(event_id)
+                if entry is None: self._send(404, {"ok": False, "error": "ledger event not found"})
+                else: self._send(200, {"ok": True, "entry": entry})
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": str(exc)})
+            return
+
         if parsed.path == "/history":
             try:
                 params = parse_qs(parsed.query, strict_parsing=True)
@@ -1070,6 +1109,32 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             body=self._body()
+            ledger_path = urlsplit(self.path).path
+            if ledger_path == "/api/v1/ledger/entries":
+                try:
+                    result = self.server.memory_service.ledger.append(body)
+                    self._send(200 if result["status"] == "duplicate" else 201, {"ok": True, **result})
+                except ValueError as exc:
+                    self._send(409 if "exists" in str(exc) else 400, {"ok": False, "error": str(exc)})
+                return
+            if ledger_path == "/api/v1/ledger/verify":
+                try:
+                    result = self.server.memory_service.ledger.verify(body.get("from_sequence", 1), body.get("through_sequence"), body.get("checkpoint"))
+                    self._send(200, {"ok": True, **result})
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                return
+            if ledger_path == "/api/v1/ledger/import":
+                try:
+                    result = self.server.memory_service.ledger.import_batch(body.get("source_ledger_id"), body.get("entries"))
+                    self._send(200, {"ok": True, **result})
+                except LedgerImportError as exc:
+                    self._send(500, {"ok": False, "error": str(exc),
+                                     "committed_prefix": exc.committed_prefix,
+                                     "retry_after_source_sequence": exc.retry_after_source_sequence})
+                except ValueError as exc:
+                    self._send(409 if "conflict" in str(exc) else 400, {"ok": False, "error": str(exc)})
+                return
             operations={"/memory/read":"read","/memory/write":"write","/memory/append":"append",
                         "/memory/append-once":"append_once",
                         "/memory/entries":"entries","/memory/retrieve":"retrieve","/memory/list":"list",
@@ -1188,6 +1253,7 @@ class MemoryService:
     def __init__(self, socket_path: Path, memory_dir: Path):
         self.socket_path = Path(socket_path)
         self.store = MemoryStore(memory_dir)
+        self._ledger: JsonlAppendOnlyLedger | None = None
         self.socket = None
         self.http_server = None
         self.http_thread = None
@@ -1213,6 +1279,15 @@ class MemoryService:
             raise ValueError(
                 "POC_CLAUDE_ENSEMBLE_MEMORY_WARMUP_TIMEOUT_SECONDS must be a finite positive number"
             ) from exc
+
+    @property
+    def ledger(self) -> JsonlAppendOnlyLedger:
+        # Preserve the memory daemon's historical startup behavior: creating
+        # the service must not create the session-history directory. The
+        # durable ledger adapter is initialized only when a ledger API is used.
+        if self._ledger is None:
+            self._ledger = JsonlAppendOnlyLedger(LEDGER_STORES["session_events"][0])
+        return self._ledger
 
     def search_index_status(self) -> Dict[str, Any]:
         """Return an explicit, bounded startup state for the search index."""
