@@ -884,14 +884,18 @@ def review_all(p):
     funcs = {"grok": grok, "perplexity": perplexity, "jules": jules}
     providers = {"grok": "xai", "perplexity": "perplexity", "jules": "google-jules"}
     results = {}
+    starts = {}
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(func, p): name for name, func in funcs.items()}
+        futures = {}
+        for name, func in funcs.items():
+            starts[name] = time.monotonic()
+            futures[pool.submit(func, p)] = name
         for future in as_completed(futures):
             name = futures[future]
             try:
                 results[name] = future.result()
             except Exception as exc:
-                results[name] = fail(name, providers[name], time.monotonic(), exc)
+                results[name] = fail(name, providers[name], starts[name], exc)
     return [results[name] for name in ("grok", "perplexity", "jules")]
 
 
