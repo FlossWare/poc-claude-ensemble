@@ -66,7 +66,7 @@ class GraphifyAdapterTests(unittest.TestCase):
             self.skipTest("optional Graphify dependency is not installed")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "sample.py").write_text("def graphify_smoke():\\n    return 42\\n", encoding="utf-8")
+            (root / "sample.py").write_text("def graphify_smoke():\n    return 42\n", encoding="utf-8")
             files = collect_files(root, root=root)
             result = extract(files, cache_root=root / "cache", root=root,
                              parallel=False, release_parse_memo=True)
