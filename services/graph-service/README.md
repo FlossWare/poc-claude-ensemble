@@ -20,7 +20,7 @@ Graph operations:
 - `POST /graph/query`
 - `POST /graph/traverse`
 
-The service uses only Python's standard library. It does not depend on a graph database and does not claim success before a mutation has been durably persisted.
+The HTTP boundary uses Python's standard library; NetworkX provides the in-memory graph. Graphify is an optional extraction dependency. The service does not depend on an external graph database and does not claim success before a mutation has been durably persisted.
 
 ## Persistence
 
