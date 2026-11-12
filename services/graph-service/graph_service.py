@@ -368,7 +368,7 @@ class GraphRequestHandler(BaseHTTPRequestHandler):
                     self._send(503, {"ok": False, "error": "Graphify is disabled; configure POC_CLAUDE_ENSEMBLE_GRAPHIFY_ROOT"})
                     return
                 try:
-                    extracted = extract_local(allowed_root, body.get("path", ""))
+                    extracted = extract_local(allowed_root, body.get("path", ""),\n                                                  cache_root=self.store.path.parent / "graphify-cache")
                     nodes, edges = normalize_extraction(extracted)
                     stored = self.store.add_batch(nodes, edges)
                 except GraphifyUnavailable as exc:
