@@ -59,6 +59,21 @@ class GraphifyAdapterTests(unittest.TestCase):
             with self.assertRaises(GraphifyInputError):
                 _safe_target(root, outside)
 
+    def test_real_graphify_extract_smoke_when_installed(self):
+        try:
+            from graphify.extract import collect_files, extract
+        except ImportError:
+            self.skipTest("optional Graphify dependency is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sample.py").write_text("def graphify_smoke():\\n    return 42\\n", encoding="utf-8")
+            files = collect_files(root, root=root)
+            result = extract(files, cache_root=root / "cache", root=root,
+                             parallel=False, release_parse_memo=True)
+            self.assertTrue(result["nodes"])
+            self.assertIn("nodes", result)
+            self.assertIn("edges", result)
+
     def test_extract_local_uses_graphify_structural_api_without_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
