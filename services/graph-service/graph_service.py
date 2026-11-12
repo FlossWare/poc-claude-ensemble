@@ -227,6 +227,72 @@ class GraphStore:
                 self._edge_index = pending_edge_index
             return {"added_nodes": added_nodes, "added_edges": added_edges}
 
+    def replace_graphify_batch(self, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
+        """Atomically replace the Graphify-managed subgraph, preserving other graph data."""
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise ValueError("nodes and edges must be lists")
+        with self.lock:
+            proposed = self.graph.copy()
+            old_graphify_nodes = [
+                node_id for node_id, attrs in proposed.nodes(data=True)
+                if attrs.get("properties", {}).get("graphify") is True
+            ]
+            old_graphify_edges = [
+                (source, target, edge_id)
+                for source, target, edge_id, attrs in proposed.edges(keys=True, data=True)
+                if attrs.get("properties", {}).get("graphify") is True
+            ]
+            proposed.remove_nodes_from(old_graphify_nodes)
+            for source, target, edge_id in old_graphify_edges:
+                if proposed.has_edge(source, target, edge_id):
+                    proposed.remove_edge(source, target, edge_id)
+
+            for item in nodes:
+                if not isinstance(item, dict):
+                    raise ValueError("each node must be an object")
+                node_id, node_type = item.get("id"), item.get("type")
+                properties = item.get("properties", {})
+                if not isinstance(node_id, str) or not node_id or not isinstance(node_type, str) or not node_type:
+                    raise ValueError("each node requires non-empty id and type")
+                if not isinstance(properties, dict):
+                    raise ValueError("node properties must be an object")
+                if proposed.has_node(node_id):
+                    raise ValueError(f"Graphify node conflicts with non-Graphify node: {node_id}")
+                proposed.add_node(node_id, type=node_type, properties=properties)
+
+            for item in edges:
+                if not isinstance(item, dict):
+                    raise ValueError("each edge must be an object")
+                source, target, edge_type = item.get("source"), item.get("target"), item.get("type")
+                properties = item.get("properties", {})
+                if not isinstance(source, str) or not isinstance(target, str) or not isinstance(edge_type, str) or not edge_type:
+                    raise ValueError("each edge requires source, target, and non-empty type")
+                if not isinstance(properties, dict):
+                    raise ValueError("edge properties must be an object")
+                if not proposed.has_node(source) or not proposed.has_node(target):
+                    raise KeyError("source and target nodes must exist")
+                identity = {"source": source, "target": target, "type": edge_type, "properties": properties}
+                edge_id = item.get("id") or _stable_id("edge", identity)
+                if any(existing_id == edge_id for _, _, existing_id in proposed.edges(keys=True)):
+                    raise ValueError(f"edge id already exists: {edge_id}")
+                proposed.add_edge(source, target, key=edge_id, id=edge_id, type=edge_type, properties=properties)
+
+            self._persist(proposed)
+            self.graph = proposed
+            self._edge_index = {
+                attrs["id"]: (source, target)
+                for source, target, attrs in proposed.edges(data=True)
+            } if not proposed.is_multigraph() else {
+                attrs["id"]: (source, target)
+                for source, target, _, attrs in proposed.edges(keys=True, data=True)
+            }
+            return {
+                "added_nodes": len(nodes),
+                "added_edges": len(edges),
+                "replaced_nodes": len(old_graphify_nodes),
+                "replaced_edges": len(old_graphify_edges),
+            }
+
     def _node_record(self, node_id: str) -> dict[str, Any]:
         attrs = self.graph.nodes[node_id]
         return {"id": node_id, "type": attrs["type"], "properties": attrs["properties"]}
@@ -371,7 +437,7 @@ class GraphRequestHandler(BaseHTTPRequestHandler):
                     extracted = extract_local(allowed_root, body.get("path", ""),
                                                   cache_root=self.store.path.parent / "graphify-cache")
                     nodes, edges = normalize_extraction(extracted)
-                    stored = self.store.add_batch(nodes, edges)
+                    stored = self.store.replace_graphify_batch(nodes, edges)
                 except GraphifyUnavailable as exc:
                     self._send(503, {"ok": False, "error": str(exc)})
                     return
