@@ -19,7 +19,9 @@ class GraphifyInputError(ValueError):
 
 def _safe_target(root: str | Path, target: str | Path) -> tuple[Path, Path]:
     allowed_root = Path(root).expanduser().resolve(strict=True)
-    if not str(target).strip():\n        raise GraphifyInputError("target path is required")\n    requested = Path(target)
+    if not str(target).strip():
+        raise GraphifyInputError("target path is required")
+    requested = Path(target)
     if not requested.is_absolute():
         requested = allowed_root / requested
     try:
