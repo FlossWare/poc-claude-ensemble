@@ -112,6 +112,34 @@ class GraphifyAdapterTests(unittest.TestCase):
             self.assertIsNotNone(reloaded.get_node("graphify:a"))
             self.assertEqual(len(reloaded.query_edges(relationship="calls")), 1)
 
+    def test_graphify_replacement_updates_changed_source_and_removes_stale_edges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = GraphStore(Path(tmp) / "graph.json")
+            store.add_node("manual", {"label": "manual"}, "manual:1")
+            first_nodes = [
+                {"id": "graphify:a", "type": "function",
+                 "properties": {"graphify": True, "label": "old"}},
+                {"id": "graphify:b", "type": "function",
+                 "properties": {"graphify": True, "label": "b"}},
+            ]
+            first_edges = [{
+                "source": "graphify:a", "target": "graphify:b", "type": "calls",
+                "properties": {"graphify": True, "confidence": "EXTRACTED"},
+            }]
+            store.replace_graphify_batch(first_nodes, first_edges)
+
+            changed_nodes = [
+                {"id": "graphify:a", "type": "function",
+                 "properties": {"graphify": True, "label": "updated"}},
+            ]
+            result = store.replace_graphify_batch(changed_nodes, [])
+            self.assertEqual(result["replaced_nodes"], 2)
+            self.assertEqual(result["replaced_edges"], 1)
+            self.assertEqual(store.get_node("graphify:a")["properties"]["label"], "updated")
+            self.assertIsNone(store.get_node("graphify:b"))
+            self.assertEqual(store.get_node("manual:1")["properties"]["label"], "manual")
+            self.assertEqual(store.query_edges(), [])
+
     def test_batch_validation_failure_does_not_mutate_store(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = GraphStore(Path(tmp) / "graph.json")
