@@ -63,7 +63,7 @@ class GraphifyAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "sample.py"
-            source.write_text("def sample(): pass\\n", encoding="utf-8")
+            source.write_text("def sample(): pass\n", encoding="utf-8")
             calls = {}
             graphify_package = types.ModuleType("graphify")
             graphify_package.__path__ = []
