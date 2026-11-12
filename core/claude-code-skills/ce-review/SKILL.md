@@ -36,7 +36,7 @@ Optional parameters:
    - Do not run the review if there are no changes and no specific file path was provided.
 5. Confirm the CE gateway is healthy:
    `curl -fsS --max-time 5 http://127.0.0.1:8080/api/v1/health`
-6. Locate the active CE checkout. Prefer `POC_CLAUDE_ENSEMBLE_REPO_ROOT` when set. Otherwise inspect the active `claude-ensemble.service` unit with `systemctl --user cat claude-ensemble.service` and check the known FlossWare CE checkout paths. Accept a candidate only if it contains `tools/arbitrate.py` and its Git remote identifies the intended FlossWare/claude-ensemble repository. Do not silently use an arbitrary stale checkout. If no valid checkout is found, stop and report the blocker.
+6. Locate the active CE checkout. Prefer `POC_CLAUDE_ENSEMBLE_REPO_ROOT` when set. Otherwise inspect the active `poc-ce-ensemble.service` unit with `systemctl --user cat poc-ce-ensemble.service` and check the known FlossWare CE checkout paths. Accept a candidate only if it contains `tools/arbitrate.py` and its Git remote identifies the intended FlossWare/claude-ensemble repository. Do not silently use an arbitrary stale checkout. If no valid checkout is found, stop and report the blocker.
 
 ## 2. Run the CE worker/arbiter review
 
