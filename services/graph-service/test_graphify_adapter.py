@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Tests for the Graphify adapter and atomic graph batch ingestion."""
 
-import os
 import sys
+import types
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 from graph_service import GraphStore
-from graphify_adapter import GraphifyInputError, normalize_extraction, _safe_target
+from graphify_adapter import GraphifyInputError, normalize_extraction, extract_local, _safe_target
 
 
 class GraphifyAdapterTests(unittest.TestCase):
@@ -57,6 +58,40 @@ class GraphifyAdapterTests(unittest.TestCase):
             self.assertEqual(target, inside.resolve())
             with self.assertRaises(GraphifyInputError):
                 _safe_target(root, outside)
+
+    def test_extract_local_uses_graphify_structural_api_without_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.py"
+            source.write_text("def sample(): pass\\n", encoding="utf-8")
+            calls = {}
+            graphify_package = types.ModuleType("graphify")
+            graphify_package.__path__ = []
+            graphify_extract = types.ModuleType("graphify.extract")
+
+            def collect_files(target, *, root):
+                calls["target"] = target
+                calls["root"] = root
+                return [source]
+
+            def extract(files, **kwargs):
+                calls["extract_kwargs"] = kwargs
+                return {"nodes": [{"id": "sample", "label": "sample"}],
+                        "edges": [], "failed_sources": [], "skipped_sources": []}
+
+            graphify_extract.collect_files = collect_files
+            graphify_extract.extract = extract
+            with patch.dict(sys.modules, {
+                "graphify": graphify_package,
+                "graphify.extract": graphify_extract,
+            }):
+                result = extract_local(root, "sample.py", cache_root=root / "cache")
+
+            self.assertEqual(result["files"], 1)
+            self.assertEqual(len(result["nodes"]), 1)
+            self.assertFalse(calls["extract_kwargs"]["parallel"])
+            self.assertEqual(calls["extract_kwargs"]["cache_root"], root / "cache")
+            self.assertEqual(calls["extract_kwargs"]["root"], root.resolve())
 
     def test_batch_ingestion_is_idempotent_and_persists_once(self):
         with tempfile.TemporaryDirectory() as tmp:
