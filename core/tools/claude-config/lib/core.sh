@@ -111,7 +111,7 @@ detect(){
   command -v claude >/dev/null 2>&1 && claude="$(claude --version 2>/dev/null | head -1 || true)"
   local memory_status="unreachable"
   command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$memory_url/health" >/dev/null 2>&1 && memory_status="reachable" || true
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet poc-ce-ensemble.service >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet poc-claude-ensemble-ensemble.service >/dev/null 2>&1; then
     gateway_unit_status="active"
   fi
   command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$gateway_url/api/v1/health" >/dev/null 2>&1 && gateway_http_status="reachable" || true
@@ -140,7 +140,7 @@ PY
   fi
   [ -f "$CC_REPO_ROOT/tools/record_workflow_outcome.py" ] && ok "Evidence-gated Learning outcome adapter exists in checkout" || warn "Learning outcome adapter missing from checkout"
   [ "$memory_status" = reachable ] && ok "Memory REST: $memory_url" || warn "Memory REST unavailable: $memory_url"
-  [ "$gateway_unit_status" = active ] && ok "Gateway unit: poc-ce-ensemble.service active" || warn "Gateway unit inactive: poc-ce-ensemble.service"
+  [ "$gateway_unit_status" = active ] && ok "Gateway unit: poc-claude-ensemble-ensemble.service active" || warn "Gateway unit inactive: poc-claude-ensemble-ensemble.service"
   [ "$gateway_http_status" = reachable ] && ok "Gateway REST: $gateway_url/api/v1/health" || warn "Gateway REST unavailable: $gateway_url/api/v1/health"
 }
 plan(){ ensure_safe_targets; python3 "$CC_ROOT/lib/json_tool.py" plan "$CC_SETTINGS_PATH" "$CC_HOOK_PATH"; }
@@ -177,7 +177,7 @@ verify(){
   local memory_url="${FLOSSWARE_MEMORY_URL:-http://127.0.0.1:8767}"
   local gateway_url="${POC_CLAUDE_ENSEMBLE_GATEWAY_URL:-http://127.0.0.1:8080}"
   if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$memory_url/health" >/dev/null 2>&1; then ok "Memory REST is reachable"; else warn "Memory REST is unavailable (hook will fail open)"; fi
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet poc-ce-ensemble.service; then ok "Gateway unit is active"; else warn "Gateway unit is inactive or systemd user manager is unavailable"; fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet poc-claude-ensemble-ensemble.service; then ok "Gateway unit is active"; else warn "Gateway unit is inactive or systemd user manager is unavailable"; fi
   if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 "$gateway_url/api/v1/health" >/dev/null 2>&1; then ok "Gateway REST is reachable"; else warn "Gateway REST is unavailable: $gateway_url/api/v1/health"; fi
   return "$failed"
 }

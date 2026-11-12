@@ -8,12 +8,12 @@ Claude Ensemble's supported managed runtime is the REST gateway plus four applic
 - `claude-thompson.service`
 - `claude-learning.service`
 - `claude-graph.service`
-- `poc-ce-ensemble.service` (REST gateway)
+- `poc-claude-ensemble-ensemble.service` (REST gateway)
 
 ## Inspect runtime state
 
 ```bash
-systemctl --user --no-pager --full status poc-ce-ensemble.service claude-memory.service claude-thompson.service claude-learning.service claude-graph.service
+systemctl --user --no-pager --full status poc-claude-ensemble-ensemble.service claude-memory.service claude-thompson.service claude-learning.service claude-graph.service
 tools/ce diagnose --deep --json
 ```
 

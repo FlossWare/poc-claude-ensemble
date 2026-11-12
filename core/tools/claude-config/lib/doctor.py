@@ -280,7 +280,7 @@ def main(config: DoctorConfig | None = None) -> int:
     if shutil.which("systemctl"):
         started = time.monotonic()
         result, error = run_bounded(
-            ["systemctl", "--user", "is-active", "--quiet", "poc-ce-ensemble.service"],
+            ["systemctl", "--user", "is-active", "--quiet", "poc-claude-ensemble-ensemble.service"],
             timeout=2, text=False
         )
         duration = round((time.monotonic() - started) * 1000)
@@ -288,7 +288,7 @@ def main(config: DoctorConfig | None = None) -> int:
         check(checks, "GATEWAY_UNIT", "Gateway systemd user unit",
               "pass" if active else "warn",
               "active" if active else (f"unit state unavailable ({error})" if result is None else "not active (the gateway may be managed another way)"),
-              "" if active else "Start poc-ce-ensemble.service if this installation uses systemd.",
+              "" if active else "Start poc-claude-ensemble-ensemble.service if this installation uses systemd.",
               duration_ms=duration)
     else:
         check(checks, "SYSTEMCTL_UNAVAILABLE", "Gateway systemd user unit", "skip",
@@ -298,7 +298,7 @@ def main(config: DoctorConfig | None = None) -> int:
         ("MEMORY_HEALTH", "Memory REST health", f"{memory_url}/health",
          "Check the Memory service and FLOSSWARE_MEMORY_URL. Prompt hooks are designed to fail open."),
         ("GATEWAY_HEALTH", "Gateway REST health", f"{gateway_url}/api/v1/health",
-         "Check poc-ce-ensemble.service, gateway logs, and POC_CLAUDE_ENSEMBLE_GATEWAY_URL."),
+         "Check poc-claude-ensemble-ensemble.service, gateway logs, and POC_CLAUDE_ENSEMBLE_GATEWAY_URL."),
         ("GATEWAY_CAPABILITIES", "Gateway capability health", f"{gateway_url}/api/v1/capabilities/health",
          "Check the gateway capability registry and configured provider setup."),
     ):

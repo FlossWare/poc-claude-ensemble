@@ -11,7 +11,7 @@ Use this skill for evidence-based diagnosis. Do not claim a service or workflow 
 
 1. Record the current working directory.
 2. Resolve the active Claude Code profile from `POC_CLAUDE_ENSEMBLE_CLAUDE_CODE_CONFIG_DIR`, then `CLAUDE_CONFIG_DIR`, then `~/.claude`. Do not assume the default profile is active.
-3. Locate the CE checkout. Prefer `POC_CLAUDE_ENSEMBLE_REPO_ROOT`; otherwise inspect `systemctl --user cat poc-ce-ensemble.service` and verify a candidate contains `tools/ce`, `scripts/ce-diagnose.py`, and a Git remote for `FlossWare/claude-ensemble`.
+3. Locate the CE checkout. Prefer `POC_CLAUDE_ENSEMBLE_REPO_ROOT`; otherwise inspect `systemctl --user cat poc-claude-ensemble-ensemble.service` and verify a candidate contains `tools/ce`, `scripts/ce-diagnose.py`, and a Git remote for `FlossWare/claude-ensemble`.
 4. Never modify or replace profile files during diagnosis. Do not use the legacy installer as a diagnostic shortcut.
 
 ## 2. Run read-only diagnostics
