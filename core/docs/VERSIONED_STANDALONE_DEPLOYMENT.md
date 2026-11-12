@@ -106,6 +106,6 @@ Diagnostics:
 systemctl --user --no-pager --full status \
   claude-memory.service claude-thompson.service claude-learning.service \
   claude-alert.service claude-messenger.service claude-graph.service \
-  claude-ensemble.service
-journalctl --user -u claude-ensemble.service -n 100 --no-pager
+  poc-ce-ensemble.service
+journalctl --user -u poc-ce-ensemble.service -n 100 --no-pager
 ```

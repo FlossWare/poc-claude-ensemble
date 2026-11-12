@@ -347,7 +347,7 @@ def main() -> int:
 
     if selected("gateway"):
         http_step("gateway.liveness", "/api/v1/health",
-                  remediation="Check claude-ensemble.service and POC_CLAUDE_ENSEMBLE_GATEWAY_URL.")
+                  remediation="Check poc-ce-ensemble.service and POC_CLAUDE_ENSEMBLE_GATEWAY_URL.")
         http_step("gateway.readiness", "/api/v1/ready",
                   remediation="Inspect the readiness response for Graph and Memory failures.")
 
