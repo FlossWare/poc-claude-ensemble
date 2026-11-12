@@ -69,8 +69,8 @@ configured graph store, not inside the source corpus.
 Run extraction using a path relative to the configured root:
 
 ```bash
-curl -fsS http://127.0.0.1:8766/graph/extract \\
-  -H 'content-type: application/json' \\
+curl -fsS http://127.0.0.1:8766/graph/extract \
+  -H 'content-type: application/json' \
   -d '{"path":"my-project"}' | jq
 ```
 
