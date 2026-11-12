@@ -83,7 +83,7 @@ def normalize_extraction(result: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         if not isinstance(graphify_id, str) or not graphify_id:
             continue
         source_file = str(item.get("source_file") or "")
-        # Namespace IDs by source file to avoid accidental cross-corpus collisions.
+        # Graphify IDs are corpus-scoped; retain them under our own namespace.
         identity = f"graphify:{graphify_id}"
         node_ids[graphify_id] = identity
         properties = dict(item)
