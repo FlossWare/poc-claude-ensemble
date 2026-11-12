@@ -90,6 +90,7 @@ def normalize_extraction(result: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         properties.pop("id", None)
         properties["graphify_id"] = graphify_id
         properties["source_file"] = source_file
+        properties["graphify"] = True
         nodes.append({"id": identity, "type": str(item.get("type") or item.get("kind") or "symbol"), "properties": properties})
 
     edges: list[dict[str, Any]] = []
