@@ -32,7 +32,7 @@ def _safe_target(root: str | Path, target: str | Path) -> tuple[Path, Path]:
     return allowed_root, resolved
 
 
-def extract_local(root: str | Path, target: str | Path, *, max_files: int = 2000) -> dict[str, Any]:
+def extract_local(root: str | Path, target: str | Path, *, cache_root: str | Path | None = None, max_files: int = 2000) -> dict[str, Any]:
     """Run deterministic Graphify extraction over a local target.
 
     No semantic/model backend is invoked. Network access is not part of this
@@ -54,7 +54,7 @@ def extract_local(root: str | Path, target: str | Path, *, max_files: int = 2000
 
     result = extract(
         files,
-        cache_root=allowed_root / ".graphify-cache",
+        cache_root=Path(cache_root) if cache_root is not None else allowed_root / ".graphify-cache",
         root=allowed_root,
         parallel=False,
         release_parse_memo=True,
@@ -82,7 +82,7 @@ def normalize_extraction(result: dict[str, Any]) -> tuple[list[dict[str, Any]], 
             continue
         source_file = str(item.get("source_file") or "")
         # Namespace IDs by source file to avoid accidental cross-corpus collisions.
-        identity = f"graphify:{source_file}:{graphify_id}"
+        identity = f"graphify:{graphify_id}"
         node_ids[graphify_id] = identity
         properties = dict(item)
         properties.pop("id", None)
