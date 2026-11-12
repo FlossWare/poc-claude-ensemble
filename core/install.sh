@@ -62,11 +62,11 @@ if ! systemctl --user show-environment >/dev/null 2>&1; then
 fi
 for required_path in \
     "$REPO_PATH/memory-service/install.sh" \
-    "$REPO_PATH/thompson-service/install.sh" \
-    "$REPO_PATH/learning-service/install.sh" \
-    "$REPO_PATH/graph-service/install.sh" \
-    "$REPO_PATH/server/install.sh" \
-    "$REPO_PATH/server/poc-claude-ensemble-ensemble.service.template" \
+    "$REPO_PATH/../services/thompson-service/install.sh" \
+    "$REPO_PATH/../services/learning-service/install.sh" \
+    "$REPO_PATH/../services/graph-service/install.sh" \
+    "$REPO_PATH/../services/server/install.sh" \
+    "$REPO_PATH/../services/server/poc-claude-ensemble-ensemble.service.template" \
     "$REPO_PATH/tools/claude-config/lib/json_tool.py"; do
     if [ ! -f "$required_path" ]; then
         echo "ERROR: Required CE installation file is missing: $required_path" >&2
@@ -328,7 +328,7 @@ echo ""
 echo "7. Installing and starting systemd user services..."
 # Retire the legacy CE-only Alert/Messenger units on source-checkout upgrades too.
 SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
-for legacy_unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
+for legacy_unit in claude-alert.service claude-messenger.service; do
     systemctl --user stop "$legacy_unit" >/dev/null 2>&1 || true
     systemctl --user disable "$legacy_unit" >/dev/null 2>&1 || true
     rm -f -- "$SYSTEMD_DIR/$legacy_unit"
@@ -336,10 +336,10 @@ done
 systemctl --user daemon-reload
 SERVICE_INSTALLERS=(
     "memory-service/install.sh"
-    "thompson-service/install.sh"
-    "learning-service/install.sh"
-    "graph-service/install.sh"
-    "server/install.sh"
+    "../services/thompson-service/install.sh"
+    "../services/learning-service/install.sh"
+    "../services/graph-service/install.sh"
+    "../services/server/install.sh"
 )
 
 for SERVICE_INSTALLER in "${SERVICE_INSTALLERS[@]}"; do

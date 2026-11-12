@@ -55,9 +55,9 @@ RELEASES="$ROOT/releases"
 CURRENT="$ROOT/current"
 KNOWN_GOOD="$ROOT/known-good.json"
 UNITS=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
-LEGACY_UNITS=(poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service)
+LEGACY_UNITS=(claude-alert.service claude-messenger.service)
 ALL_UNITS=(${UNITS[@]} ${LEGACY_UNITS[@]})
-STOP_ORDER=(poc-claude-ensemble-ensemble.service poc-claude-ensemble-graph.service poc-claude-ensemble-learning.service poc-claude-ensemble-thompson.service poc-claude-ensemble-memory.service poc-claude-ensemble-messenger.service poc-claude-ensemble-alert.service)
+STOP_ORDER=(poc-claude-ensemble-ensemble.service poc-claude-ensemble-graph.service poc-claude-ensemble-learning.service poc-claude-ensemble-thompson.service poc-claude-ensemble-memory.service poc-claude-ensemble-messenger.service poc-claude-ensemble-alert.service claude-alert.service claude-messenger.service)
 START_ORDER=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 SCRIPT="$SCRIPT_DIR/../tools/ce-deployment"
+service_source() { if [ -d "$SCRIPT_DIR/../$1" ]; then echo "$SCRIPT_DIR/../$1"; else echo "$SCRIPT_DIR/../../services/$1"; fi; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
@@ -55,8 +56,8 @@ chmod +x "$TMP/bin/systemctl" "$TMP/bin/python3"
 export PATH="$TMP/bin:$PATH"
 
 for version in 0.1 0.2; do
-  for service_dir in memory-service thompson-service learning-service graph-service server; do
-    cp -a "$SCRIPT_DIR/../$service_dir" "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/$version/"
+  for service_dir in memory-service thompson-service learning-service graph-service server ingestion; do
+    cp -a "$(service_source "$service_dir")" "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/$version/"
   done
   cp "$SCRIPT_DIR/../tools/managed_unit_config.py" "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/$version/tools/managed_unit_config.py"
   cat > "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/$version/install.sh" <<'MOCK_INSTALL'
@@ -198,7 +199,7 @@ fi
 [[ ! -e "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/activation-backups" ]] || { echo "FAIL: unavailable manager created activation backups" >&2; exit 1; }
 
 # Simulate an upgrade from a legacy deployment with Alert and Messenger active.
-for unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
+for unit in claude-alert.service claude-messenger.service; do
   printf '[Unit]\nDescription=legacy fixture\n' > "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit"
   touch "$CE_TEST_STATE/active/$unit"
 done
@@ -206,7 +207,7 @@ done
 # First activation should start the four application services and gateway.
 bash "$SCRIPT" activate 0.1
 [[ "$(bash "$SCRIPT" status | grep '^Current:' | awk '{print $2}')" == 0.1 ]]
-for unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
+for unit in claude-alert.service claude-messenger.service; do
   [[ ! -e "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit" ]] || { echo "FAIL: legacy unit file was not retired: $unit" >&2; exit 1; }
   [[ ! -e "$CE_TEST_STATE/active/$unit" ]] || { echo "FAIL: legacy service remained active: $unit" >&2; exit 1; }
 done
@@ -285,8 +286,8 @@ INSTALL_HOME="$TMP/install-home"
 INSTALL_ROOT="$INSTALL_HOME/.FlossWare/poc-claude-ensemble"
 SOURCE_FIXTURE="$TMP/source-fixture"
 mkdir -p "$INSTALL_HOME/.FlossWare/claude-ensemble-profile" "$INSTALL_ROOT/claude-code" "$INSTALL_ROOT/shared/claude-code" "$SOURCE_FIXTURE/tools"
-for service_dir in memory-service thompson-service learning-service graph-service server; do
-  cp -a "$SCRIPT_DIR/../$service_dir" "$SOURCE_FIXTURE/"
+for service_dir in memory-service thompson-service learning-service graph-service server ingestion; do
+  cp -a "$(service_source "$service_dir")" "$SOURCE_FIXTURE/"
 done
 cp "$SCRIPT_DIR/../tools/managed_unit_config.py" "$SOURCE_FIXTURE/tools/managed_unit_config.py"
 cp "$SCRIPT_DIR/../tools/backup-ce-state.sh" "$SOURCE_FIXTURE/tools/backup-ce-state.sh"
@@ -434,8 +435,8 @@ SERVICE_RELEASE="$SERVICE_ROOT/releases/0.1"
 SERVICE_UNIT_DIR="$SERVICE_HOME/staged-systemd-units"
 mkdir -p "$SERVICE_RELEASE" "$SERVICE_HOME/.config/systemd/user" "$SERVICE_UNIT_DIR"
 export POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR="$SERVICE_UNIT_DIR"
-for service_dir in memory-service thompson-service learning-service graph-service server; do
-  cp -a "$SCRIPT_DIR/../$service_dir" "$SERVICE_RELEASE/"
+for service_dir in memory-service thompson-service learning-service graph-service server ingestion; do
+  cp -a "$(service_source "$service_dir")" "$SERVICE_RELEASE/"
 done
 ln -s releases/0.1 "$SERVICE_ROOT/current"
 export HOME="$SERVICE_HOME"
