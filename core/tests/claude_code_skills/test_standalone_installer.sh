@@ -12,7 +12,7 @@ FAKE_BIN="$TMP_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 export CE_SYSTEMCTL_LOG="$TMP_ROOT/systemctl.log"
 export CE_SYSTEMCTL_STATE="$TMP_ROOT/systemctl.active"
-printf '%s\n' claude-memory.service claude-thompson.service claude-learning.service claude-alert.service claude-messenger.service claude-graph.service claude-ensemble.service > "$CE_SYSTEMCTL_STATE"
+printf '%s\n' poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service > "$CE_SYSTEMCTL_STATE"
 cat > "$FAKE_BIN/systemctl" <<'SYSTEMCTL'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CE_SYSTEMCTL_LOG"
@@ -44,7 +44,7 @@ cat > "$SOURCE/install.sh" <<'INSTALL'
 [[ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-}" == "1" ]] || exit 5
 # The standalone wrapper must not start any service before this installer exits.
 awk '
-  /--user stop claude-ensemble.service/ { last_stop = NR }
+  /--user stop poc-claude-ensemble-ensemble.service/ { last_stop = NR }
   /--user start / { last_start = NR }
   END { if (last_start > last_stop) exit 1 }
 ' "$CE_SYSTEMCTL_LOG"
@@ -83,8 +83,8 @@ if grep -q 'exit 42' "$DEPLOY/install.sh"; then
 fi
 
 # Verify lifecycle operations include service stops, reload, and post-install starts.
-grep -q -- '--user stop claude-ensemble.service' "$CE_SYSTEMCTL_LOG"
-grep -q -- '--user start claude-memory.service' "$CE_SYSTEMCTL_LOG"
+grep -q -- '--user stop poc-claude-ensemble-ensemble.service' "$CE_SYSTEMCTL_LOG"
+grep -q -- '--user start poc-claude-ensemble-memory.service' "$CE_SYSTEMCTL_LOG"
 grep -q -- '--user daemon-reload' "$CE_SYSTEMCTL_LOG"
 
 printf 'Standalone copy installer tests passed.\n'

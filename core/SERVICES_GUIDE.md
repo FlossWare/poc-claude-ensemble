@@ -7,10 +7,10 @@ Claude Ensemble manages **four application services plus its REST gateway**. Thi
 | Component | Responsibility | Default endpoint |
 |---|---|---|
 | Gateway (`poc-claude-ensemble-ensemble.service`) | REST entry point and orchestration integration | `http://127.0.0.1:8080` |
-| Memory (`claude-memory.service`) | Persistent episodic memory and durable Knowledge retrieval | `http://127.0.0.1:8767` |
-| Graph (`claude-graph.service`) | Relationships between projects, decisions, and documents | `http://127.0.0.1:8766` |
-| Thompson (`claude-thompson.service`) | Model/workflow selection statistics and recommendations | Deployment-managed Unix socket |
-| Learning (`claude-learning.service`) | Evidence-backed outcome capture and learner updates | Deployment-managed Unix socket |
+| Memory (`poc-claude-ensemble-memory.service`) | Persistent episodic memory and durable Knowledge retrieval | `http://127.0.0.1:8767` |
+| Graph (`poc-claude-ensemble-graph.service`) | Relationships between projects, decisions, and documents | `http://127.0.0.1:8766` |
+| Thompson (`poc-claude-ensemble-thompson.service`) | Model/workflow selection statistics and recommendations | Deployment-managed Unix socket |
+| Learning (`poc-claude-ensemble-learning.service`) | Evidence-backed outcome capture and learner updates | Deployment-managed Unix socket |
 
 For a versioned install, CE owns its mutable profile and service state beneath
 `~/.FlossWare/claude-ensemble/shared/`. In particular, the dedicated Claude Code
@@ -42,10 +42,10 @@ Check the service units:
 
 ```bash
 systemctl --user status poc-claude-ensemble-ensemble.service
-systemctl --user status claude-memory.service
-systemctl --user status claude-graph.service
-systemctl --user status claude-thompson.service
-systemctl --user status claude-learning.service
+systemctl --user status poc-claude-ensemble-memory.service
+systemctl --user status poc-claude-ensemble-graph.service
+systemctl --user status poc-claude-ensemble-thompson.service
+systemctl --user status poc-claude-ensemble-learning.service
 ```
 
 Run the bounded diagnostics:

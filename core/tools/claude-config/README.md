@@ -77,7 +77,7 @@ This indexes Markdown below the selected project root, skips common generated/ve
 
 Integration version: 0.2.
 
-The canonical REST gateway is installed as `claude-ensemble.service` and listens on loopback at `http://127.0.0.1:8080` by default. `claude-config doctor` reports configuration/runtime findings, including gateway deployment state, Memory health, gateway health, capability health, provider policy, and managed hook registration. Use `--verbose` to show passing checks or `--json` for machine-readable output. Override the gateway URL with `POC_CLAUDE_ENSEMBLE_GATEWAY_URL`; Memory uses `FLOSSWARE_MEMORY_URL`.
+The canonical REST gateway is installed as `poc-claude-ensemble-ensemble.service` and listens on loopback at `http://127.0.0.1:8080` by default. `claude-config doctor` reports configuration/runtime findings, including gateway deployment state, Memory health, gateway health, capability health, provider policy, and managed hook registration. Use `--verbose` to show passing checks or `--json` for machine-readable output. Override the gateway URL with `POC_CLAUDE_ENSEMBLE_GATEWAY_URL`; Memory uses `FLOSSWARE_MEMORY_URL`.
 
 **Doctor exit semantics:** exit code `1` means one or more checks have status `fail`; exit code `0` means no checks failed. Warnings (`warn`) and skipped checks (`skip`) are reported but do not change the exit code. Warnings commonly mean an optional service or systemd unit is unavailable, while failures identify a configured requirement that is not satisfied. In JSON output, inspect `ok`, `summary`, and each check's `status` and `remediation`. A skipped provider-policy check is informational and has no remediation because no dedicated CE profile was explicitly selected.
 

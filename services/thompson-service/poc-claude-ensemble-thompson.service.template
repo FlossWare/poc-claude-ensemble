@@ -1,6 +1,6 @@
 [Unit]
 Description=Thompson Router Service - Model selection authority via Thompson Sampling
-Documentation=file://%h/.config/systemd/user/claude-thompson.service.d/README.md
+Documentation=file://%h/.config/systemd/user/poc-claude-ensemble-thompson.service.d/README.md
 After=network.target
 
 [Service]

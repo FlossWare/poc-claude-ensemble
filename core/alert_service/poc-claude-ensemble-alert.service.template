@@ -1,8 +1,8 @@
 [Unit]
 Description=Alert Service - Central alert service for Claude Code monitoring
-Documentation=file://%h/.config/systemd/user/claude-alert.service.d/README.md
-After=network.target claude-learning.service
-Wants=claude-learning.service
+Documentation=file://%h/.config/systemd/user/poc-claude-ensemble-alert.service.d/README.md
+After=network.target poc-claude-ensemble-learning.service
+Wants=poc-claude-ensemble-learning.service
 
 [Service]
 Type=simple

@@ -1,8 +1,8 @@
 [Unit]
 Description=Learning Service - Central learning authority for task outcome recording
-Documentation=file://%h/.config/systemd/user/claude-learning.service.d/README.md
-After=network.target claude-thompson.service
-Wants=claude-thompson.service
+Documentation=file://%h/.config/systemd/user/poc-claude-ensemble-learning.service.d/README.md
+After=network.target poc-claude-ensemble-thompson.service
+Wants=poc-claude-ensemble-thompson.service
 
 [Service]
 Type=simple

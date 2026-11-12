@@ -54,11 +54,11 @@ esac
 RELEASES="$ROOT/releases"
 CURRENT="$ROOT/current"
 KNOWN_GOOD="$ROOT/known-good.json"
-UNITS=(claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service)
-LEGACY_UNITS=(claude-alert.service claude-messenger.service)
+UNITS=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
+LEGACY_UNITS=(poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service)
 ALL_UNITS=(${UNITS[@]} ${LEGACY_UNITS[@]})
-STOP_ORDER=(claude-ensemble.service claude-graph.service claude-learning.service claude-thompson.service claude-memory.service claude-messenger.service claude-alert.service)
-START_ORDER=(claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service)
+STOP_ORDER=(poc-claude-ensemble-ensemble.service poc-claude-ensemble-graph.service poc-claude-ensemble-learning.service poc-claude-ensemble-thompson.service poc-claude-ensemble-memory.service poc-claude-ensemble-messenger.service poc-claude-ensemble-alert.service)
+START_ORDER=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+$ ]]; }
@@ -309,7 +309,7 @@ active_file = data.get("active_before_file")
 expected_active_file = os.path.join(backup, "active-before.txt")
 if active_file != expected_active_file or not os.path.isfile(active_file):
     raise SystemExit("activation journal is missing valid active-service state")
-allowed_units = {"claude-memory.service", "claude-thompson.service", "claude-learning.service", "claude-alert.service", "claude-messenger.service", "claude-graph.service", "claude-ensemble.service"}
+allowed_units = {"poc-claude-ensemble-memory.service", "poc-claude-ensemble-thompson.service", "poc-claude-ensemble-learning.service", "poc-claude-ensemble-alert.service", "poc-claude-ensemble-messenger.service", "poc-claude-ensemble-graph.service", "poc-claude-ensemble-ensemble.service"}
 with open(active_file, encoding="utf-8") as source:
     if any(line.rstrip("\n") not in allowed_units for line in source):
         raise SystemExit("active-service state contains an unknown unit")

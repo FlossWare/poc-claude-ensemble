@@ -7,22 +7,22 @@ import sys
 from pathlib import Path
 
 UNITS = {
-    "claude-memory.service": {
+    "poc-claude-ensemble-memory.service": {
         "POC_CLAUDE_ENSEMBLE_MEMORY_DIR": "data/memory",
         "POC_CLAUDE_ENSEMBLE_MEMORY_SOCKET": "runtime/memory.sock",
     },
-    "claude-thompson.service": {
+    "poc-claude-ensemble-thompson.service": {
         "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE": "data/thompson-sampling-state.json",
         "POC_CLAUDE_ENSEMBLE_THOMPSON_SOCKET": "runtime/thompson.sock",
     },
-    "claude-learning.service": {
+    "poc-claude-ensemble-learning.service": {
         "POC_CLAUDE_ENSEMBLE_LEARNING_DIR": "data/learning",
         "POC_CLAUDE_ENSEMBLE_LEARNING_SOCKET": "runtime/learning.sock",
     },
-    "claude-graph.service": {
+    "poc-claude-ensemble-graph.service": {
         "POC_CLAUDE_ENSEMBLE_GRAPH_STORE": "data/graph.json",
     },
-    "claude-ensemble.service": {},
+    "poc-claude-ensemble-ensemble.service": {},
 }
 
 

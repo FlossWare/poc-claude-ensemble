@@ -196,8 +196,8 @@ directory when testing a source checkout):
 bash server/install.sh
 ```
 
-The installer writes `claude-ensemble.service` and
-`claude-ingestion.service` under `~/.config/systemd/user`, reloads systemd,
+The installer writes `poc-claude-ensemble-ensemble.service` and
+`poc-claude-ensemble-ingestion.service` under `~/.config/systemd/user`, reloads systemd,
 starts ingestion and the gateway, and waits for both the gateway readiness
 endpoint and ingestion `/health` endpoint. The ingestion unit is loopback-only,
 runs with a read-only home and system filesystem, and uses a private temporary
@@ -206,14 +206,14 @@ directory for bounded PDF extraction. It does not enable anonymous FTP.
 To install and enable the units without starting them (for a top-level
 installer that controls startup ordering), set
 `POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1`. The top-level installer must
-then start `claude-ingestion.service` and `claude-ensemble.service` after
+then start `poc-claude-ensemble-ingestion.service` and `poc-claude-ensemble-ensemble.service` after
 their dependencies are available.
 
 Inspect the service with:
 
 ```bash
-systemctl --user status claude-ingestion.service
-journalctl --user -u claude-ingestion.service -f
+systemctl --user status poc-claude-ensemble-ingestion.service
+journalctl --user -u poc-claude-ensemble-ingestion.service -f
 curl -fsS http://127.0.0.1:8782/health | jq
 ```
 

@@ -1,7 +1,7 @@
 [Unit]
 Description=Claude Ensemble Canonical REST Gateway
-After=network.target claude-graph.service claude-memory.service
-Wants=claude-graph.service claude-memory.service
+After=network.target poc-claude-ensemble-graph.service poc-claude-ensemble-memory.service
+Wants=poc-claude-ensemble-graph.service poc-claude-ensemble-memory.service
 
 [Service]
 Type=simple

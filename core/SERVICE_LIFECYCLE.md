@@ -4,16 +4,16 @@ Claude Ensemble's supported managed runtime is the REST gateway plus four applic
 
 ## Managed units
 
-- `claude-memory.service`
-- `claude-thompson.service`
-- `claude-learning.service`
-- `claude-graph.service`
+- `poc-claude-ensemble-memory.service`
+- `poc-claude-ensemble-thompson.service`
+- `poc-claude-ensemble-learning.service`
+- `poc-claude-ensemble-graph.service`
 - `poc-claude-ensemble-ensemble.service` (REST gateway)
 
 ## Inspect runtime state
 
 ```bash
-systemctl --user --no-pager --full status poc-claude-ensemble-ensemble.service claude-memory.service claude-thompson.service claude-learning.service claude-graph.service
+systemctl --user --no-pager --full status poc-claude-ensemble-ensemble.service poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service
 tools/ce diagnose --deep --json
 ```
 
@@ -28,7 +28,7 @@ POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$HOME/.FlossWare/ce-staging-test" POC_CLAUDE_E
   bash tools/install-ce-versioned.sh 0.1 "$PWD"
 ```
 
-Activation backs up managed and legacy unit files, stops the previous runtime, switches the active release, installs the five supported units, starts them in dependency order, and checks readiness. On upgrades, old `claude-alert.service` and `claude-messenger.service` units are stopped and their unit files removed. Shared data and immutable releases are preserved for rollback.
+Activation backs up managed and legacy unit files, stops the previous runtime, switches the active release, installs the five supported units, starts them in dependency order, and checks readiness. On upgrades, old `poc-claude-ensemble-alert.service` and `poc-claude-ensemble-messenger.service` units are stopped and their unit files removed. Shared data and immutable releases are preserved for rollback.
 
 To inspect or recover a deployment, use the deployment helper from the active release:
 

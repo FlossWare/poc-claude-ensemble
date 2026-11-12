@@ -2,8 +2,8 @@
 # Install Claude Ensemble Memory Service as a systemd user service.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_NAME="claude-memory.service"
-SERVICE_TEMPLATE="$REPO_ROOT/memory-service/claude-memory.service.template"
+SERVICE_NAME="poc-claude-ensemble-memory.service"
+SERVICE_TEMPLATE="$REPO_ROOT/memory-service/poc-claude-ensemble-memory.service.template"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-${HOME}/.config/systemd/user}"
 SERVICE_FILE="$SYSTEMD_DIR/$SERVICE_NAME"

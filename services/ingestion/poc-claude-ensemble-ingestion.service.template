@@ -1,7 +1,7 @@
 [Unit]
 Description=POC Claude Ensemble URI and Document Ingestion Service
-After=network.target claude-memory.service
-Wants=claude-memory.service
+After=network.target poc-claude-ensemble-memory.service
+Wants=poc-claude-ensemble-memory.service
 
 [Service]
 Type=simple

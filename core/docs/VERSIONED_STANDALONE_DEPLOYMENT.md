@@ -104,8 +104,8 @@ Diagnostics:
 
 ```bash
 systemctl --user --no-pager --full status \
-  claude-memory.service claude-thompson.service claude-learning.service \
-  claude-alert.service claude-messenger.service claude-graph.service \
+  poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service \
+  poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service poc-claude-ensemble-graph.service \
   poc-claude-ensemble-ensemble.service
 journalctl --user -u poc-claude-ensemble-ensemble.service -n 100 --no-pager
 ```

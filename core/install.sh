@@ -66,7 +66,7 @@ for required_path in \
     "$REPO_PATH/learning-service/install.sh" \
     "$REPO_PATH/graph-service/install.sh" \
     "$REPO_PATH/server/install.sh" \
-    "$REPO_PATH/server/claude-ensemble.service.template" \
+    "$REPO_PATH/server/poc-claude-ensemble-ensemble.service.template" \
     "$REPO_PATH/tools/claude-config/lib/json_tool.py"; do
     if [ ! -f "$required_path" ]; then
         echo "ERROR: Required CE installation file is missing: $required_path" >&2
@@ -328,7 +328,7 @@ echo ""
 echo "7. Installing and starting systemd user services..."
 # Retire the legacy CE-only Alert/Messenger units on source-checkout upgrades too.
 SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
-for legacy_unit in claude-alert.service claude-messenger.service; do
+for legacy_unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
     systemctl --user stop "$legacy_unit" >/dev/null 2>&1 || true
     systemctl --user disable "$legacy_unit" >/dev/null 2>&1 || true
     rm -f -- "$SYSTEMD_DIR/$legacy_unit"
@@ -355,11 +355,11 @@ done
 # explicitly deferred startup until the full installation and symlink audit finish.
 if [[ "${POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START:-0}" != "1" ]]; then
     for unit in \
-        claude-memory.service \
-        claude-thompson.service \
-        claude-learning.service \
-        claude-graph.service \
-        claude-ensemble.service; do
+        poc-claude-ensemble-memory.service \
+        poc-claude-ensemble-thompson.service \
+        poc-claude-ensemble-learning.service \
+        poc-claude-ensemble-graph.service \
+        poc-claude-ensemble-ensemble.service; do
         if ! systemctl --user is-active --quiet "$unit"; then
             echo "ERROR: Required CE service is not active: $unit" >&2
             echo "       Inspect with: journalctl --user -u $unit -n 80 --no-pager" >&2

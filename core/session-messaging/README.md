@@ -70,9 +70,9 @@ Published events are delivered to matching current subscribers only and are not 
 Install the user service (the template uses @POC_CLAUDE_ENSEMBLE_ROOT@ as an install-time placeholder):
 
     mkdir -p ~/.config/systemd/user
-    sed "s|@POC_CLAUDE_ENSEMBLE_ROOT@|$HOME/Development/FlossWare/claude-ensemble|g" claude-messenger.service.template > ~/.config/systemd/user/claude-messenger.service
+    sed "s|@POC_CLAUDE_ENSEMBLE_ROOT@|$HOME/Development/FlossWare/claude-ensemble|g" poc-claude-ensemble-messenger.service.template > ~/.config/systemd/user/poc-claude-ensemble-messenger.service
     systemctl --user daemon-reload
-    systemctl --user enable --now claude-messenger.service
+    systemctl --user enable --now poc-claude-ensemble-messenger.service
 
 Publish:
 

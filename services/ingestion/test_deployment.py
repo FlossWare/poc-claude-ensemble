@@ -7,7 +7,7 @@ from pathlib import Path
 
 SERVICES_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = SERVICES_ROOT / "server" / "install.sh"
-UNIT_TEMPLATE = Path(__file__).with_name("claude-ingestion.service.template")
+UNIT_TEMPLATE = Path(__file__).with_name("poc-claude-ensemble-ingestion.service.template")
 
 
 class IngestionDeploymentTests(unittest.TestCase):
@@ -42,14 +42,14 @@ class IngestionDeploymentTests(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            gateway = (unit_dir / "claude-ensemble.service").read_text(encoding="utf-8")
-            ingestion = (unit_dir / "claude-ingestion.service").read_text(encoding="utf-8")
+            gateway = (unit_dir / "poc-claude-ensemble-ensemble.service").read_text(encoding="utf-8")
+            ingestion = (unit_dir / "poc-claude-ensemble-ingestion.service").read_text(encoding="utf-8")
             self.assertIn(f"ExecStart=/usr/bin/env python3 {SERVICES_ROOT}/server/ensemble_server.py", gateway)
             self.assertIn(f"ExecStart=/usr/bin/env python3 {SERVICES_ROOT}/ingestion/ingestion_service.py", ingestion)
             self.assertNotIn("%REPO_PATH%", gateway + ingestion)
             commands = log.read_text(encoding="utf-8")
             self.assertIn("--user daemon-reload", commands)
-            self.assertIn("--user enable claude-ensemble.service claude-ingestion.service", commands)
+            self.assertIn("--user enable poc-claude-ensemble-ensemble.service poc-claude-ensemble-ingestion.service", commands)
             self.assertNotIn("--user start", commands)
 
     def test_ingestion_unit_is_loopback_only_and_sandboxed_without_hiding_checkout(self):

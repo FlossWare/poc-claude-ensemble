@@ -12,7 +12,7 @@ Readiness is a point-in-time probe, not a guarantee that a dependency will remai
 
 ## Installer success
 
-server/install.sh first enables and starts claude-ensemble.service, then waits up to 20 seconds for /api/v1/ready. It exits nonzero if the unit is inactive or if Graph and Memory do not become ready within that window. The top-level install.sh also verifies that all managed systemd units are active; that unit-state check does not replace the gateway readiness probe.
+server/install.sh first enables and starts poc-claude-ensemble-ensemble.service, then waits up to 20 seconds for /api/v1/ready. It exits nonzero if the unit is inactive or if Graph and Memory do not become ready within that window. The top-level install.sh also verifies that all managed systemd units are active; that unit-state check does not replace the gateway readiness probe.
 
 The installer readiness URL currently assumes the service template's loopback address and port: 127.0.0.1:8080.
 

@@ -164,11 +164,11 @@ jobs:
         run: |
           set -euo pipefail
           services=(
-            "memory-service/claude-memory.service.template"
-            "thompson-service/claude-thompson.service.template"
-            "learning-service/claude-learning.service.template"
-            "graph-service/claude-graph.service.template"
-            "server/claude-ensemble.service.template"
+            "memory-service/poc-claude-ensemble-memory.service.template"
+            "thompson-service/poc-claude-ensemble-thompson.service.template"
+            "learning-service/poc-claude-ensemble-learning.service.template"
+            "graph-service/poc-claude-ensemble-graph.service.template"
+            "server/poc-claude-ensemble-ensemble.service.template"
           )
 
           for template in "${services[@]}"; do

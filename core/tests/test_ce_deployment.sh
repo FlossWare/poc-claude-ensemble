@@ -64,7 +64,7 @@ for version in 0.1 0.2; do
 set -Eeuo pipefail
 unit_dir="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
 mkdir -p "$unit_dir"
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   printf '[Service]\nExecStart=%s/current/fake-service\n' "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT" > "$unit_dir/$unit"
 done
 MOCK_INSTALL
@@ -90,7 +90,7 @@ rm "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/0.1/tools/outside-host"
 
 # A structurally valid release with a broken generated unit must fail preflight
 # before activation, systemd calls, or current-symlink mutation.
-GRAPH_TEMPLATE="$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/0.2/graph-service/claude-graph.service.template"
+GRAPH_TEMPLATE="$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/releases/0.2/graph-service/poc-claude-ensemble-graph.service.template"
 cp "$GRAPH_TEMPLATE" "$TMP/graph-template.backup"
 sed -i '/^ExecStart=/d' "$GRAPH_TEMPLATE"
 if bash "$SCRIPT" validate 0.2 >/dev/null 2>&1; then
@@ -198,7 +198,7 @@ fi
 [[ ! -e "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/activation-backups" ]] || { echo "FAIL: unavailable manager created activation backups" >&2; exit 1; }
 
 # Simulate an upgrade from a legacy deployment with Alert and Messenger active.
-for unit in claude-alert.service claude-messenger.service; do
+for unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
   printf '[Unit]\nDescription=legacy fixture\n' > "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit"
   touch "$CE_TEST_STATE/active/$unit"
 done
@@ -206,11 +206,11 @@ done
 # First activation should start the four application services and gateway.
 bash "$SCRIPT" activate 0.1
 [[ "$(bash "$SCRIPT" status | grep '^Current:' | awk '{print $2}')" == 0.1 ]]
-for unit in claude-alert.service claude-messenger.service; do
+for unit in poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service; do
   [[ ! -e "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit" ]] || { echo "FAIL: legacy unit file was not retired: $unit" >&2; exit 1; }
   [[ ! -e "$CE_TEST_STATE/active/$unit" ]] || { echo "FAIL: legacy service remained active: $unit" >&2; exit 1; }
 done
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   [[ -e "$CE_TEST_STATE/active/$unit" ]] || { echo "FAIL: $unit not active" >&2; exit 1; }
   unit_file="$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit"
   [[ -f "$unit_file" ]] || { echo "FAIL: generated unit missing from isolated directory: $unit_file" >&2; exit 1; }
@@ -224,18 +224,18 @@ for unit in claude-memory.service claude-thompson.service claude-learning.servic
     exit 1
   fi
 done
-grep -Fq "POC_CLAUDE_ENSEMBLE_MEMORY_DIR=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/memory" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/claude-memory.service" || { echo "FAIL: memory data path not isolated" >&2; exit 1; }
-grep -Fq "POC_CLAUDE_ENSEMBLE_LEARNING_DIR=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/learning" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/claude-learning.service" || { echo "FAIL: learning data path not isolated" >&2; exit 1; }
-grep -Fq "POC_CLAUDE_ENSEMBLE_GRAPH_STORE=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/graph.json" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/claude-graph.service" || { echo "FAIL: graph data path not isolated" >&2; exit 1; }
-grep -Fq "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/thompson-sampling-state.json" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/claude-thompson.service" || { echo "FAIL: Thompson state path not isolated" >&2; exit 1; }
+grep -Fq "POC_CLAUDE_ENSEMBLE_MEMORY_DIR=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/memory" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/poc-claude-ensemble-memory.service" || { echo "FAIL: memory data path not isolated" >&2; exit 1; }
+grep -Fq "POC_CLAUDE_ENSEMBLE_LEARNING_DIR=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/learning" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/poc-claude-ensemble-learning.service" || { echo "FAIL: learning data path not isolated" >&2; exit 1; }
+grep -Fq "POC_CLAUDE_ENSEMBLE_GRAPH_STORE=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/graph.json" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/poc-claude-ensemble-graph.service" || { echo "FAIL: graph data path not isolated" >&2; exit 1; }
+grep -Fq "POC_CLAUDE_ENSEMBLE_THOMPSON_STATE_FILE=$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/data/thompson-sampling-state.json" "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/poc-claude-ensemble-thompson.service" || { echo "FAIL: Thompson state path not isolated" >&2; exit 1; }
 
 # Force one startup failure for 0.2. The helper must restore 0.1 and recover.
-if FAIL_START_UNIT=claude-ensemble.service bash "$SCRIPT" activate 0.2; then
+if FAIL_START_UNIT=poc-claude-ensemble-ensemble.service bash "$SCRIPT" activate 0.2; then
   echo 'FAIL: activation unexpectedly succeeded despite injected service failure' >&2
   exit 1
 fi
 [[ "$(bash "$SCRIPT" status | grep '^Current:' | awk '{print $2}')" == 0.1 ]]
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   [[ -e "$CE_TEST_STATE/active/$unit" ]] || { echo "FAIL: rollback did not recover $unit" >&2; exit 1; }
 done
 
@@ -244,7 +244,7 @@ done
 BACKUP="$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/activation-backups/activation.test"
 mkdir -p "$BACKUP" "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/shared/activation-backups"
 : > "$BACKUP/active-before.txt"
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   cp -a "$POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR/$unit" "$BACKUP/$unit"
   printf "%s\n" "$unit" >> "$BACKUP/active-before.txt"
   rm -f "$CE_TEST_STATE/active/$unit"
@@ -261,7 +261,7 @@ JOURNAL
 bash "$SCRIPT" recover
 [[ "$(readlink "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/current")" == releases/0.1 ]]
 [[ ! -e "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT/activation.json" ]]
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   [[ -e "$CE_TEST_STATE/active/$unit" ]] || { echo "FAIL: recovery did not restart $unit" >&2; exit 1; }
 done
 [[ ! -e "$BACKUP" ]]
@@ -303,7 +303,7 @@ cat > "$SOURCE_FIXTURE/install.sh" <<'FIXTURE_INSTALL'
 set -Eeuo pipefail
 unit_dir="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-$HOME/.config/systemd/user}"
 mkdir -p "$unit_dir"
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   printf '[Service]\nExecStart=%s/current/fake-service\n' "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT" > "$unit_dir/$unit"
 done
 FIXTURE_INSTALL
@@ -443,7 +443,7 @@ export POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$SERVICE_ROOT"
 for installer in memory-service/install.sh thompson-service/install.sh learning-service/install.sh graph-service/install.sh server/install.sh; do
   POC_CLAUDE_ENSEMBLE_DEFER_SERVICE_START=1 bash "$SERVICE_ROOT/current/$installer"
 done
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   unit_file="$SERVICE_UNIT_DIR/$unit"
   [[ -f "$unit_file" ]] || { echo "FAIL: real installer did not generate $unit" >&2; exit 1; }
   grep -Fq "$SERVICE_ROOT/current" "$unit_file" || { echo "FAIL: $unit does not use stable current path" >&2; cat "$unit_file" >&2; exit 1; }
@@ -468,7 +468,7 @@ printf 'preserve-me\n' > "$UNINSTALL_ROOT/shared/data/memory/record.jsonl"
 printf '{"user":"keep"}\n' > "$UNINSTALL_HOME/.claude/settings.json"
 printf '# user shell config\n' > "$UNINSTALL_HOME/.bashrc"
 printf '[Service]\nExecStart=/user/owned/service\n' > "$UNINSTALL_UNITS/claude-user-custom.service"
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   printf '[Service]\nExecStart=/test/current/service\n' > "$UNINSTALL_UNITS/$unit"
 done
 cat > "$TMP/uninstall-bin/systemctl-mock" <<'MOCK_SYSTEMCTL'
@@ -486,7 +486,7 @@ HOME="$UNINSTALL_HOME" POC_CLAUDE_ENSEMBLE_INSTALL_ROOT="$UNINSTALL_ROOT" POC_CL
 [[ ! -e "$UNINSTALL_ROOT/known-good.json" ]] || { echo "FAIL: uninstall retained known-good activation state" >&2; exit 1; }
 [[ -f "$UNINSTALL_ROOT/shared/data/memory/record.jsonl" ]] || { echo "FAIL: uninstall deleted shared data without --purge" >&2; exit 1; }
 [[ -d "$UNINSTALL_ROOT/releases/0.1" ]] || { echo "FAIL: uninstall deleted immutable releases without --purge" >&2; exit 1; }
-for unit in claude-memory.service claude-thompson.service claude-learning.service claude-graph.service claude-ensemble.service; do
+for unit in poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service; do
   [[ ! -e "$UNINSTALL_UNITS/$unit" ]] || { echo "FAIL: uninstall left managed CE unit $unit" >&2; exit 1; }
 done
 [[ -f "$UNINSTALL_UNITS/claude-user-custom.service" ]] || { echo "FAIL: uninstall removed unrelated user service" >&2; exit 1; }
@@ -506,13 +506,13 @@ printf '{"profile":"before"}\\n' > "$BACKUP_PROFILE/settings.json"
 printf '{"legacy":"before"}\\n' > "$HOME/.FlossWare/claude-ensemble-profile/settings.json"
 BACKUP_UNIT_DIR="$HOME/.config/systemd/user"
 mkdir -p "$BACKUP_UNIT_DIR"
-printf '[Service]\\nExecStart=/before\\n' > "$BACKUP_UNIT_DIR/claude-ensemble.service"
+printf '[Service]\\nExecStart=/before\\n' > "$BACKUP_UNIT_DIR/poc-claude-ensemble-ensemble.service"
 BACKUP_OUTPUT="$(POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR="$BACKUP_UNIT_DIR" bash "$SCRIPT_DIR/../tools/backup-ce-state.sh" test-backup "$POC_CLAUDE_ENSEMBLE_INSTALL_ROOT" "$BACKUP_PROFILE")"
 BACKUP_PATH="$(sed -n 's/^Pre-operation backup created: //p' <<< "$BACKUP_OUTPUT")"
 [[ -n "$BACKUP_PATH" && -d "$BACKUP_PATH/files/deployment-root" ]] || { echo "FAIL: backup omitted existing deployment tree" >&2; exit 1; }
 [[ -f "$BACKUP_PATH/files/selected-profile/settings.json" ]] || { echo "FAIL: backup omitted selected profile" >&2; exit 1; }
 [[ -f "$BACKUP_PATH/files/legacy-claude-ensemble-profile/settings.json" ]] || { echo "FAIL: backup omitted legacy CE profile" >&2; exit 1; }
-[[ -f "$BACKUP_PATH/files/systemd-user-units/claude-ensemble.service" ]] || { echo "FAIL: backup omitted managed service unit" >&2; exit 1; }
+[[ -f "$BACKUP_PATH/files/systemd-user-units/poc-claude-ensemble-ensemble.service" ]] || { echo "FAIL: backup omitted managed service unit" >&2; exit 1; }
 [[ "$(stat -c '%a' "$BACKUP_PATH")" == "700" && "$(stat -c '%a' "$BACKUP_PATH/manifest.txt")" == "600" ]] || { echo "FAIL: backup permissions are not private" >&2; exit 1; }
 grep -q '^reason=test-backup$' "$BACKUP_PATH/manifest.txt" || { echo "FAIL: backup manifest missing reason" >&2; exit 1; }
 echo "Pre-operation backup contract passed."

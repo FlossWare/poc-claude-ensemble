@@ -373,13 +373,13 @@ def main() -> int:
 
     if selected("learning"):
         http_step("learning.health", "/api/v1/learning/health",
-                  remediation="Check claude-learning.service, POC_CLAUDE_ENSEMBLE_LEARNING_URL, and the service HTTP port.")
+                  remediation="Check poc-claude-ensemble-learning.service, POC_CLAUDE_ENSEMBLE_LEARNING_URL, and the service HTTP port.")
         http_step("learning.ping", "/api/v1/learning/ping",
                   remediation="Check the Learning REST adapter and its configured gateway URL.")
 
     if selected("thompson"):
         http_step("thompson.health", "/api/v1/thompson/health",
-                  remediation="Check claude-thompson.service, POC_CLAUDE_ENSEMBLE_THOMPSON_URL, and the service HTTP port.")
+                  remediation="Check poc-claude-ensemble-thompson.service, POC_CLAUDE_ENSEMBLE_THOMPSON_URL, and the service HTTP port.")
         http_step("thompson.ping", "/api/v1/thompson/ping",
                   remediation="Check the Thompson REST adapter and its configured gateway URL.")
 

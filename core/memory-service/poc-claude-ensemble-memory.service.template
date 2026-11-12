@@ -1,6 +1,6 @@
 [Unit]
 Description=Memory Service - Central memory authority for Claude Code sessions
-Documentation=file://%h/.config/systemd/user/claude-memory.service.d/README.md
+Documentation=file://%h/.config/systemd/user/poc-claude-ensemble-memory.service.d/README.md
 After=network.target
 
 [Service]

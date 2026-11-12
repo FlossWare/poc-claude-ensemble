@@ -3,13 +3,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_NAME="claude-ensemble.service"
-SERVICE_TEMPLATE="$REPO_ROOT/server/claude-ensemble.service.template"
+SERVICE_NAME="poc-claude-ensemble-ensemble.service"
+SERVICE_TEMPLATE="$REPO_ROOT/server/poc-claude-ensemble-ensemble.service.template"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-${HOME}/.config/systemd/user}"
 SERVICE_FILE="$SYSTEMD_DIR/$SERVICE_NAME"
-INGESTION_SERVICE_NAME="claude-ingestion.service"
-INGESTION_SERVICE_TEMPLATE="$REPO_ROOT/ingestion/claude-ingestion.service.template"
+INGESTION_SERVICE_NAME="poc-claude-ensemble-ingestion.service"
+INGESTION_SERVICE_TEMPLATE="$REPO_ROOT/ingestion/poc-claude-ensemble-ingestion.service.template"
 INGESTION_SERVICE_FILE="$SYSTEMD_DIR/$INGESTION_SERVICE_NAME"
 
 if [[ ! -f "$SERVICE_TEMPLATE" ]]; then

@@ -2,8 +2,8 @@
 # Install Claude Ensemble Thompson Service as a systemd user service.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_NAME="claude-thompson.service"
-SERVICE_TEMPLATE="$REPO_ROOT/thompson-service/claude-thompson.service.template"
+SERVICE_NAME="poc-claude-ensemble-thompson.service"
+SERVICE_TEMPLATE="$REPO_ROOT/thompson-service/poc-claude-ensemble-thompson.service.template"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SYSTEMD_DIR="${POC_CLAUDE_ENSEMBLE_USER_UNIT_DIR:-${HOME}/.config/systemd/user}"
 SERVICE_FILE="$SYSTEMD_DIR/$SERVICE_NAME"

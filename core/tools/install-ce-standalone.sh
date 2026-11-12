@@ -67,9 +67,9 @@ for required in curl tar find readlink systemctl git cp; do
   command -v "$required" >/dev/null 2>&1 || { printf 'ERROR: Required command not found: %s\n' "$required" >&2; exit 1; }
 done
 systemctl --user show-environment >/dev/null 2>&1 || { printf 'ERROR: systemd user manager is unavailable. Run from your logged-in user session.\n' >&2; exit 1; }
-SERVICE_UNITS=(claude-memory.service claude-thompson.service claude-learning.service claude-alert.service claude-messenger.service claude-graph.service claude-ensemble.service)
-STOP_ORDER=(claude-ensemble.service claude-graph.service claude-messenger.service claude-alert.service claude-learning.service claude-thompson.service claude-memory.service)
-START_ORDER=(claude-memory.service claude-thompson.service claude-learning.service claude-alert.service claude-messenger.service claude-graph.service claude-ensemble.service)
+SERVICE_UNITS=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
+STOP_ORDER=(poc-claude-ensemble-ensemble.service poc-claude-ensemble-graph.service poc-claude-ensemble-messenger.service poc-claude-ensemble-alert.service poc-claude-ensemble-learning.service poc-claude-ensemble-thompson.service poc-claude-ensemble-memory.service)
+START_ORDER=(poc-claude-ensemble-memory.service poc-claude-ensemble-thompson.service poc-claude-ensemble-learning.service poc-claude-ensemble-alert.service poc-claude-ensemble-messenger.service poc-claude-ensemble-graph.service poc-claude-ensemble-ensemble.service)
 ACTIVE_BEFORE=()
 for unit in "${SERVICE_UNITS[@]}"; do
   systemctl --user is-active --quiet "$unit" && ACTIVE_BEFORE+=("$unit") || true
