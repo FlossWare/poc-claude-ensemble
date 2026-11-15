@@ -23,13 +23,15 @@ Each service is a standard-library HTTP server bound to loopback, with its own t
 | Memory (`services/memory`) | 8767 | Durable episodic memory and the session-events ledger |
 | Ingestion (`services/ingestion`) | 8782 | URI, uploaded document, and inline-text ingestion |
 
-## Session history API
+## Session history and append-only ledger APIs
 
-The Memory service exposes the existing append-only session-events ledger
-through read-only REST endpoints. The API is part of this POC and reads the
-existing JSONL source of truth; it does not introduce a separate Ledger
-service or repository. The POC deliberately has no REST write endpoint for
-the ledger.
+The Memory service exposes the existing append-only session-events JSONL
+ledger through two REST surfaces. The compatibility `/history` endpoints are
+read-only; the versioned `/api/v1/ledger` API provides append, pull, lookup,
+verification, and idempotent import operations. Both use the same JSONL
+source of truth and do not introduce a separate Ledger service or repository.
+See [Append-only Ledger API](services/docs/APPEND_ONLY_LEDGER_API.md) for the
+envelope, hash-chain, checkpoint, pagination, and transfer contract.
 
 - `GET /history` lists events with filtering and offset pagination.
 - `GET /history/{event_id}` returns one event by its event ID.
