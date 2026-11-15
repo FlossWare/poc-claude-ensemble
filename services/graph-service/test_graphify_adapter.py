@@ -157,6 +157,47 @@ class GraphifyAdapterTests(unittest.TestCase):
             self.assertEqual(store.query_edges(), [])
 
 
+    def test_replacing_one_corpus_preserves_other_graphify_corpus_edges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = GraphStore(Path(tmp) / "graph.json")
+
+            def ingest(corpus, version):
+                nodes = [
+                    {"id": f"graphify:{corpus}:{version}:a", "type": "function",
+                     "properties": {"graphify": True, "graphify_corpus": corpus, "label": f"{corpus}-{version}-a"}},
+                    {"id": f"graphify:{corpus}:{version}:b", "type": "function",
+                     "properties": {"graphify": True, "graphify_corpus": corpus, "label": f"{corpus}-{version}-b"}},
+                ]
+                edges = [{
+                    "source": nodes[0]["id"], "target": nodes[1]["id"], "type": "calls",
+                    "properties": {"graphify": True, "graphify_corpus": corpus, "version": version},
+                }]
+                return nodes, edges
+
+            a1_nodes, a1_edges = ingest("corpus-a", "old")
+            b_nodes, b_edges = ingest("corpus-b", "stable")
+            store.replace_graphify_batch(a1_nodes, a1_edges, "corpus-a")
+            store.replace_graphify_batch(b_nodes, b_edges, "corpus-b")
+
+            a2_nodes, a2_edges = ingest("corpus-a", "new")
+            result = store.replace_graphify_batch(a2_nodes, a2_edges, "corpus-a")
+
+            self.assertEqual(result["replaced_nodes"], 2)
+            self.assertEqual(result["replaced_edges"], 1)
+            self.assertIsNone(store.get_node("graphify:corpus-a:old:a"))
+            self.assertIsNotNone(store.get_node("graphify:corpus-a:new:a"))
+            self.assertIsNotNone(store.get_node("graphify:corpus-b:stable:a"))
+            edges = store.query_edges(relationship="calls")
+            self.assertEqual(len(edges), 2)
+            self.assertEqual(
+                {edge["properties"]["graphify_corpus"] for edge in edges},
+                {"corpus-a", "corpus-b"},
+            )
+            self.assertEqual(
+                {edge["properties"]["version"] for edge in edges},
+                {"new", "stable"},
+            )
+
     def test_replacing_one_corpus_preserves_other_graphify_corpora(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = GraphStore(Path(tmp) / "graph.json")
