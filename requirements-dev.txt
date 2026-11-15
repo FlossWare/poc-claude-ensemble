@@ -1,0 +1,4 @@
+# Reproducible development and CI environment for the POC.
+-r requirements.txt
+-r services/graph-service/requirements-graphify.txt
+pytest==9.2.0
