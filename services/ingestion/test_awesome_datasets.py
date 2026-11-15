@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ import awesome_datasets as datasets
 
 
 class AwesomeDatasetCatalogTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("yaml"), "PyYAML is installed by the full POC requirements")
     def test_parses_sparse_metadata_and_source_access_urls(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -26,6 +28,7 @@ class AwesomeDatasetCatalogTests(unittest.TestCase):
         self.assertEqual(record.keywords, ["birds", "ecology"])
         self.assertEqual(len(record.metadata_sha256), 64)
 
+    @unittest.skipUnless(importlib.util.find_spec("yaml"), "PyYAML is installed by the full POC requirements")
     def test_discovery_accounts_for_malformed_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -71,6 +74,7 @@ class AwesomeDatasetCatalogTests(unittest.TestCase):
         self.assertEqual(urls, ["https://example.org/files/table.csv"])
         self.assertIsNone(reason)
 
+    @unittest.skipUnless(importlib.util.find_spec("yaml"), "PyYAML is installed by the full POC requirements")
     def test_manifest_records_unknown_license_as_deferred(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
