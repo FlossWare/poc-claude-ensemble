@@ -237,12 +237,12 @@ class GraphStore:
                 node_id for node_id, attrs in proposed.nodes(data=True)
                 if attrs.get("properties", {}).get("graphify") is True
                 and attrs.get("properties", {}).get("graphify_corpus", "default") == corpus_id
-                and attrs.get("properties", {}).get("graphify_corpus", "default") == corpus_id
             ]
             old_graphify_edges = [
                 (source, target, edge_id)
                 for source, target, edge_id, attrs in proposed.edges(keys=True, data=True)
                 if attrs.get("properties", {}).get("graphify") is True
+                and attrs.get("properties", {}).get("graphify_corpus", "default") == corpus_id
             ]
             proposed.remove_nodes_from(old_graphify_nodes)
             for source, target, edge_id in old_graphify_edges:
