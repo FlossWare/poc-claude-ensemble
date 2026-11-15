@@ -2,7 +2,7 @@ name: POC Full Service Suite
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, chore/28-full-service-ci]
     paths:
       - "services/**"
       - ".github/workflows/service-suite.yml"
