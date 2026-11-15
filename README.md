@@ -2,6 +2,8 @@
 
 Proof-of-concept services for Claude Ensemble, the local REST services behind prompt-time memory, transcript search, and ingestion. This repository is the baseline the next Ensemble work branches from. The previous implementation is archived at FlossWare-Archives/claude-ensemble-legacy.
 
+This repository's active POC implementation lives exclusively under `services/`. The former `core/` implementation is preserved under [`archive/legacy-core/`](archive/legacy-core/README.md) for historical reference; it is not installed, imported, tested, or maintained as part of this POC.
+
 ## Services
 
 Each service is a standard-library HTTP server bound to loopback, with its own tests.
