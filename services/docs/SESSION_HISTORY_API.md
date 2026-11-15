@@ -169,7 +169,12 @@ incomplete time range.
 
 ## Write boundary
 
-There is intentionally no `POST /history`, `PUT /history`, or
-`DELETE /history` endpoint in this POC. The REST API is read-only. This
-keeps retrieval separate from event production and preserves the existing
-append-only ledger as the source of truth.
+The `/history` compatibility routes are intentionally read-only: there is no
+`POST /history`, `PUT /history`, or `DELETE /history` endpoint. The
+versioned `/api/v1/ledger` API is a separate surface for explicit ledger
+append, verification, and portable import operations. It writes to the same
+append-only JSONL source of truth; it does not create a second history store.
+
+See [Append-only Ledger API](APPEND_ONLY_LEDGER_API.md) for the complete
+versioned contract, including sequence cursors, hash-chain verification,
+checkpoints, export/pull, and idempotent import.
