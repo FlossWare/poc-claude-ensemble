@@ -86,7 +86,7 @@ Graphify node IDs are namespaced as `graphify:<id>`. Its source metadata,
 locations, relationship direction, confidence tier, and other extraction
 attributes are retained in GraphStore node/edge properties. Batch ingestion
 validates the complete batch and persists it with one atomic store replacement.
-Repeated identical extraction is idempotent.
+Repeated identical extraction is idempotent. Each target path is treated as a separate corpus: re-extracting one target replaces only that target’s Graphify-managed subgraph and preserves Graphify data from other targets.
 
 The optional dependency must be installed before enabling extraction. Initial
 package installation requires access to the package index; subsequent
