@@ -1,0 +1,55 @@
+name: POC Full Service Suite
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/**"
+      - ".github/workflows/service-suite.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - ".github/workflows/service-suite.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  service-suite:
+    name: All active service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            services/graph-service/requirements-graphify.txt
+      - name: Install test runner
+        run: python -m pip install --upgrade pytest
+      - name: Run every active service test
+        env:
+          PYTHONPATH: services
+          POC_CLAUDE_ENSEMBLE_LEDGER_ROOT: ${{ runner.temp }}/ledger
+          POC_CLAUDE_ENSEMBLE_MEMORY_DIR: ${{ runner.temp }}/memory
+          POC_CLAUDE_ENSEMBLE_LOG_DIR: ${{ runner.temp }}/logs
+          POC_CLAUDE_ENSEMBLE_RUNTIME_DIR: ${{ runner.temp }}/runtime
+        run: |
+          set -o pipefail
+          python -m pytest services -q -ra 2>&1 | tee "${RUNNER_TEMP}/pytest-services.log"
+      - name: Publish test totals
+        if: always()
+        run: |
+          {
+            echo "## POC service test results"
+            if [ -f "${RUNNER_TEMP}/pytest-services.log" ]; then
+              grep -E '[0-9]+ passed|[0-9]+ failed|[0-9]+ skipped|[0-9]+ errors?' "${RUNNER_TEMP}/pytest-services.log" | tail -n 1 || true
+            else
+              echo "The pytest run did not produce a result log."
+            fi
+            echo
+            echo "The command runs the complete active `services/` test tree. Hardware/model-dependent tests report their skips through pytest; archived legacy code is intentionally excluded."
+          } >> "${GITHUB_STEP_SUMMARY}"
