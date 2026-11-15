@@ -134,19 +134,19 @@ class GraphifyAdapterTests(unittest.TestCase):
             store.add_node("manual", {"label": "manual"}, "manual:1")
             first_nodes = [
                 {"id": "graphify:a", "type": "function",
-                 "properties": {"graphify": True, "label": "old"}},
+                 "properties": {"graphify": True, "graphify_corpus": "corpus-a", "label": "old"}},
                 {"id": "graphify:b", "type": "function",
-                 "properties": {"graphify": True, "label": "b"}},
+                 "properties": {"graphify": True, "graphify_corpus": "corpus-a", "label": "b"}},
             ]
             first_edges = [{
                 "source": "graphify:a", "target": "graphify:b", "type": "calls",
-                "properties": {"graphify": True, "confidence": "EXTRACTED"},
+                "properties": {"graphify": True, "graphify_corpus": "corpus-a", "confidence": "EXTRACTED"},
             }]
             store.replace_graphify_batch(first_nodes, first_edges, "corpus-a")
 
             changed_nodes = [
                 {"id": "graphify:a", "type": "function",
-                 "properties": {"graphify": True, "label": "updated"}},
+                 "properties": {"graphify": True, "graphify_corpus": "corpus-a", "label": "updated"}},
             ]
             result = store.replace_graphify_batch(changed_nodes, [], "corpus-a")
             self.assertEqual(result["replaced_nodes"], 2)
@@ -155,6 +155,23 @@ class GraphifyAdapterTests(unittest.TestCase):
             self.assertIsNone(store.get_node("graphify:b"))
             self.assertEqual(store.get_node("manual:1")["properties"]["label"], "manual")
             self.assertEqual(store.query_edges(), [])
+
+
+    def test_replacing_one_corpus_preserves_other_graphify_corpora(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = GraphStore(Path(tmp) / "graph.json")
+            for corpus, node_id in (("corpus-a", "a"), ("corpus-b", "b")):
+                store.replace_graphify_batch([{
+                    "id": "graphify:" + corpus + ":" + node_id, "type": "function",
+                    "properties": {"graphify": True, "graphify_corpus": corpus, "label": node_id},
+                }], [], corpus)
+            store.replace_graphify_batch([{
+                "id": "graphify:corpus-a:a2", "type": "function",
+                "properties": {"graphify": True, "graphify_corpus": "corpus-a", "label": "a2"},
+            }], [], "corpus-a")
+            self.assertIsNone(store.get_node("graphify:corpus-a:a"))
+            self.assertIsNotNone(store.get_node("graphify:corpus-a:a2"))
+            self.assertIsNotNone(store.get_node("graphify:corpus-b:b"))
 
     def test_batch_validation_failure_does_not_mutate_store(self):
         with tempfile.TemporaryDirectory() as tmp:
