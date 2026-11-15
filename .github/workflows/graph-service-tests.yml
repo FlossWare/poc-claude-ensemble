@@ -1,0 +1,24 @@
+name: Graph Service Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/graph-service/**"
+      - ".github/workflows/graph-service-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  graph-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Graphify and test dependencies
+        run: python -m pip install -r services/graph-service/requirements-graphify.txt
+      - name: Test Graph service and Graphify integration
+        run: python -m unittest discover -s services/graph-service -p "test_*.py" -v

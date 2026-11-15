@@ -1,0 +1,3 @@
+# Optional local graph extraction dependency. Install into the Graph service Python environment.
+# Version pinned so the adapter is tested against a known Graphify API.
+graphifyy==0.9.107
