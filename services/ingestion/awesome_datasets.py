@@ -259,6 +259,21 @@ def _manifest_append(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
 
 
+def license_is_acquirable(value: str | None) -> bool:
+    """Conservative allow-list; public availability alone never grants reuse."""
+    if not value:
+        return False
+    normalized = " ".join(value.strip().lower().split())
+    allowed = {
+        "cc0", "cc0 1.0", "cc0-1.0", "public domain",
+        "cc-by", "cc-by 4.0", "cc-by-4.0", "cc-by 3.0", "cc-by-3.0",
+        "cc-by-sa", "cc-by-sa 4.0", "cc-by-sa-4.0", "cc-by-sa 3.0", "cc-by-sa-3.0",
+        "odc-by", "odc-by-1.0", "odbl", "odbl-1.0",
+        "mit", "apache-2.0", "bsd-2-clause", "bsd-3-clause",
+    }
+    return normalized in allowed
+
+
 def run_inventory(catalog_root: Path, manifest: Path, data_root: Path, *,
                   max_file_bytes: int, max_dataset_bytes: int, max_total_bytes: int,
                   acquire: bool) -> dict[str, int]:
@@ -270,10 +285,12 @@ def run_inventory(catalog_root: Path, manifest: Path, data_root: Path, *,
     for record in records:
         base = {"timestamp": int(time.time()), **asdict(record)}
         # Catalog and dataset licenses are distinct. Unknown license is not permission.
-        if not record.license:
-            base["license_status"] = "unknown_requires_review"
+        if license_is_acquirable(record.license):
+            base["license_status"] = "recognized_permissive_or_open"
+        elif record.license:
+            base["license_status"] = "unrecognized_or_restrictive_requires_review"
         else:
-            base["license_status"] = "recorded_requires_terms_validation"
+            base["license_status"] = "unknown_requires_review"
         assets, reason = resolve_assets(record)
         if not assets:
             _manifest_append(manifest, {**base, "status": "deferred", "reason": reason})
@@ -284,9 +301,9 @@ def run_inventory(catalog_root: Path, manifest: Path, data_root: Path, *,
             continue
         dataset_bytes = 0
         for index, url in enumerate(assets, start=1):
-            if base["license_status"] != "recorded_requires_terms_validation":
+            if base["license_status"] != "recognized_permissive_or_open":
                 _manifest_append(manifest, {**base, "status": "deferred", "asset_url": url,
-                                            "reason": "license missing; acquisition requires review"})
+                                            "reason": "license is missing, unrecognized, or restrictive; acquisition requires review"})
                 counts["deferred"] += 1
                 continue
             if counts["bytes"] >= max_total_bytes or dataset_bytes >= max_dataset_bytes:
