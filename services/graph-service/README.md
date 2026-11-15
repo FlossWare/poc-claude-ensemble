@@ -82,7 +82,7 @@ Only file types supported by Graphify's deterministic extractor are processed;
 this endpoint does not perform model-based semantic extraction of arbitrary
 PDFs or other documents.
 
-Graphify node IDs are namespaced as `graphify:<id>`. Its source metadata,
+Graphify node IDs are namespaced by corpus as `graphify:<corpus-id>:<id>`. Its source metadata,
 locations, relationship direction, confidence tier, and other extraction
 attributes are retained in GraphStore node/edge properties. Batch ingestion
 validates the complete batch and persists it with one atomic store replacement.
