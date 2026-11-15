@@ -227,8 +227,8 @@ class GraphStore:
                 self._edge_index = pending_edge_index
             return {"added_nodes": added_nodes, "added_edges": added_edges}
 
-    def replace_graphify_batch(self, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
-        """Atomically replace the Graphify-managed subgraph, preserving other graph data."""
+    def replace_graphify_batch(self, nodes: list[dict[str, Any]], edges: list[dict[str, Any]], corpus_id: str = "default") -> dict[str, int]:
+        """Atomically replace one Graphify corpus, preserving other graph data."""
         if not isinstance(nodes, list) or not isinstance(edges, list):
             raise ValueError("nodes and edges must be lists")
         with self.lock:
@@ -236,6 +236,8 @@ class GraphStore:
             old_graphify_nodes = [
                 node_id for node_id, attrs in proposed.nodes(data=True)
                 if attrs.get("properties", {}).get("graphify") is True
+                and attrs.get("properties", {}).get("graphify_corpus", "default") == corpus_id
+                and attrs.get("properties", {}).get("graphify_corpus", "default") == corpus_id
             ]
             old_graphify_edges = [
                 (source, target, edge_id)
@@ -436,8 +438,8 @@ class GraphRequestHandler(BaseHTTPRequestHandler):
                 try:
                     extracted = extract_local(allowed_root, body.get("path", ""),
                                                   cache_root=self.store.path.parent / "graphify-cache")
-                    nodes, edges = normalize_extraction(extracted)
-                    stored = self.store.replace_graphify_batch(nodes, edges)
+                    nodes, edges = normalize_extraction(extracted, extracted["corpus_id"])
+                    stored = self.store.replace_graphify_batch(nodes, edges, extracted["corpus_id"])
                 except GraphifyUnavailable as exc:
                     self._send(503, {"ok": False, "error": str(exc)})
                     return
