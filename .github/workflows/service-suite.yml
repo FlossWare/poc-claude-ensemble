@@ -28,8 +28,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             services/graph-service/requirements-graphify.txt
-      - name: Install test runner
-        run: python -m pip install --upgrade pytest
+            requirements-dev.txt
+      - name: Install pinned POC development dependencies
+        run: python -m pip install -r requirements-dev.txt
       - name: Run every active service test
         env:
           PYTHONPATH: services
@@ -51,5 +52,5 @@ jobs:
               echo "The pytest run did not produce a result log."
             fi
             echo
-            echo "The command runs the complete active `services/` test tree. Hardware/model-dependent tests report their skips through pytest; archived legacy code is intentionally excluded."
+            echo "The command runs the complete active services/ test tree. Hardware/model-dependent tests report their skips through pytest; archived legacy code is intentionally excluded."
           } >> "${GITHUB_STEP_SUMMARY}"
