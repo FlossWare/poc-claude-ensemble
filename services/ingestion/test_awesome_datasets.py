@@ -50,8 +50,11 @@ class AwesomeDatasetCatalogTests(unittest.TestCase):
         self.assertTrue(datasets.is_direct_asset("https://example.org/files/data.csv"))
 
     def test_landing_page_resolves_explicit_asset_links(self):
+        class Headers(dict):
+            def get_content_type(self): return self.get("Content-Type", "application/octet-stream")
+
         class Response:
-            headers = {"Content-Type": "text/html"}
+            headers = Headers({"Content-Type": "text/html"})
             def __enter__(self): return self
             def __exit__(self, *args): pass
             def read(self, _limit):
