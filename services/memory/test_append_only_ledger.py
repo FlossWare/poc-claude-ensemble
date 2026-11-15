@@ -113,6 +113,40 @@ def test_import_is_idempotent_and_conflicts_are_preflighted(tmp_path):
     assert ledger.status()["head_sequence"] == before
 
 
+def test_import_rejects_source_sequence_gaps_and_broken_hash_chain(tmp_path):
+    source = JsonlAppendOnlyLedger(tmp_path / "source.jsonl")
+    destination = JsonlAppendOnlyLedger(tmp_path / "destination.jsonl")
+    first = source.append(event("source-one"))["entry"]
+    second = source.append(event("source-two"))["entry"]
+
+    gap = dict(second, sequence=3)
+    gap["entry_sha256"] = envelope_hash(gap)
+    with pytest.raises(ValueError, match="contiguous"):
+        destination.import_batch(source.ledger_id, [first, gap])
+    assert destination.status()["head_sequence"] == 0
+
+    broken = dict(second, previous_entry_sha256="f" * 64)
+    broken["entry_sha256"] = envelope_hash(broken)
+    with pytest.raises(ValueError, match="hash chain"):
+        destination.import_batch(source.ledger_id, [first, broken])
+    assert destination.status()["head_sequence"] == 0
+
+
+def test_status_checkpoint_supports_incremental_verification(tmp_path):
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    ledger.append(event("before-checkpoint-1"))
+    ledger.append(event("before-checkpoint-2"))
+    checkpoint = ledger.status()["checkpoint"]
+
+    ledger.append(event("after-checkpoint"))
+    result = ledger.verify(from_sequence=3, checkpoint=checkpoint)
+
+    assert result["ok"]
+    assert result["from_sequence"] == 3
+    assert result["through_sequence"] == 3
+    assert result["verified_count"] == 1
+
+
 def test_tampered_payload_is_detected(tmp_path):
     path = tmp_path / "events.jsonl"
     ledger = JsonlAppendOnlyLedger(path)
