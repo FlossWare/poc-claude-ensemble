@@ -29,11 +29,6 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-try:
-    import yaml
-except ImportError as exc:  # pragma: no cover - exercised by CLI environments
-    raise SystemExit("PyYAML is required: install requirements.txt") from exc
-
 CATALOG_REPOSITORY = "https://github.com/awesomedata/apd-core"
 DEFAULT_CATALOG_ROOT = Path("var/awesome-public-datasets/apd-core")
 DEFAULT_DATA_ROOT = Path("var/awesome-public-datasets/data")
@@ -95,6 +90,10 @@ def _valid_http_url(value: Any) -> str | None:
 
 
 def parse_metadata(path: Path, root: Path) -> DatasetRecord:
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("PyYAML is required: install requirements.txt") from exc
     raw = path.read_bytes()
     item = yaml.safe_load(raw) or {}
     if not isinstance(item, dict):
