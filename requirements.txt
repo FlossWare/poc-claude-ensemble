@@ -1,0 +1,8 @@
+# Runtime dependencies imported by the active services/ tree.
+# Optional OpenVINO GPU/CPU inference is installed separately as documented in README.md.
+chromadb==0.6.3
+networkx==3.6.1
+scipy==1.17.1
+numpy==1.26.4
+onnxruntime==1.32.0
+tokenizers==0.23.3
