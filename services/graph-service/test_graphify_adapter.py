@@ -30,8 +30,8 @@ class GraphifyAdapterTests(unittest.TestCase):
         nodes, edges = normalize_extraction(raw)
         self.assertEqual(len(nodes), 2)
         self.assertEqual(len(edges), 1)
-        self.assertEqual(edges[0]["source"], "graphify:file_a")
-        self.assertEqual(edges[0]["target"], "graphify:symbol_b")
+        self.assertEqual(edges[0]["source"], "graphify:default:file_a")
+        self.assertEqual(edges[0]["target"], "graphify:default:symbol_b")
         self.assertEqual(edges[0]["type"], "imports")
         self.assertEqual(edges[0]["properties"]["confidence"], "INFERRED")
         self.assertEqual(edges[0]["properties"]["source_location"], "L4")
@@ -43,6 +43,7 @@ class GraphifyAdapterTests(unittest.TestCase):
             "edges": [{"source": "valid", "target": "absent", "relation": "calls"}],
         })
         self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0]["id"], "graphify:default:valid")
         self.assertEqual(edges, [])
 
     def test_target_must_stay_inside_configured_root(self):
@@ -141,13 +142,13 @@ class GraphifyAdapterTests(unittest.TestCase):
                 "source": "graphify:a", "target": "graphify:b", "type": "calls",
                 "properties": {"graphify": True, "confidence": "EXTRACTED"},
             }]
-            store.replace_graphify_batch(first_nodes, first_edges)
+            store.replace_graphify_batch(first_nodes, first_edges, "corpus-a")
 
             changed_nodes = [
                 {"id": "graphify:a", "type": "function",
                  "properties": {"graphify": True, "label": "updated"}},
             ]
-            result = store.replace_graphify_batch(changed_nodes, [])
+            result = store.replace_graphify_batch(changed_nodes, [], "corpus-a")
             self.assertEqual(result["replaced_nodes"], 2)
             self.assertEqual(result["replaced_edges"], 1)
             self.assertEqual(store.get_node("graphify:a")["properties"]["label"], "updated")
