@@ -140,6 +140,30 @@ The model endpoint should identify `openvino-gpu`, a `GPU.*` device, and
 `FP16`; the embedding response should contain one 768-dimensional vector.
 Stop this test process with Ctrl-C when finished.
 
+## Python environment
+
+The active services use the pinned runtime dependencies in the repository-root
+`requirements.txt`. From a fresh checkout, create an isolated environment and
+install the complete POC development/test set (runtime packages, pytest, and
+the pinned optional Graphify extractor) with:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
+
+For a runtime-only installation, use `python -m pip install -r requirements.txt`.
+The Graphify dependency is listed separately in
+`services/graph-service/requirements-graphify.txt`; it is included in the
+development install because the Graph service integration tests exercise it.
+OpenVINO remains optional and is installed separately only when selecting an
+OpenVINO inference backend.
+
+The root `LICENSE` applies to this repository. See `SECURITY.md` for
+vulnerability reporting and the POC's deployment threat model.
+
 ## Running the tests
 
 From the repository root, run the whole suite with pytest:
