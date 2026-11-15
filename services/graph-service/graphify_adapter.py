@@ -6,6 +6,7 @@ servers, cloud integrations, and model-backed semantic extraction are not used.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 from typing import Any
 
 
@@ -48,11 +49,13 @@ def extract_local(root: str | Path, target: str | Path, *, cache_root: str | Pat
             "Graphify is not installed; install services/graph-service/requirements-graphify.txt"
         ) from exc
 
+    corpus_path = resolved_target.relative_to(allowed_root).as_posix()
+    corpus_id = hashlib.sha256(corpus_path.encode("utf-8")).hexdigest()[:16]
     files = collect_files(resolved_target, root=allowed_root)
     if len(files) > max_files:
         raise GraphifyInputError(f"extraction contains {len(files)} files; limit is {max_files}")
     if not files:
-        return {"nodes": [], "edges": [], "files": 0, "failed_sources": [], "skipped_sources": []}
+        return {"nodes": [], "edges": [], "files": 0, "corpus_id": corpus_id, "failed_sources": [], "skipped_sources": []}
 
     result = extract(
         files,
@@ -67,12 +70,13 @@ def extract_local(root: str | Path, target: str | Path, *, cache_root: str | Pat
         "nodes": result["nodes"],
         "edges": result["edges"],
         "files": len(files),
+        "corpus_id": corpus_id,
         "failed_sources": result.get("failed_sources", []),
         "skipped_sources": result.get("skipped_sources", []),
     }
 
 
-def normalize_extraction(result: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def normalize_extraction(result: dict[str, Any], corpus_id: str = "default") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Map Graphify records to the GraphStore's node/edge record contract."""
     nodes: list[dict[str, Any]] = []
     node_ids: dict[str, str] = {}
@@ -84,11 +88,12 @@ def normalize_extraction(result: dict[str, Any]) -> tuple[list[dict[str, Any]], 
             continue
         source_file = str(item.get("source_file") or "")
         # Graphify IDs are corpus-scoped; retain them under our own namespace.
-        identity = f"graphify:{graphify_id}"
+        identity = f"graphify:{corpus_id}:{graphify_id}"
         node_ids[graphify_id] = identity
         properties = dict(item)
         properties.pop("id", None)
         properties["graphify_id"] = graphify_id
+        properties["graphify_corpus"] = corpus_id
         properties["source_file"] = source_file
         properties["graphify"] = True
         nodes.append({"id": identity, "type": str(item.get("type") or item.get("kind") or "symbol"), "properties": properties})
