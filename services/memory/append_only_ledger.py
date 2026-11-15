@@ -178,9 +178,16 @@ class JsonlAppendOnlyLedger:
 
     def _status_unlocked(self):
         head, last_hash, legacy_digest, legacy_count = self._head()
+        checkpoint = {"ledger_id": self.ledger_id, "sequence": head}
+        if last_hash is not None:
+            checkpoint["entry_sha256"] = last_hash
+        elif legacy_count:
+            checkpoint["legacy_prefix_sha256"] = legacy_digest
+            checkpoint["legacy_prefix_sequence_count"] = legacy_count
         return {"ledger_id": self.ledger_id, "head_sequence": head, "head_hash": last_hash,
                 "legacy_prefix_sequence_count": legacy_count,
-                "legacy_prefix_sha256": legacy_digest if legacy_count else None}
+                "legacy_prefix_sha256": legacy_digest if legacy_count else None,
+                "checkpoint": checkpoint}
 
     def status(self):
         with self._locked(shared=True):
@@ -417,6 +424,8 @@ class JsonlAppendOnlyLedger:
         if not isinstance(source_ledger_id, str) or not source_ledger_id or not isinstance(entries, list) or len(entries) > 1000:
             raise ValueError("source_ledger_id and up to 1000 entries are required")
         imported, duplicates, last_source = [], [], 0
+        previous_source_sequence = None
+        previous_source_entry = None
         with self._locked():
             head, previous_hash, legacy_digest, legacy_count = self._head()
             integrity = self._verify_unlocked()
@@ -430,7 +439,22 @@ class JsonlAppendOnlyLedger:
                 if source_sequence is not None:
                     if isinstance(source_sequence, bool) or not isinstance(source_sequence, int) or source_sequence <= last_source:
                         raise ValueError("import source sequences must be positive and strictly ascending")
+                    if previous_source_sequence is not None and source_sequence != previous_source_sequence + 1:
+                        raise ValueError("import source sequences must be contiguous within a batch")
+                    if source_sequence == 1 and incoming.get("entry_sha256") and incoming.get("previous_entry_sha256") is not None:
+                        raise ValueError("first source ledger entry must not have a previous hash")
+                    if (previous_source_entry is not None
+                            and previous_source_entry.get("entry_sha256")
+                            and incoming.get("entry_sha256")
+                            and incoming.get("previous_entry_sha256") != previous_source_entry["entry_sha256"]):
+                        raise ValueError("import source hash chain is broken within the batch")
+                    if (previous_source_entry is not None
+                            and previous_source_entry.get("entry_sha256")
+                            and not incoming.get("entry_sha256")):
+                        raise ValueError("legacy source entry cannot follow a hashed source entry")
                     last_source = source_sequence
+                    previous_source_sequence = source_sequence
+                    previous_source_entry = incoming
                 if incoming.get("ledger_id") not in (None, source_ledger_id):
                     raise ValueError("import source ledger identity mismatch")
                 if incoming.get("payload_sha256") is not None and incoming["payload_sha256"] != digest(event["payload"]):
