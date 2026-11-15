@@ -113,6 +113,7 @@ def normalize_extraction(result: dict[str, Any], corpus_id: str = "default") -> 
         properties.pop("source", None)
         properties.pop("target", None)
         properties.pop("relation", None)
+        properties["graphify_corpus"] = corpus_id
         properties["graphify"] = True
         edges.append({
             "source": node_ids[source],
