@@ -2,6 +2,6 @@
 # Optional OpenVINO GPU/CPU inference is installed separately as documented in README.md.
 chromadb==1.5.9
 networkx==3.6.1
-numpy==2.5.4
+numpy==2.4.6
 onnxruntime==1.32.0
 tokenizers==0.23.3
