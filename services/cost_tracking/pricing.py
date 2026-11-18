@@ -40,6 +40,8 @@ def _resolve_pricing(model: str) -> dict:
         return CLAUDE_PRICING[model_lower]
     if model_lower in GATEWAY_ASSUMED_PRICING:
         return GATEWAY_ASSUMED_PRICING[model_lower]
+    if model_lower in GPT_PRICING:
+        return GPT_PRICING[model_lower]
     if model_lower == "gemini" or model_lower.startswith("gemini-") or model_lower.startswith("models/gemini-"):
         return GEMINI_PRICING
     if model_lower.startswith("claude-"):
@@ -47,11 +49,13 @@ def _resolve_pricing(model: str) -> dict:
             return CLAUDE_PRICING["haiku"]
         if "sonnet" in model_lower:
             return CLAUDE_PRICING["sonnet"]
-        if "opus-4.8" in model_lower:
+        if "opus-4.8" in model_lower or "opus-4-8" in model_lower:
             return CLAUDE_PRICING["opus-4.8"]
         if "opus" in model_lower:
             return CLAUDE_PRICING["opus"]
-    raise ValueError(f"Unknown model: {model}. Known models: {list(CLAUDE_PRICING.keys())}")
+    known = (list(CLAUDE_PRICING) + list(GATEWAY_ASSUMED_PRICING) + list(GPT_PRICING)
+             + ["gemini", "gemini-*", "models/gemini-*"])
+    raise ValueError(f"Unknown model: {model}. Known models: {known}")
 
 
 # Prompt-cache multipliers relative to the base input rate: writes cost 1.25x, reads cost 0.1x.
@@ -73,9 +77,7 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int,
 
 def get_model_display_name(model: str) -> str:
     """Get display name for a model."""
-    model_lower = model.lower()
-    if model_lower in CLAUDE_PRICING:
-        return CLAUDE_PRICING[model_lower]["name"]
-    if model_lower.startswith(("claude-", "gemini-", "models/gemini-")):
+    try:
+        return _resolve_pricing(model)["name"]
+    except ValueError:
         return model
-    return model
