@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Worker/arbiter review of one code file through the gateway, with results recorded to the ledger.
 
-Two free EnMaaS gateway models review the same input as workers (Muse Spark, DeepSeek).
-GLM adjudicates. Each worker output, the arbiter decision, token counts, latency, and cost
+The three free EnMaaS gateway models review the same input as workers (Muse Spark, GLM, DeepSeek).
+Opus adjudicates. Each worker output, the arbiter decision, token counts, latency, and cost
 estimate are appended to ~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be
 compared over time.
 
@@ -27,9 +27,10 @@ if os.path.isdir(os.path.join(CORE, "shared")) and CORE not in sys.path:
 LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
 WORKERS = [
     "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4",
+    "rits/zai-org/glm-5-3",
     "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
 ]
-ARBITER = "rits/zai-org/glm-5-3"
+ARBITER = "claude-opus-5-5"
 MAX_TOKENS = 4000
 MAX_STORED_CHARS = 4000
 PRICING_PATH = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py")
