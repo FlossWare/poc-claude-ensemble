@@ -29,6 +29,8 @@ GATEWAY_ASSUMED_PRICING = {
     "rits/zai-org/glm-5-3": dict(CLAUDE_PRICING["opus"], name="GLM 5.3 (assumed Opus rate)"),
     "rits/deepseek-ai/deepseek-v4.1-flash-1017": dict(
         CLAUDE_PRICING["opus"], name="DeepSeek V4.1 Flash (assumed Opus rate)"),
+    "rits/meta-models/muse-spark-open-816b-a42b-nvfp4": dict(
+        CLAUDE_PRICING["opus"], name="Muse Spark Open (assumed Opus rate)"),
 }
 
 

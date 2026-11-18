@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Worker/arbiter review of one code file through the gateway, with results recorded to the ledger.
 
-Two gateway models review the same input as workers. A cheap Claude model adjudicates. Each worker
-output, the arbiter decision, token counts, latency, and cost estimate are appended to
-~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be compared over time.
+Two free EnMaaS gateway models review the same input as workers (Muse Spark, DeepSeek).
+GLM adjudicates. Each worker output, the arbiter decision, token counts, latency, and cost
+estimate are appended to ~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be
+compared over time.
 
 Usage: multi_model_review.py PATH [--max-chars N]
        multi_model_review.py --report
@@ -24,8 +25,11 @@ if os.path.isdir(os.path.join(CORE, "shared")) and CORE not in sys.path:
     sys.path.insert(0, CORE)
 
 LEDGER = os.path.expanduser(os.environ.get("POC_CLAUDE_ENSEMBLE_REVIEW_LEDGER", "~/.FlossWare/ledger/reviews/reviews.jsonl"))
-WORKERS = ["rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"]
-ARBITER = "claude-haiku-5-5"
+WORKERS = [
+    "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4",
+    "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+]
+ARBITER = "rits/zai-org/glm-5-3"
 MAX_TOKENS = 4000
 MAX_STORED_CHARS = 4000
 PRICING_PATH = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py")
@@ -39,9 +43,12 @@ def gateway_settings():
 
 def call(model, prompt):
     base, key = gateway_settings()
-    # Reasoning is disabled: with it on, these gateway models spent the whole output budget on
-    # reasoning and returned no text. The ledger keeps those failed runs as evidence.
-    body = json.dumps({"model": model, "max_tokens": MAX_TOKENS, "thinking": {"type": "disabled"},
+    # Reasoning is disabled for the EnMaaS worker models: with it on, they spent the whole
+    # output budget on reasoning and returned no text. The ledger keeps those failed runs as
+    # evidence. Claude 5.x models (the arbiter) reject "disabled" and require "adaptive".
+    thinking = ({"type": "disabled"} if model.startswith("rits/")
+                else {"type": "adaptive"})
+    body = json.dumps({"model": model, "max_tokens": MAX_TOKENS, "thinking": thinking,
                        "messages": [{"role": "user", "content": prompt}]}).encode("utf-8")
     request = urllib.request.Request(base + "/v1/messages", data=body, method="POST", headers={
         "content-type": "application/json", "x-api-key": key, "authorization": f"Bearer {key}",
@@ -72,18 +79,18 @@ def record(row):
 
 
 def review_prompt(source, path):
-    return (f"Review this Python code from {os.path.basename(path)}. List only concrete defects: wrong logic, "
+    return (f"Review this code from {os.path.basename(path)}. List only concrete defects: wrong logic, "
             "unhandled errors, data loss, or security problems. For each, give the line, the failure, and a "
-            "fix. If you find none, say so. Be brief.\n\n```python\n" + source + "\n```")
+            "fix. If you find none, say so. Be brief.\n\n```\n" + source + "\n```")
 
 
 def arbiter_prompt(source, path, reviews):
-    parts = [f"Two independent reviews of {os.path.basename(path)} follow. Decide which defects are real by "
+    parts = [f"{len(reviews)} independent reviews of {os.path.basename(path)} follow. Decide which defects are real by "
              "checking the code yourself. Output a short list: confirmed defects, then rejected claims with a reason. "
              "End with one final line, exactly: VERDICT: approve, VERDICT: approve with fixes, or VERDICT: reject."]
     for index, review in enumerate(reviews, 1):
         parts.append(f"\n--- Review {index} ({review['model']}) ---\n{review['text'][:MAX_STORED_CHARS]}")
-    parts.append("\n--- Code ---\n```python\n" + source + "\n```")
+    parts.append("\n--- Code ---\n```\n" + source + "\n```")
     return "\n".join(parts)
 
 
