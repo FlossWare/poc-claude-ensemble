@@ -26,6 +26,13 @@ from shared.request_context import RequestContext
 from shared.validators import Validators
 from shared.runtime_config import log_dir, socket_path, thompson_state_file
 from shared.service_http import start_service_http
+from shared.thompson_policy import (
+    Arm,
+    default_params,
+    load_policy_file,
+    policy_for_task,
+    select as policy_select,
+)
 
 LOG_DIR = log_dir()
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -161,8 +168,12 @@ class ThompsonState:
         """
         Select best model using Thompson Sampling.
 
+        The selection algorithm lives in :mod:`shared.thompson_policy` so the
+        offline GA replay evaluates exactly the function production runs.  The
+        live signature and the HTTP contract are unchanged.
+
         Args:
-            task_type: Type of task (for future capability matrix integration)
+            task_type: Type of task (selects the policy entry)
             required_capability: Minimum capability required (0-1)
             max_cost: Maximum cost threshold per call
 
@@ -173,36 +184,26 @@ class ThompsonState:
             logger.warning("No models loaded, returning fallback 'haiku'")
             return 'haiku'
 
-        # Filter models by cost constraint
-        candidates = {
-            name: stats
+        arms = [
+            Arm(name, stats.successes, stats.failures, stats.avg_cost, stats.calls)
             for name, stats in self.models.items()
-            if stats.avg_cost <= max_cost or stats.calls == 0  # Allow untested models
-        }
+        ]
 
-        if not candidates:
-            logger.warning(f"No models within cost threshold {max_cost}, using cheapest")
-            candidates = {
-                min(self.models.items(), key=lambda x: x[1].avg_cost)[0]:
-                self.models[min(self.models.items(), key=lambda x: x[1].avg_cost)[0]]
-            }
+        try:
+            policies = load_policy_file()
+            params = policy_for_task(policies, task_type)
+            selected = policy_select(params, arms, task_type, required_capability, max_cost, np.random)
+        except Exception as exc:  # noqa: BLE001 - selection must never fail on policy input
+            logger.warning(
+                f"Ignoring unusable Thompson policy ({type(exc).__name__}: {exc}); "
+                "falling back to default parameters"
+            )
+            selected = policy_select(
+                default_params(), arms, task_type, required_capability, max_cost, np.random
+            )
 
-        # Sample from Beta posteriors (Thompson Sampling)
-        best_model = None
-        best_sample = -1
-
-        for model_name, stats in candidates.items():
-            # Beta(alpha, beta) where alpha = successes + 1, beta = failures + 1
-            alpha = stats.successes + 1
-            beta = stats.failures + 1
-            sample = np.random.beta(alpha, beta)
-
-            if sample > best_sample:
-                best_sample = sample
-                best_model = model_name
-
-        logger.info(f"Selected model: {best_model} (sample={best_sample:.4f}, task={task_type})")
-        return best_model
+        logger.info(f"Selected model: {selected} (task={task_type})")
+        return selected
 
     def record_outcome(self, model_name: str, task_type: str, success: bool, cost: float, tokens: int) -> bool:
         """

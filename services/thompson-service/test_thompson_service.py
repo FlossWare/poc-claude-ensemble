@@ -187,6 +187,39 @@ def test_request_format():
     print("\n✓ All request/response tests passed!")
 
 
+def test_policy_delegation(tmp_path, monkeypatch):
+    """select_model delegates to shared.thompson_policy and reloads on mtime changes."""
+    import json
+
+    from shared import thompson_policy
+
+    policy_file = tmp_path / 'thompson-policy.json'
+    monkeypatch.setenv('POC_CLAUDE_ENSEMBLE_THOMPSON_POLICY_FILE', str(policy_file))
+    thompson_policy.clear_cache()
+
+    state_file = tmp_path / 'state.json'
+    service = ThompsonService(SOCKET_PATH, state_file)
+    service.state.record_outcome('cheap', 'code-review', success=True, cost=0.001, tokens=10)
+    service.state.record_outcome('pricey', 'code-review', success=True, cost=10.0, tokens=10)
+
+    def write_policy(params, mtime_ns):
+        policy_file.write_text(json.dumps({'schema_version': 1, 'policies': {'default': params}}))
+        import os
+        os.utime(policy_file, ns=(mtime_ns, mtime_ns))
+
+    defaults = thompson_policy.default_params()
+    write_policy(dict(defaults, cost_weight=1.0), 5_000_000_000)
+    assert {service.state.select_model('code-review') for _ in range(10)} == {'cheap'}
+
+    # An unusable policy file is ignored; selection still returns a real arm.
+    policy_file.write_text('{"schema_version": 1, "policies": {"default": {"cost_weight": 42}}}')
+    thompson_policy.clear_cache()
+    assert service.state.select_model('code-review') in {'cheap', 'pricey'}
+
+    write_policy(dict(defaults), 5_000_000_001)
+    assert service.state.select_model('code-review') in {'cheap', 'pricey'}
+
+
 if __name__ == '__main__':
     try:
         test_service()

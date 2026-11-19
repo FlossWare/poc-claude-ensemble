@@ -18,6 +18,7 @@ Usage: ledger_to_thompson.py [--dry-run]
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +45,41 @@ MODEL_ALIASES = {
 }
 
 VERDICTS = ("approve with fixes", "approve", "reject")
+
+# Event-driven GA trigger: once this many *new* outcome rows are recorded, a
+# detached report-only GA run is launched. It never blocks the caller; the GA
+# holds an flock, so overlapping triggers are no-ops.
+GA_TRIGGER_MIN_ROWS = 4
+GA_ARGV = ["-m", "learning.ga", "run", "--target", "thompson_policy", "--report-only"]
+
+
+def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen=subprocess.Popen):
+    """Spawn a detached, report-only GA run when enough new rows were recorded.
+
+    Fixed argv, no shell, no caller data. Returns the Popen handle, or None
+    when the threshold is not met or the spawn fails. Never raises.
+    """
+    if recorded_rows < threshold:
+        return None
+    services = os.path.join(REPO, "services")
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = services + (os.pathsep + existing if existing else "")
+    argv = [sys.executable] + GA_ARGV
+    try:
+        return popen(
+            argv,
+            cwd=REPO,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as exc:
+        print(f"ga tuning trigger skipped: {exc}", file=sys.stderr)
+        return None
 
 
 def verdict_of(text):
@@ -120,6 +156,9 @@ def sync(dry_run=False):
 
     if not dry_run:
         save_processed(processed)
+        process = _maybe_trigger_tuning(recorded)
+        if process is not None:
+            print(f"ga tuning run launched (pid {process.pid})")
     print(f"reviews synced: {len(pending)} (outcome rows: {recorded}); "
           f"total processed reviews: {len(processed)}")
     return recorded
