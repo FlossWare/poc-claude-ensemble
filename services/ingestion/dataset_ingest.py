@@ -16,12 +16,16 @@ Exit codes: 0 accounting invariant holds, 1 unhandled per-entry errors,
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ingestion.datasets import acquire as acquire_module
+from ingestion.datasets import adapters as adapter_module
+from ingestion.datasets import archive as archive_module
 from ingestion.datasets import catalog as catalog_module
 from ingestion.datasets import (
     classify,
@@ -284,6 +288,241 @@ def _resolve(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _acquire(args: argparse.Namespace) -> int:
+    if args.entry and (args.limit is not None or args.sample is not None):
+        print("--entry cannot be combined with --limit/--sample", file=sys.stderr)
+        return 1
+    if args.limit is not None and args.sample is not None:
+        print("--limit and --sample are mutually exclusive", file=sys.stderr)
+        return 1
+    if (args.limit is not None and args.limit < 0) or (
+        args.sample is not None and args.sample < 0
+    ):
+        print("--limit/--sample must be non-negative", file=sys.stderr)
+        return 1
+    config = Config.load(
+        catalog_dir=args.catalog_dir,
+        catalog_ref=args.catalog_ref,
+        readme_path=args.readme,
+        limit=args.limit,
+        sample=args.sample,
+        ledger_enabled=False if args.no_ledger else None,
+        data_root=args.data_root,
+        acquire_resume_enabled=False if args.no_resume else None,
+        acquire_reuse_enabled=False if args.no_reuse else None,
+        acquire_resolve_missing=False if args.no_resolve else None,
+        acquire_max_files_per_dataset=args.max_files,
+        max_file_bytes=args.max_bytes,
+    )
+    config.data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    started = time.monotonic()
+    generated_at = _utcnow()
+    snapshot = catalog_module.load_catalog(config)
+    build = manifest.build_rows(snapshot, config, limit=None)
+    if args.entry:
+        selected_ids, unknown = acquire_module.select_named(build.rows, args.entry)
+        truncated = False
+        for entry_id in unknown:
+            print(f"not an acquirable entry id: {entry_id}", file=sys.stderr)
+    else:
+        selected_ids, truncated = acquire_module.select_entries(
+            build.rows, sample=config.sample, limit=config.limit
+        )
+
+    # Resolution evidence comes from the resolve stage's cache; missing entries
+    # are resolved lazily through the same PR 2 code path (bounded, cached).
+    resolutions: dict[str, object] = {}
+    resolution_cache = resolver.ResolutionCache(config)
+    rows_by_id = {str(row.get("entry_id")): row for row in build.rows}
+    for entry_id in sorted(selected_ids):
+        row = rows_by_id.get(entry_id)
+        if row is None:
+            continue
+        cached = resolution_cache.get(
+            entry_id, str(row.get("metadata_sha256") or ""), generated_at
+        )
+        if cached is not None:
+            resolutions[entry_id] = cached
+
+    if args.dry_run:
+        plan = acquire_module.build_plan(build.rows, resolutions, selected_ids, config)
+        payload = {
+            "catalog": {
+                "repo": snapshot.repo,
+                "commit": snapshot.commit,
+                "entries": len(build.rows),
+            },
+            "selection": {
+                "sample": config.sample,
+                "limit": config.limit,
+                "selected": len(selected_ids),
+                "truncated": truncated,
+            },
+            "cached_resolutions": len(resolutions),
+            "plan": plan,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    resolved_during_run = 0
+    missing = selected_ids - set(resolutions)
+    if missing and config.acquire_resolve_missing:
+        resolved, resolve_unhandled, _ctx = resolver.resolve_entries(
+            build.rows, missing, config, now=generated_at
+        )
+        for item in resolved:
+            resolutions[item.entry_id] = item
+            if item.status == "resolved":
+                resolved_during_run += 1
+        if resolve_unhandled:
+            print(
+                f"resolve: {resolve_unhandled} unhandled per-entry error(s)",
+                file=sys.stderr,
+            )
+
+    acquisitions, unhandled, context = acquire_module.acquire_entries(
+        build.rows, resolutions, selected_ids, config
+    )
+    completed = acquire_module.complete_acquisitions(
+        build.rows, acquisitions, now=generated_at, config=config
+    )
+    accounting = acquire_module.check_acquisition_accounting(completed, build.discovered)
+
+    run_id = acquire_module.acquisition_run_id(
+        config,
+        snapshot,
+        selected_ids=selected_ids,
+        sample=config.sample,
+        limit=config.limit,
+    )
+    manifest_path = config.data_root / "manifest" / (
+        _manifest_name(snapshot).replace(".jsonl", ".acquisition.jsonl")
+    )
+    changed, manifest_path = acquire_module.write_acquisition_manifest(
+        build.rows, completed, manifest_path
+    )
+    outcomes_added = acquire_module.append_acquisition_outcomes(
+        build.rows,
+        completed,
+        config.data_root / "outcomes.jsonl",
+        run_id=run_id,
+        catalog_commit=snapshot.commit,
+        retrieved_at=generated_at,
+    )
+
+    if not accounting.ok:
+        exit_code = 2
+    elif unhandled > 0:
+        exit_code = 1
+    elif truncated:
+        exit_code = 3
+    else:
+        exit_code = 0
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    budget = {
+        "bytes_used": context.budget.bytes_used,
+        "datasets_used": context.budget.datasets_used,
+        "max_run_bytes": config.max_run_bytes,
+        "max_run_datasets": config.max_run_datasets,
+        "max_file_bytes": config.max_file_bytes,
+        "max_dataset_bytes": config.max_dataset_bytes,
+    }
+    report_payload = report.build_acquisition_report(
+        build.rows,
+        completed,
+        run_id=run_id,
+        snapshot=snapshot,
+        accounting=accounting,
+        generated_at=generated_at,
+        duration_ms=duration_ms,
+        exit_code=exit_code,
+        manifest_path=str(manifest_path),
+        manifest_changed=changed,
+        outcomes_added=outcomes_added,
+        ledger_result={"enabled": config.ledger_enabled, "posted": False},
+        acquire_version=acquire_module.ACQUIRE_VERSION,
+        adapter_version=adapter_module.ADAPTER_VERSION,
+        archive_version=archive_module.ARCHIVE_VERSION,
+        sample=config.sample,
+        limit=config.limit,
+        unhandled=unhandled,
+        truncated=truncated,
+        cache_hits=context.cache_hits,
+        cache_misses=context.cache_misses,
+        budget=budget,
+        resolutions_used=len(resolutions),
+        resolved_during_run=resolved_during_run,
+    )
+    event_id = ledger_module.acquisition_event_id(
+        config,
+        snapshot,
+        acquire_version=acquire_module.ACQUIRE_VERSION,
+        selection_hash=resolver.selection_hash(selected_ids),
+        sample=config.sample,
+        limit=config.limit,
+    )
+    event_entry = ledger_module.build_acquisition_entry(
+        event_id=event_id,
+        run_id=run_id,
+        snapshot=snapshot,
+        report=report_payload,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        manifest_changed=changed,
+        outcomes_added=outcomes_added,
+        acquire_version=acquire_module.ACQUIRE_VERSION,
+        adapter_version=adapter_module.ADAPTER_VERSION,
+    )
+    ledger_result = ledger_module.post_summary(
+        config, event_id=event_id, entry=event_entry
+    )
+    report_payload["ledger"] = ledger_result
+    report_path = manifest.write_run_report(report_payload, config.data_root, run_id)
+
+    funnel = report_payload["funnel"]
+    print(
+        "acquire: discovered={discovered} statuses={statuses} files={files} "
+        "bytes={bytes} records={records} invariant={invariant} exit={exit_code}".format(
+            discovered=accounting.discovered,
+            statuses=accounting.status_counts,
+            files=funnel["files"],
+            bytes=funnel["bytes"],
+            records=funnel["records"],
+            invariant="ok" if accounting.ok else "violated",
+            exit_code=exit_code,
+        )
+    )
+    for entry in report_payload["entries"]:
+        if entry.get("status") not in {"acquired", "unchanged"}:
+            continue
+        digests = ",".join(
+            str(item.get("sha256") or "")[:16]
+            for item in entry.get("files") or []
+            if item.get("sha256")
+        )
+        adapters = ",".join(
+            f"{key}:{value}" for key, value in (entry.get("adapters") or {}).items()
+        )
+        print(
+            "  {status} {entry} files={files} bytes={bytes} records={records} "
+            "parse={parse} adapters={adapters} sha256={sha256}".format(
+                status=entry.get("status"),
+                entry=entry.get("entry_id"),
+                files=entry.get("files_acquired"),
+                bytes=entry.get("bytes_total"),
+                records=entry.get("records_total"),
+                parse=entry.get("parse_status"),
+                adapters=adapters or "-",
+                sha256=digests or "-",
+            )
+        )
+    print(f"manifest: {manifest_path}")
+    print(f"report: {report_path}")
+    return exit_code
+
+
 def _report(args: argparse.Namespace) -> int:
     config = Config.load(data_root=args.data_root)
     payload = manifest.latest_run(config.data_root)
@@ -334,6 +573,49 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
     resolve_parser.add_argument("--data-root", help="override the dataset data root")
 
+    acquire_parser = subparsers.add_parser(
+        "acquire", help="download resolved dataset content and parse it (PR 3)"
+    )
+    acquire_source = acquire_parser.add_mutually_exclusive_group()
+    acquire_source.add_argument("--catalog-ref", help="catalog git ref to fetch (default: master)")
+    acquire_source.add_argument("--catalog-dir", help="local catalog checkout to read")
+    acquire_parser.add_argument(
+        "--sample",
+        type=int,
+        help="acquire a deterministic stratified sample of N index_content entries across formats",
+    )
+    acquire_parser.add_argument("--limit", type=int, help="acquire at most N entries")
+    acquire_parser.add_argument(
+        "--entry",
+        action="append",
+        help="acquire one specific entry id (repeatable; overrides --sample/--limit)",
+    )
+    acquire_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the acquisition plan; no network, no writes",
+    )
+    acquire_parser.add_argument(
+        "--no-resume", action="store_true", help="do not resume partial downloads"
+    )
+    acquire_parser.add_argument(
+        "--no-reuse", action="store_true", help="ignore the per-entry acquisition cache"
+    )
+    acquire_parser.add_argument(
+        "--no-resolve",
+        action="store_true",
+        help="do not resolve entries missing resolution evidence",
+    )
+    acquire_parser.add_argument(
+        "--max-files", type=int, help="files to acquire per dataset"
+    )
+    acquire_parser.add_argument(
+        "--max-bytes", type=int, help="per-file byte cap"
+    )
+    acquire_parser.add_argument("--no-ledger", action="store_true", help="do not post the summary event")
+    acquire_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
+    acquire_parser.add_argument("--data-root", help="override the dataset data root")
+
     report_parser = subparsers.add_parser("report", help="render the latest inventory or resolution report")
     report_parser.add_argument("--format", choices=("md", "json"), default="md")
     report_parser.add_argument("--out", help="write the report to a file")
@@ -349,6 +631,8 @@ def main(argv: list[str] | None = None) -> int:
             return _inventory(args)
         if args.command == "resolve":
             return _resolve(args)
+        if args.command == "acquire":
+            return _acquire(args)
         if args.command == "report":
             return _report(args)
         parser.print_help(sys.stderr)

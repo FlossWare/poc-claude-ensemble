@@ -172,6 +172,21 @@ class Config:
     resolve_retry_backoff_seconds: int = 3_600
     resolve_cache_enabled: bool = True
 
+    # PR 3: acquisition.  Downloads are streamed through netguard into a
+    # content-addressed store; every byte is bounded by the knobs above
+    # (max_file_bytes / max_dataset_bytes / max_run_bytes) plus these.
+    acquire_version: int = 1
+    acquire_max_files_per_dataset: int = 5
+    acquire_resume_enabled: bool = True
+    acquire_reuse_enabled: bool = True
+    acquire_resolve_missing: bool = True
+    acquire_sniff_prefix_bytes: int = 4096
+    acquire_write_report: bool = True
+
+    # PR 3: adapters.
+    adapter_max_sample_records: int = 5
+    adapter_encoding_fallback: bool = True
+
     probe_enabled: bool = False
     limit: int | None = None
     sample: int | None = None
@@ -194,6 +209,15 @@ class Config:
         ledger_enabled: bool | None = None,
         resolve_cache_enabled: bool | None = None,
         data_root: str | os.PathLike[str] | None = None,
+        acquire_resume_enabled: bool | None = None,
+        acquire_reuse_enabled: bool | None = None,
+        acquire_resolve_missing: bool | None = None,
+        acquire_max_files_per_dataset: int | None = None,
+        max_file_bytes: int | None = None,
+        max_dataset_bytes: int | None = None,
+        max_run_bytes: int | None = None,
+        max_run_datasets: int | None = None,
+        max_run_seconds: int | None = None,
     ) -> "Config":
         default_root = Path(
             os.path.expanduser("~/.FlossWare/poc-claude-ensemble/data/datasets")
@@ -230,6 +254,26 @@ class Config:
             if resolve_cache_enabled is None
             else resolve_cache_enabled
         )
+        resume_enabled = (
+            _env_bool("ACQUIRE_RESUME_ENABLED", True)
+            if acquire_resume_enabled is None
+            else acquire_resume_enabled
+        )
+        reuse_enabled = (
+            _env_bool("ACQUIRE_REUSE_ENABLED", True)
+            if acquire_reuse_enabled is None
+            else acquire_reuse_enabled
+        )
+        resolve_missing = (
+            _env_bool("ACQUIRE_RESOLVE_MISSING", True)
+            if acquire_resolve_missing is None
+            else acquire_resolve_missing
+        )
+
+        def _int_override(value: int | None, env_name: str, default: int) -> int:
+            if value is not None:
+                return value
+            return _env_int(env_name, default)
 
         return cls(
             data_root=resolved_root,
@@ -258,11 +302,17 @@ class Config:
             schemes=_env_tuple("SCHEMES", ("https", "http")),
             enable_ftp=_env_bool("ENABLE_FTP", False),
             respect_robots=_env_bool("RESPECT_ROBOTS", True),
-            max_file_bytes=_env_int("MAX_FILE_BYTES", 64 * 1024 * 1024),
-            max_dataset_bytes=_env_int("MAX_DATASET_BYTES", 1024 * 1024 * 1024),
-            max_run_bytes=_env_int("MAX_RUN_BYTES", 2 * 1024 * 1024 * 1024),
-            max_run_datasets=_env_int("MAX_RUN_DATASETS", 50),
-            max_run_seconds=_env_int("MAX_RUN_SECONDS", 3_600),
+            max_file_bytes=_int_override(
+                max_file_bytes, "MAX_FILE_BYTES", 64 * 1024 * 1024
+            ),
+            max_dataset_bytes=_int_override(
+                max_dataset_bytes, "MAX_DATASET_BYTES", 1024 * 1024 * 1024
+            ),
+            max_run_bytes=_int_override(
+                max_run_bytes, "MAX_RUN_BYTES", 2 * 1024 * 1024 * 1024
+            ),
+            max_run_datasets=_int_override(max_run_datasets, "MAX_RUN_DATASETS", 50),
+            max_run_seconds=_int_override(max_run_seconds, "MAX_RUN_SECONDS", 3_600),
             min_free_disk_bytes=_env_int("MIN_FREE_DISK_BYTES", 5 * 1024 * 1024 * 1024),
             archive_max_entries=_env_int("ARCHIVE_MAX_ENTRIES", 10_000),
             archive_max_uncompressed=_env_int("ARCHIVE_MAX_UNCOMPRESSED", 1024 * 1024 * 1024),
@@ -291,6 +341,26 @@ class Config:
             max_resolved_sources=_env_int("MAX_RESOLVED_SOURCES", 20),
             resolve_retry_backoff_seconds=_env_int("RESOLVE_RETRY_BACKOFF_SECONDS", 3_600),
             resolve_cache_enabled=cache_enabled,
+            acquire_version=_env_int("ACQUIRE_VERSION", 1),
+            acquire_max_files_per_dataset=max(
+                1,
+                _int_override(
+                    acquire_max_files_per_dataset,
+                    "ACQUIRE_MAX_FILES_PER_DATASET",
+                    5,
+                ),
+            ),
+            acquire_resume_enabled=resume_enabled,
+            acquire_reuse_enabled=reuse_enabled,
+            acquire_resolve_missing=resolve_missing,
+            acquire_sniff_prefix_bytes=max(
+                64, _env_int("ACQUIRE_SNIFF_PREFIX_BYTES", 4096)
+            ),
+            acquire_write_report=_env_bool("ACQUIRE_WRITE_REPORT", True),
+            adapter_max_sample_records=max(
+                0, _env_int("ADAPTER_MAX_SAMPLE_RECORDS", 5)
+            ),
+            adapter_encoding_fallback=_env_bool("ADAPTER_ENCODING_FALLBACK", True),
             probe_enabled=probe,
             limit=limit,
             sample=sample,

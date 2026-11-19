@@ -283,6 +283,10 @@ class ResolvedSource:
     version: str | None = None
     member: str | None = None
     evidence_url: str | None = None
+    #: Upstream-declared digest, ``<algorithm>:<hex>`` (for example
+    #: ``md5:...`` from a Zenodo or archive.org file listing).  Acquisition
+    #: verifies it before adopting the bytes.
+    checksum: str | None = None
 
     def to_artifact(self) -> dict[str, object]:
         return {
@@ -294,6 +298,7 @@ class ResolvedSource:
             "version": self.version,
             "member": self.member,
             "evidence_url": sanitize_url(self.evidence_url),
+            "checksum": self.checksum,
         }
 
 
@@ -424,6 +429,7 @@ def _source_from_cache(payload: dict[str, object]) -> ResolvedSource:
         version=_optional_str(payload.get("version")),
         member=_optional_str(payload.get("member")),
         evidence_url=_optional_str(payload.get("evidence_url")),
+        checksum=_optional_str(payload.get("checksum")),
     )
 
 
@@ -925,6 +931,7 @@ def _resolved_from_names(
     evidence_url: str | None,
     config: Config,
     kind_method=None,
+    checksums: dict[str, str] | None = None,
 ) -> tuple[tuple[ResolvedSource, ...], int]:
     preferred = _prefer_data_names(names, allow_unknown=True)
     total = len(preferred)
@@ -942,6 +949,7 @@ def _resolved_from_names(
                 version=version,
                 member=member,
                 evidence_url=evidence_url,
+                checksum=(checksums or {}).get(name),
             )
         )
     if not sources:
@@ -1092,6 +1100,7 @@ def _resolve_zenodo(
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     version = metadata.get("version") if isinstance(metadata.get("version"), str) else str(record_id)
     names: list[tuple[str, str | None, int | None, str | None]] = []
+    checksums: dict[str, str] = {}
     for item in raw_files:
         if not isinstance(item, dict):
             continue
@@ -1099,6 +1108,10 @@ def _resolve_zenodo(
         if not isinstance(key, str):
             continue
         size = item.get("size") if isinstance(item.get("size"), int) else None
+        checksum = item.get("checksum")
+        if isinstance(checksum, str) and checksum.strip():
+            # Zenodo declares "md5:<hex>".
+            checksums[key] = checksum.strip()
         links = item.get("links") if isinstance(item.get("links"), dict) else {}
         download = links.get("self") or links.get("download") or links.get("content")
         if not isinstance(download, str):
@@ -1113,6 +1126,7 @@ def _resolve_zenodo(
         version=version,
         evidence_url=api_url,
         config=ctx.config,
+        checksums=checksums,
     )
     return sources, total
 
@@ -1247,6 +1261,7 @@ def _resolve_archive_org(
     if not isinstance(raw_files, list):
         raise Reject("landing_page_only", "archive.org item has no files list")
     names: list[tuple[str, str | None, int | None, str | None]] = []
+    checksums: dict[str, str] = {}
     for item in raw_files:
         if not isinstance(item, dict):
             continue
@@ -1258,6 +1273,9 @@ def _resolve_archive_org(
             continue
         size = item.get("size")
         size_value = int(size) if isinstance(size, (int, str)) and str(size).isdigit() else None
+        md5 = item.get("md5")
+        if isinstance(md5, str) and md5.strip():
+            checksums[name] = f"md5:{md5.strip()}"
         names.append(
             (
                 name,
@@ -1273,6 +1291,7 @@ def _resolve_archive_org(
         version=None,
         evidence_url=api_url,
         config=ctx.config,
+        checksums=checksums,
     )
     return sources, total
 

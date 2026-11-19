@@ -62,7 +62,8 @@ def test_static_check_no_execution_or_unsafe_loader():
     forbidden_modules = {"pickle", "marshal", "shelve", "subprocess"}
     forbidden_calls = {"eval", "exec", "system", "popen", "extractall"}
     unsafe_yaml_attributes = {"Loader", "UnsafeLoader", "CLoader", "full_load", "unsafe_load"}
-    for path in sorted(package_dir.glob("*.py")):
+    # Recurse: the PR 3 adapters are a subpackage and must be covered too.
+    for path in sorted(package_dir.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

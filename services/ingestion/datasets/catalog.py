@@ -419,24 +419,14 @@ def snapshot_from_directory(
 
 
 def _validate_member_name(name: str) -> list[str]:
-    if not name or "\x00" in name:
-        raise CatalogError("catalog_snapshot_failed", "tar member has an empty or NUL name")
-    if "\\" in name:
-        raise CatalogError("catalog_snapshot_failed", "tar member contains a backslash")
-    if name.startswith("/"):
-        raise CatalogError("catalog_snapshot_failed", "tar member uses an absolute path")
-    if re.match(r"^[A-Za-z]:", name):
-        raise CatalogError("catalog_snapshot_failed", "tar member uses a drive letter")
-    if any(ord(char) < 32 or ord(char) == 127 for char in name):
-        raise CatalogError("catalog_snapshot_failed", "tar member contains control characters")
-    parts = [part for part in name.split("/") if part not in {"", "."}]
-    if not parts:
-        raise CatalogError("catalog_snapshot_failed", "tar member has no path components")
-    if any(part == ".." for part in parts):
-        raise CatalogError("catalog_snapshot_failed", "tar member traverses parent directories")
-    if any(re.match(r"^[A-Za-z]:", part) for part in parts):
-        raise CatalogError("catalog_snapshot_failed", "tar member uses a drive letter")
-    return parts
+    # The rules are shared with dataset archives (``archive.py``) so the two
+    # extractors cannot drift apart; only the error code differs here.
+    from .archive import unsafe_member_reason
+
+    reason = unsafe_member_reason(name)
+    if reason is not None:
+        raise CatalogError("catalog_snapshot_failed", reason)
+    return [part for part in name.split("/") if part not in {"", "."}]
 
 
 def _safe_join(root: Path, parts: list[str]) -> Path:
