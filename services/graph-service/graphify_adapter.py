@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import json
 from typing import Any
 
 
@@ -80,6 +81,7 @@ def normalize_extraction(result: dict[str, Any], corpus_id: str = "default") -> 
     """Map Graphify records to the GraphStore's node/edge record contract."""
     nodes: list[dict[str, Any]] = []
     node_ids: dict[str, str] = {}
+    by_identity: dict[str, dict[str, Any]] = {}
     for item in result.get("nodes", []):
         if not isinstance(item, dict):
             continue
@@ -96,9 +98,21 @@ def normalize_extraction(result: dict[str, Any], corpus_id: str = "default") -> 
         properties["graphify_corpus"] = corpus_id
         properties["source_file"] = source_file
         properties["graphify"] = True
-        nodes.append({"id": identity, "type": str(item.get("type") or item.get("kind") or "symbol"), "properties": properties})
+        node = {"id": identity, "type": str(item.get("type") or item.get("kind") or "symbol"), "properties": properties}
+        existing = by_identity.get(identity)
+        if existing is not None:
+            # Graphify can emit the same symbol id from multiple source files;
+            # keep one node and record the additional provenance instead of
+            # producing a duplicate ID that the batch store would reject.
+            recorded = str(existing["properties"].get("source_file", ""))
+            if source_file and source_file not in recorded.split(","):
+                existing["properties"]["source_file"] = f"{recorded},{source_file}".lstrip(",")
+            continue
+        by_identity[identity] = node
+        nodes.append(node)
 
     edges: list[dict[str, Any]] = []
+    seen_edges: set[str] = set()
     for item in result.get("edges", []):
         if not isinstance(item, dict):
             continue
@@ -115,6 +129,12 @@ def normalize_extraction(result: dict[str, Any], corpus_id: str = "default") -> 
         properties.pop("relation", None)
         properties["graphify_corpus"] = corpus_id
         properties["graphify"] = True
+        # Duplicate edges (same endpoints, relation, and properties) would map
+        # to the same stable edge id and be rejected by the batch store.
+        edge_key = json.dumps([node_ids[source], node_ids[target], str(relation), properties], sort_keys=True)
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
         edges.append({
             "source": node_ids[source],
             "target": node_ids[target],
