@@ -8,11 +8,16 @@ from pathlib import Path
 import sys
 
 ROOT_REPO = Path(__file__).resolve().parents[1]
+# Insert in reverse priority order: each insert lands at sys.path[0], so the
+# LAST entry below (ROOT_REPO itself) ends up first. ROOT_REPO must precede
+# ROOT_REPO / "memory" on sys.path because both contain a "shared" package,
+# and only the ROOT_REPO one has shared.operational_memory (the memory-side
+# copy is a compatible subset for memory_service's own imports).
 for import_path in (
-    ROOT_REPO,
-    ROOT_REPO / "graph-service",
-    ROOT_REPO / "memory-service",
     ROOT_REPO / "learning",
+    ROOT_REPO / "memory",
+    ROOT_REPO / "graph-service",
+    ROOT_REPO,
 ):
     sys.path.insert(0, str(import_path))
 
@@ -84,10 +89,12 @@ def run():
         ensemble_module.urllib.request.urlopen = original_urlopen
         ensemble_module._health_cache.clear()
     root_repo=Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(root_repo))
-    sys.path.insert(0, str(root_repo/"graph-service"))
-    sys.path.insert(0, str(root_repo/"memory-service"))
+    # Keep ROOT_REPO ahead of root_repo/"memory" so the "shared" package
+    # resolves to the services-level copy (see note at top of file).
     sys.path.insert(0, str(root_repo/"learning"))
+    sys.path.insert(0, str(root_repo/"memory"))
+    sys.path.insert(0, str(root_repo/"graph-service"))
+    sys.path.insert(0, str(root_repo))
     from graph_service import create_server as graph_server
     from memory_service import MemoryService
     from server.ensemble_server import create_server as gateway_server, _forward
@@ -120,11 +127,22 @@ def run():
         graph=graph_server("127.0.0.1",0,root/"graph.json")
         gt=threading.Thread(target=graph.serve_forever,daemon=True); gt.start()
         memory=MemoryService(root/"memory.sock",root/"memory")
+        # Bind an ephemeral REST port: MemoryService.start() defaults to
+        # POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT (8767), which collides with a
+        # live deployed memory service on this machine. Every consumer in
+        # this harness wires through memory.http_port, so port 0 changes no
+        # assertion. Same convention as services/memory/test_memory_service.py.
+        previous_memory_port=os.environ.get("POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT")
+        os.environ["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"]="0"
         mt=threading.Thread(target=memory.start,daemon=True); mt.start()
         for _ in range(200):
             if memory.http_port: break
             time.sleep(.01)
         assert memory.http_port
+        if previous_memory_port is None:
+            os.environ.pop("POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT", None)
+        else:
+            os.environ["POC_CLAUDE_ENSEMBLE_MEMORY_HTTP_PORT"]=previous_memory_port
         unavailable=gateway_server("127.0.0.1",0,graph_url="",memory_url="")
         ut=threading.Thread(target=unavailable.serve_forever,daemon=True); ut.start()
         try:
@@ -214,12 +232,22 @@ def run():
                     raise ValueError("simulated response write failure")
             class FakeServer:
                 server_port = 8080
+                # handle() validates the client address against the server's
+                # allowlist before dispatch, mirroring create_server().
+                allowed_networks = (ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"))
             class FakeHeaders(dict):
                 def get(self, key, default=None):
                     return super().get(key, default)
+                def get_all(self, key, default=None):
+                    # http.client.HTTPMessage semantics (case-insensitive,
+                    # returns every value for the header); the real gateway
+                    # reads Accept headers through get_all.
+                    values=[v for k,v in self.items() if k.lower()==key.lower()]
+                    return values if values else default
             class FakeHandler:
                 path = "/api/v1/graph/test"
                 command = "GET"
+                client_address = ("127.0.0.1", 51234)
                 headers = FakeHeaders()
                 server = FakeServer()
                 wfile = BrokenWriter()
