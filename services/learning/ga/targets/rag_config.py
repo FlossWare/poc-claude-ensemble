@@ -3,6 +3,11 @@
 There is no automatic fitness signal for retrieval usefulness in the recorded
 data, so this target must not run on a schedule.  PR 1 therefore ships the
 parameter surface only; ``evaluate`` and ``apply`` refuse explicitly.
+
+The meta-learning ``rag_scope`` domain now derives retrieval-yield observations
+from the injection journal (PR #69); :func:`fitness_signal_readiness` reports
+that evidence.  Yield is still a proxy, so promotion remains refused until an
+explicit usefulness rating exists.
 """
 
 from __future__ import annotations
@@ -34,6 +39,24 @@ PARAM_SPECS: Dict[str, Dict[str, Any]] = {
 
 def param_specs() -> Dict[str, Dict[str, Any]]:
     return {name: dict(spec) for name, spec in PARAM_SPECS.items()}
+
+
+def fitness_signal_readiness() -> Dict[str, Any]:
+    """How much injection-journal evidence the rag_scope adapter has.
+
+    ``learning.meta.domains.rag_scope`` derives per-config retrieval-yield
+    outcomes from the injection journal PR #69 added.  This reports whether
+    enough rows exist to attempt a fitness pass.  It does not promote the
+    target: retrieval yield is a proxy, and the explicit usefulness rating the
+    refusal below names is still required.
+    """
+    try:
+        from learning.meta.domains.rag_scope import readiness
+
+        return readiness()
+    except Exception as exc:  # noqa: BLE001 - reporting must never break the CLI
+        return {"domain": TARGET, "ready": False, "observations": 0,
+                "error": f"{type(exc).__name__}: {exc}"}
 
 
 def load_corpora() -> Dict[str, Any]:

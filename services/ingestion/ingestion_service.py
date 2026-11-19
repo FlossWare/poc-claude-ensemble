@@ -383,6 +383,10 @@ def preview(body: dict[str, Any]) -> dict[str, Any]:
         "characters": len(source["text"]),
         "preview": source["text"][:3000],
         "planned_stages": ["knowledge", "chunking", "embedding", "lexical-index", "vector-index"],
+        # Profile identity (name@version) is part of the source contract; the
+        # bulk-ingest client records it on its ledger rows for chunk-profile
+        # comparisons.
+        "profiles": PROFILES,
         "persisted": False,
     }
 

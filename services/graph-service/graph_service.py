@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -427,6 +429,45 @@ class GraphStore:
             return result
 
 
+def record_traverse(*, depth: Any, direction: Any, result: list | None,
+                    status: str, latency_ms: float, start: Any) -> None:
+    """Best-effort ops telemetry for /graph/traverse (metadata only).
+
+    Hashes the start node id instead of recording it: node ids can be file
+    paths.  A telemetry failure is dropped, never raised into the request.
+    """
+    try:
+        services = str(Path(__file__).resolve().parents[1])
+        if services not in sys.path:
+            sys.path.insert(0, services)
+        from shared.op_telemetry import record
+
+        results = result or []
+        nodes = set()
+        edges = set()
+        for item in results:
+            node = item.get("node") if isinstance(item, dict) else None
+            via = item.get("via") if isinstance(item, dict) else None
+            if isinstance(node, dict) and node.get("id"):
+                nodes.add(node["id"])
+            if isinstance(via, dict) and via.get("id"):
+                edges.add(via["id"])
+        record(
+            "graph_traverse",
+            start_hash=hashlib.sha256(str(start or "").encode("utf-8")).hexdigest()[:16],
+            depth=depth if isinstance(depth, int) and not isinstance(depth, bool) else 0,
+            direction=str(direction or "out")[:8],
+            status=status,
+            result_count=len(results),
+            node_count=len(nodes),
+            edge_count=len(edges),
+            latency_ms=round(latency_ms, 3),
+            timeout=False,
+        )
+    except Exception:  # noqa: BLE001 - telemetry must never break traversal
+        return
+
+
 class GraphRequestHandler(BaseHTTPRequestHandler):
     server_version = "ClaudeEnsembleGraph/1"
 
@@ -527,12 +568,24 @@ class GraphRequestHandler(BaseHTTPRequestHandler):
                     self._send(200, {"ok": True, "nodes": nodes})
                 return
             if path == "/graph/traverse":
-                result = self.store.traverse(
-                    body.get("start"),
-                    body.get("direction", "out"),
-                    body.get("max_depth", 1),
-                    body.get("edge_type"),
-                )
+                started = time.perf_counter()
+                try:
+                    result = self.store.traverse(
+                        body.get("start"),
+                        body.get("direction", "out"),
+                        body.get("max_depth", 1),
+                        body.get("edge_type"),
+                    )
+                except (ValueError, KeyError):
+                    record_traverse(depth=body.get("max_depth"), direction=body.get("direction"),
+                                    result=None, status="error",
+                                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                                    start=body.get("start"))
+                    raise
+                record_traverse(depth=body.get("max_depth"), direction=body.get("direction"),
+                                result=result, status="ok",
+                                latency_ms=(time.perf_counter() - started) * 1000.0,
+                                start=body.get("start"))
                 self._send(200, {"ok": True, "results": result})
                 return
             self._send(404, {"ok": False, "error": "not found"})
