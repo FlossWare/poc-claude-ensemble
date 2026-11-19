@@ -43,7 +43,22 @@ DEFAULT_SERVICE_URLS = {
     "arbitration": None,
     "thompson": "http://127.0.0.1:8769",
     "ingestion": "http://127.0.0.1:8782",
+    # Retrieval stack. These services keep their compact API at the service
+    # root (/health, /collections, /search, /extract, ...); see
+    # ROOT_SCOPED_SERVICES for how their public prefix is stripped.
+    "embedding": "http://127.0.0.1:8770",
+    "vector": "http://127.0.0.1:8771",
+    "lexical": "http://127.0.0.1:8772",
+    "hybrid": "http://127.0.0.1:8773",
+    "reranking": "http://127.0.0.1:8774",
+    "extraction": "http://127.0.0.1:8778",
 }
+
+# Unlike graph and memory, which accept their service-scoped path verbatim
+# (/graph/query, /memory/retrieve), the retrieval services expose their
+# endpoints at the root. The public prefix is a gateway namespace only, so it
+# is stripped before forwarding (/lexical/search -> /search).
+ROOT_SCOPED_SERVICES = frozenset({"embedding", "vector", "lexical", "hybrid", "reranking", "extraction"})
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_FORWARD_HOPS = 4
@@ -300,6 +315,10 @@ def _forward(
     elif path.startswith("/ingestion/"):
         # The POC ingestion service owns a compact /health, /preview, /ingest API.
         target_path = path[len("/ingestion"):]
+    elif path.lstrip("/").partition("/")[0].split("?", 1)[0] in ROOT_SCOPED_SERVICES:
+        # Retrieval services expose their endpoints at the root; the public
+        # gateway prefix identifies the service and is not part of its path.
+        target_path = "/" + path.lstrip("/").partition("/")[2]
     else:
         target_path = path
     request = urllib.request.Request(base.rstrip("/") + target_path, data=body, method=method)

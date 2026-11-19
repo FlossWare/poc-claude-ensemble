@@ -288,6 +288,36 @@ The inventory probes services concurrently with a bounded worker pool and
 short per-service timeout. It is observational only: it does not restart
 services, write to stores, or change live configuration.
 
+## Retrieval stack API
+
+The gateway also forwards the retrieval services under `/api/v1/<service>/...`.
+Those services expose their endpoints at the service root, so the gateway prefix
+names the service and is stripped before forwarding.
+
+| Public route | Service (port) | Upstream path |
+|---|---|---|
+| `GET /api/v1/embedding/model` | Embedding (8770) | `/model` |
+| `POST /api/v1/embedding/embeddings` | Embedding | `/embeddings` |
+| `GET /api/v1/vector/collections` | Vector (8771) | `/collections` |
+| `POST /api/v1/vector/collections/{name}/query` | Vector | `/collections/{name}/query` |
+| `POST /api/v1/lexical/search` | Lexical (8772) | `/search` |
+| `POST /api/v1/lexical/knowledge/search` | Lexical | `/knowledge/search` |
+| `POST /api/v1/hybrid/search` | Hybrid (8773) | `/search` |
+| `POST /api/v1/hybrid/knowledge/search` | Hybrid | `/knowledge/search` |
+| `POST /api/v1/reranking/rerank` | Reranking (8774) | `/rerank` |
+| `POST /api/v1/extraction/extract` | Extraction (8778) | `/extract` |
+
+Each service reports liveness at `GET /api/v1/<service>/health`.
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8080/api/v1/lexical/search \
+  -H 'Content-Type: application/json' -d '{"query":"chromadb","top_k":5}' | jq
+
+curl -fsS -X POST http://127.0.0.1:8080/api/v1/extraction/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"see https://example.org/CPSEARCH-10177 at v1.5.9"}' | jq
+```
+
 ## Source ingestion
 
 The POC gateway exposes a first-class source ingestion API through the Ingestion
