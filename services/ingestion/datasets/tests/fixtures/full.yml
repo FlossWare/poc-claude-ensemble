@@ -1,0 +1,32 @@
+---
+title: Full Entry
+homepage: https://example.org/full
+category: Test
+description: A full entry with every normalized field.
+version: 1.0
+keywords: alpha, beta
+tags:
+  - one
+  - two
+temporal: 2020-2024
+spatial: Global
+access_level: public
+publisher:
+  - name: Example Publisher
+    web: https://example.org
+organization:
+  - name: Example Org
+    web: https://example.org
+issued_time: 2024-01-01
+license: https://creativecommons.org/licenses/by/4.0/?token=LICENSESECRET
+image: https://example.org/img.png?token=IMGSECRET
+references:
+  - title: Reference
+    reference: https://example.org/ref?token=REFSECRET
+sources:
+  - name: CSV download
+    access_url: https://example.org/full.csv
+  - name: JSON API
+    access_url: https://example.org/api/full?token=SECRET
+unknown_key:
+  nested: kept

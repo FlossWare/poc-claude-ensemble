@@ -1,0 +1,12 @@
+---
+title: Typo Name Keys
+homepage: https://example.org/typo
+category: Test
+license: MIT
+publisher:
+  - -name: Typo Publisher
+    web: https://example.org/typo
+organization:
+  - -name: Typo Organization
+    web:
+issued_time: 2021

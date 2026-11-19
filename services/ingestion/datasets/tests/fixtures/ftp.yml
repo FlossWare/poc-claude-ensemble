@@ -1,0 +1,8 @@
+---
+title: FTP Scheme
+homepage: ftp://ftp.example.org/data
+category: Test
+license: MIT
+sources:
+  - name: FTP source
+    access_url: ftp://ftp.example.org/data/file.csv
