@@ -209,12 +209,15 @@ class FakeProbeTransport:
         if callable(value):
             return value(url, method, headers)
         if isinstance(value, dict):
+            body = value.get("body")
+            if isinstance(body, str):
+                body = body.encode("utf-8")
             return NetResponse(
                 status=int(value.get("status", 200)),
                 headers=dict(value.get("headers") or {}),
                 final_url=str(value.get("final_url") or url),
                 redirect_chain=list(value.get("redirect_chain") or []),
-                body=None,
+                body=body if isinstance(body, (bytes, bytearray)) else None,
             )
         return value
 

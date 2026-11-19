@@ -155,6 +155,7 @@ def build_report(
     }
     return {
         "schema_version": 1,
+        "report_type": "inventory",
         "run_id": run_id,
         "generated_at": generated_at,
         "duration_ms": duration_ms,
@@ -207,7 +208,202 @@ def _table(title: str, mapping: dict[str, int]) -> list[str]:
     return lines
 
 
+def _license_policy(row: dict[str, object]) -> str | None:
+    license_block = row.get("license")
+    dataset = license_block.get("dataset") if isinstance(license_block, dict) else None
+    value = dataset.get("policy") if isinstance(dataset, dict) else None
+    return str(value) if value is not None else None
+
+
+def build_resolution_report(
+    rows: list[dict[str, object]],
+    resolutions: list[object],
+    *,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    accounting: object,
+    generated_at: str,
+    duration_ms: int,
+    exit_code: int,
+    manifest_path: str,
+    manifest_changed: bool,
+    outcomes_added: int,
+    ledger_result: dict[str, object],
+    resolver_version: int,
+    sample: int | None,
+    limit: int | None,
+    unhandled: int,
+    truncated: bool,
+    cache_hits: int,
+    cache_misses: int,
+) -> dict[str, object]:
+    by_entry = {resolution.entry_id: resolution for resolution in resolutions}  # type: ignore[attr-defined]
+    status_counts = dict(accounting.status_counts)  # type: ignore[attr-defined]
+    entries: list[dict[str, object]] = []
+    for row in rows:
+        entry_id = str(row.get("entry_id") or "")
+        resolution = by_entry.get(entry_id)
+        if resolution is None:
+            continue
+        artifact = resolution.to_artifact()  # type: ignore[attr-defined]
+        entries.append(
+            {
+                "entry_id": entry_id,
+                "title": row.get("title"),
+                "category": row.get("category"),
+                "disposition": row.get("disposition"),
+                "license_policy": _license_policy(row),
+                "status": artifact.get("status"),
+                "reason_code": artifact.get("reason_code"),
+                "method": artifact.get("method"),
+                "kind": artifact.get("kind"),
+                "source_count": artifact.get("source_count"),
+                "total_sources": artifact.get("total_sources"),
+                "version": artifact.get("version"),
+                "next_action": artifact.get("next_action"),
+            }
+        )
+    entries.sort(key=lambda entry: str(entry.get("entry_id")))
+    counts = {
+        "status": status_counts,
+        "reason": _count(entries, lambda entry: entry.get("reason_code")),
+        "method": _count(entries, lambda entry: entry.get("method")),
+        "kind": _count(entries, lambda entry: entry.get("kind")),
+        "disposition": _count(entries, lambda entry: entry.get("disposition")),
+        "license_policy": _count(entries, lambda entry: entry.get("license_policy")),
+        "category": _count(entries, lambda entry: entry.get("category")),
+    }
+    funnel = {
+        "discovered": accounting.discovered,  # type: ignore[attr-defined]
+        "resolved": status_counts.get("resolved", 0),
+        "unresolved": status_counts.get("unresolved", 0),
+        "deferred": status_counts.get("deferred", 0),
+        "failed": status_counts.get("failed", 0),
+        "acquired": 0,
+        "parsed": 0,
+        "indexed": 0,
+    }
+    return {
+        "schema_version": 1,
+        "report_type": "resolution",
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "sample": sample,
+        "limit": limit,
+        "truncated": truncated,
+        "resolver_version": resolver_version,
+        "catalog": {
+            "repo": snapshot.repo,
+            "commit": snapshot.commit,
+            "snapshot_sha256": snapshot.snapshot_sha256,
+            "mode": snapshot.mode,
+            "entries": len(entries),
+            "discovered_files": len(snapshot.files),
+            "warnings": snapshot.warnings,
+        },
+        "counts": {"discovered": accounting.discovered, **counts},  # type: ignore[attr-defined]
+        "funnel": funnel,
+        "invariant": {
+            "ok": accounting.ok,  # type: ignore[attr-defined]
+            "discovered": accounting.discovered,  # type: ignore[attr-defined]
+            "status_total": accounting.status_total,  # type: ignore[attr-defined]
+            "missing_reason": accounting.missing_reason[:100],  # type: ignore[attr-defined]
+            "problems": accounting.problems,  # type: ignore[attr-defined]
+        },
+        "manifest": {"path": manifest_path, "changed": manifest_changed},
+        "outcomes_added": outcomes_added,
+        "unhandled": unhandled,
+        "cache": {"hits": cache_hits, "misses": cache_misses},
+        "ledger": ledger_result,
+        "entries": entries,
+    }
+
+
+def render_resolution_markdown(report: dict[str, object]) -> str:
+    catalog = report.get("catalog") or {}
+    counts = report.get("counts") or {}
+    funnel = report.get("funnel") or {}
+    invariant = report.get("invariant") or {}
+    cache = report.get("cache") or {}
+    assert isinstance(catalog, dict)
+    assert isinstance(counts, dict)
+    assert isinstance(funnel, dict)
+    assert isinstance(invariant, dict)
+    assert isinstance(cache, dict)
+    lines: list[str] = [
+        "# Dataset resolution report",
+        "",
+        f"- Run: `{report.get('run_id')}`",
+        f"- Generated: {report.get('generated_at')}",
+        f"- Catalog: `{catalog.get('repo')}` @ `{catalog.get('commit')}`",
+        f"- Resolver version: {report.get('resolver_version')}",
+        f"- Sample: {report.get('sample')} / Limit: {report.get('limit')}",
+        f"- Truncated: {report.get('truncated')}",
+        f"- Exit code: {report.get('exit_code')}",
+        f"- Cache: {cache.get('hits')} hit(s), {cache.get('misses')} miss(es)",
+        "",
+        "## Accounting invariant",
+        "",
+        f"- Holds: **{invariant.get('ok')}**",
+        f"- Discovered: {invariant.get('discovered')}",
+        f"- Current statuses: {invariant.get('status_total')}",
+        f"- Missing reason codes: {len(invariant.get('missing_reason') or [])}",
+    ]
+    problems = invariant.get("problems") or []
+    if problems:
+        lines.append(f"- Problems: {', '.join(_md(item) for item in problems)}")
+    lines.extend(["", "## Funnel", "", "| Stage | Count |", "|---|---:|"])
+    for key, value in funnel.items():
+        lines.append(f"| {_md(key)} | {value} |")
+    lines.append("")
+    for key in (
+        "status",
+        "reason",
+        "method",
+        "kind",
+        "disposition",
+        "license_policy",
+        "category",
+    ):
+        lines.extend(_table(key.replace("_", " ").title(), counts.get(key) or {}))
+    ledger = report.get("ledger") or {}
+    lines.extend(
+        [
+            "## Ledger",
+            "",
+            f"- Enabled: {ledger.get('enabled')}",
+            f"- Posted: {ledger.get('posted')}",
+            f"- Duplicate (append-once): {ledger.get('duplicate')}",
+            f"- Error: {ledger.get('error') or '(none)'}",
+            "",
+            "## Entries",
+            "",
+            "| Entry | Status | Reason | Method | Kind | Sources |",
+            "|---|---|---|---|---|---:|",
+        ]
+    )
+    for entry in report.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        lines.append(
+            "| {entry_id} | {status} | {reason} | {method} | {kind} | {sources} |".format(
+                entry_id=_md(entry.get("entry_id")),
+                status=_md(entry.get("status")),
+                reason=_md(entry.get("reason_code")),
+                method=_md(entry.get("method")),
+                kind=_md(entry.get("kind")),
+                sources=entry.get("source_count"),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_markdown(report: dict[str, object]) -> str:
+    if report.get("report_type") == "resolution":
+        return render_resolution_markdown(report)
     catalog = report.get("catalog") or {}
     counts = report.get("counts") or {}
     funnel = report.get("funnel") or {}

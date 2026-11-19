@@ -162,8 +162,19 @@ class Config:
     github_token: str | None = None
     recheck_after_days: int = 30
 
+    # PR 2: resolution.  These knobs bound every resolver network call.  File
+    # bodies are never downloaded at this stage; only bounded API JSON and one
+    # bounded landing page per entry are read.
+    landing_page_max_bytes: int = 512 * 1024
+    landing_page_max_links: int = 200
+    api_max_bytes: int = 2 * 1024 * 1024
+    max_resolved_sources: int = 20
+    resolve_retry_backoff_seconds: int = 3_600
+    resolve_cache_enabled: bool = True
+
     probe_enabled: bool = False
     limit: int | None = None
+    sample: int | None = None
     ledger_enabled: bool = True
     schema_version: int = 1
 
@@ -179,7 +190,9 @@ class Config:
         readme_path: str | os.PathLike[str] | None = None,
         probe_enabled: bool | None = None,
         limit: int | None = None,
+        sample: int | None = None,
         ledger_enabled: bool | None = None,
+        resolve_cache_enabled: bool | None = None,
         data_root: str | os.PathLike[str] | None = None,
     ) -> "Config":
         default_root = Path(
@@ -209,6 +222,14 @@ class Config:
         env_limit = _env_int("LIMIT", -1)
         if limit is None:
             limit = None if env_limit < 0 else env_limit
+        env_sample = _env_int("SAMPLE", -1)
+        if sample is None:
+            sample = None if env_sample < 0 else env_sample
+        cache_enabled = (
+            _env_bool("RESOLVE_CACHE_ENABLED", True)
+            if resolve_cache_enabled is None
+            else resolve_cache_enabled
+        )
 
         return cls(
             data_root=resolved_root,
@@ -264,7 +285,14 @@ class Config:
             pdf_enabled=_env_bool("PDF_ENABLED", False),
             github_token=_env("GITHUB_TOKEN") or None,
             recheck_after_days=_env_int("RECHECK_AFTER_DAYS", 30),
+            landing_page_max_bytes=_env_int("LANDING_PAGE_MAX_BYTES", 512 * 1024),
+            landing_page_max_links=_env_int("LANDING_PAGE_MAX_LINKS", 200),
+            api_max_bytes=_env_int("API_MAX_BYTES", 2 * 1024 * 1024),
+            max_resolved_sources=_env_int("MAX_RESOLVED_SOURCES", 20),
+            resolve_retry_backoff_seconds=_env_int("RESOLVE_RETRY_BACKOFF_SECONDS", 3_600),
+            resolve_cache_enabled=cache_enabled,
             probe_enabled=probe,
             limit=limit,
+            sample=sample,
             ledger_enabled=enabled,
         )

@@ -95,6 +95,95 @@ def build_summary_entry(
     }
 
 
+def resolution_event_id(
+    config: Config,
+    snapshot: CatalogSnapshot,
+    *,
+    resolver_version: int,
+    selection_hash: str,
+    sample: int | None,
+    limit: int | None,
+) -> str:
+    return sha256_hex(
+        canonical_json(
+            {
+                "entry_id": "apd:catalog",
+                "stage": "resolve",
+                "input_hash": sha256_hex(
+                    canonical_json(
+                        {
+                            "schema_version": config.schema_version,
+                            "catalog_repo": snapshot.repo,
+                            "catalog_commit": snapshot.commit,
+                            "snapshot_sha256": snapshot.snapshot_sha256,
+                            "resolver_version": resolver_version,
+                            "selection_hash": selection_hash,
+                            "sample": sample,
+                            "limit": limit,
+                        }
+                    )
+                ),
+                "outcome_code": "resolution_complete",
+                "attempt": 1,
+            }
+        )
+    )
+
+
+def build_resolution_entry(
+    *,
+    event_id: str,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    report: dict[str, object],
+    exit_code: int,
+    duration_ms: int,
+    manifest_changed: bool,
+    outcomes_added: int,
+    resolver_version: int,
+) -> dict[str, object]:
+    """Numeric and enum projections only: no URLs, content or query strings."""
+    counts = report.get("counts") or {}
+    assert isinstance(counts, dict)
+    funnel = report.get("funnel") or {}
+    assert isinstance(funnel, dict)
+    return {
+        "event_id": event_id,
+        "event_type": "dataset_resolution",
+        "event_name": "dataset.resolve.completed",
+        "source": "poc-dataset-ingest",
+        "producer": "poc-claude-ensemble",
+        "timestamp": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "correlation_id": run_id,
+        "execution_id": run_id,
+        "schema_version": 1,
+        "resolver_version": int(resolver_version),
+        "catalog_commit": snapshot.commit,
+        "snapshot_sha256": snapshot.snapshot_sha256,
+        "discovered": int(counts.get("discovered") or 0),
+        "status_counts": _int_map(counts.get("status")),
+        "reason_counts": _int_map(counts.get("reason")),
+        "method_counts": _int_map(counts.get("method")),
+        "kind_counts": _int_map(counts.get("kind")),
+        "disposition_counts": _int_map(counts.get("disposition")),
+        "license_policy_counts": _int_map(counts.get("license_policy")),
+        "resolved": int(funnel.get("resolved") or 0),
+        "unresolved": int(funnel.get("unresolved") or 0),
+        "deferred": int(funnel.get("deferred") or 0),
+        "failed": int(funnel.get("failed") or 0),
+        "sample": report.get("sample"),
+        "limit": report.get("limit"),
+        "invariant_ok": bool((report.get("invariant") or {}).get("ok")),
+        "exit_code": int(exit_code),
+        "duration_ms": int(duration_ms),
+        "manifest_changed": bool(manifest_changed),
+        "outcomes_added": int(outcomes_added),
+    }
+
+
 def _int_map(value: object) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
