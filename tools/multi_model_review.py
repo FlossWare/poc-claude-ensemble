@@ -8,7 +8,15 @@ distinct, and the arbiter is excluded from the crew. The arbiter never changes. 
 the arbiter decision, token counts, latency, and cost estimate are appended to
 ~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be compared over time.
 
-Usage: multi_model_review.py PATH [--max-chars N] [--thompson]
+Review depth is normally 2 (workers + arbiter).  --depth 1 skips the arbiter;
+--depth 3 adds an arbiter verification pass that can revise the verdict;
+--learn-depth draws the depth from the meta-learning review_depth domain.
+--thompson --learn-size additionally draws the crew size from the crew_size
+domain (tools/crew_select.py) and folds this review's evidence back into it.
+
+Usage: multi_model_review.py PATH [--max-chars N] [--thompson] [--learn-size]
+                                  [--depth 1|2|3] [--learn-depth]
+                                  [--prompt-variant defects-v1|risk-first-v1|terse-v1]
        multi_model_review.py --report
 """
 
@@ -36,6 +44,15 @@ ARBITER = "claude-opus-5-5"
 MAX_TOKENS = 4000
 MAX_STORED_CHARS = 4000
 PRICING_PATH = os.path.expanduser("~/.FlossWare/poc-claude-ensemble/services/cost_tracking/pricing.py")
+
+SERVICES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "services")
+
+# Prompt variants are A/B instrumented: the chosen label is recorded on every
+# worker row so the meta-learning prompt_strategy domain can compare them from
+# the ledger.  "defects-v1" is the historical prompt, byte for byte.
+DEFAULT_PROMPT_VARIANT = "defects-v1"
+PROMPT_VARIANTS = ("defects-v1", "risk-first-v1", "terse-v1")
+REVIEW_DEPTHS = (1, 2, 3)
 
 
 def gateway_settings():
@@ -94,10 +111,29 @@ def record(row):
         os.fsync(handle.fileno())
 
 
-def review_prompt(source, path):
+def review_prompt(source, path, variant=DEFAULT_PROMPT_VARIANT):
+    """Worker prompt for a variant; the default reproduces the historical prompt."""
+    name = os.path.basename(path)
+    if variant == "risk-first-v1":
+        return (f"Review this code from {name}, most dangerous first. Report security problems or data loss "
+                "before logic errors, then unhandled errors. For each, give the line, the failure, and a fix. "
+                "If you find none, say so. Be brief.\n\n```\n" + source + "\n```")
+    if variant == "terse-v1":
+        return (f"Review this code from {name}. One line per concrete defect: LINE | FAILURE | FIX. "
+                "Only wrong logic, unhandled errors, data loss, or security problems. "
+                "If you find none, say NONE.\n\n```\n" + source + "\n```")
     return (f"Review this code from {os.path.basename(path)}. List only concrete defects: wrong logic, "
             "unhandled errors, data loss, or security problems. For each, give the line, the failure, and a "
             "fix. If you find none, say so. Be brief.\n\n```\n" + source + "\n```")
+
+
+def verification_prompt(source, path, decision):
+    """Depth-3 pass: re-check the arbiter's own decision against the code."""
+    return (f"You previously adjudicated reviews of {os.path.basename(path)}. Re-check your decision "
+            "against the code yourself. Confirm only defects the code proves; drop anything you cannot "
+            "demonstrate. End with one final line, exactly: VERDICT: approve, VERDICT: approve with fixes, "
+            "or VERDICT: reject.\n\n--- Your earlier decision ---\n" + (decision or "")[:MAX_STORED_CHARS]
+            + "\n\n--- Code ---\n```\n" + source + "\n```")
 
 
 def arbiter_prompt(source, path, reviews):
@@ -132,6 +168,41 @@ def verdict_of(text):
             value = line.split(":", 1)[1].strip().lower().rstrip(".")
             return value if value in VERDICTS else "unclear"
     return "unclear"
+
+
+def meta_learner():
+    """The meta-learning learner, or None when the services tree is absent."""
+    try:
+        if SERVICES not in sys.path:
+            sys.path.insert(0, SERVICES)
+        from learning.meta import MetaLearner
+
+        return MetaLearner()
+    except Exception as exc:  # noqa: BLE001 - learning is additive, never fatal
+        print(f"meta-learning unavailable: {exc}", file=sys.stderr)
+        return None
+
+
+def sync_meta_outcomes():
+    """Re-derive crew_size outcomes from this review ledger (idempotent).
+
+    Re-deriving the whole ledger, rather than recording this review's outcome
+    immediately, is what lets a later review overturn an earlier one: the
+    earlier review's outcome is only final once no later review can change it.
+    Each outcome has a stable id, so repeat runs never double-count.
+    """
+    learner = meta_learner()
+    if learner is None:
+        return None
+    try:
+        if SERVICES not in sys.path:
+            sys.path.insert(0, SERVICES)
+        from learning.meta.domains import crew_size as crew_size_domain
+
+        return crew_size_domain.backfill(learner)
+    except Exception as exc:  # noqa: BLE001 - the review itself already succeeded
+        print(f"meta outcome backfill failed: {exc}", file=sys.stderr)
+        return None
 
 
 def report():
@@ -184,6 +255,14 @@ def main(argv=None):
     parser.add_argument("--max-chars", type=int, default=6000)
     parser.add_argument("--thompson", action="store_true",
                         help="draw the worker lineup from live Thompson (crew_select); arbiter unchanged")
+    parser.add_argument("--learn-size", action="store_true",
+                        help="with --thompson, let the meta-learning crew_size domain choose the crew size")
+    parser.add_argument("--learn-depth", action="store_true",
+                        help="let the meta-learning review_depth domain choose 1/2/3 review phases")
+    parser.add_argument("--depth", type=int, choices=REVIEW_DEPTHS, default=None,
+                        help="explicit review depth (default 2: workers + arbiter)")
+    parser.add_argument("--prompt-variant", choices=PROMPT_VARIANTS, default=DEFAULT_PROMPT_VARIANT,
+                        help=f"worker prompt variant recorded for A/B (default {DEFAULT_PROMPT_VARIANT})")
     parser.add_argument("--report", action="store_true", help="summarize worker and arbiter results from the ledger")
     args = parser.parse_args(argv)
     if args.report:
@@ -203,9 +282,30 @@ def main(argv=None):
         source = full_source
     review_id = hashlib.sha256(f"{args.path}|{time.time()}".encode("utf-8")).hexdigest()[:16]
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Review depth: explicit, meta-learned, or the historical worker+arbiter.
+    depth = 2
+    depth_source = "default"
+    if args.learn_depth:
+        learner = meta_learner()
+        if learner is not None:
+            try:
+                detail = learner.decide("review_depth", {"task_type": "code-review"})
+                depth = int(detail["choice"])
+                depth_source = "meta_learner"
+                print(f"review depth (meta-learning): {depth} "
+                      f"(arm {detail['arm']}, {detail['source']})")
+            except Exception as exc:  # noqa: BLE001 - fall back to today's behaviour
+                print(f"review-depth draw failed: {exc}; using depth 2", file=sys.stderr)
+        else:
+            print("review depth: meta-learning unavailable; using depth 2", file=sys.stderr)
+    elif args.depth is not None:
+        depth = args.depth
+        depth_source = "explicit"
+
     base = {"schema_version": 1, "producer": "multi-model-review", "review_id": review_id,
             "subject": args.path, "subject_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "truncated": truncated, "original_length": len(full_source)}
+            "truncated": truncated, "original_length": len(full_source),
+            "review_depth": depth, "review_depth_source": depth_source}
 
     worker_models = list(WORKERS)
     crew = None
@@ -218,7 +318,8 @@ def main(argv=None):
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import crew_select
         crew = crew_select.select_crew(task_type="code-review", description=f"review of {args.path}",
-                                       count=len(WORKERS), arbiter=ARBITER, correlation_id=review_id)
+                                       count=len(WORKERS), arbiter=ARBITER, correlation_id=review_id,
+                                       learn_size=args.learn_size)
         worker_models = crew["models"]
         if crew.get("status") == "thompson":
             print("crew (thompson): " + ", ".join(
@@ -229,6 +330,8 @@ def main(argv=None):
         if not worker_models:
             print("crew_select returned no workers; aborting", file=sys.stderr)
             sys.exit(1)
+    elif args.learn_size:
+        print("--learn-size only applies with --thompson; crew size unchanged", file=sys.stderr)
 
     try:
         from shared import thompson_shadow
@@ -241,7 +344,7 @@ def main(argv=None):
     workers = []
     for model in worker_models:
         try:
-            result = call(model, review_prompt(source, args.path))
+            result = call(model, review_prompt(source, args.path, args.prompt_variant))
         except Exception as error:
             result = {"model": model, "text": "", "latency_ms": None, "stop_reason": None,
                       "input_tokens": None, "output_tokens": None, "cost_usd": None,
@@ -250,23 +353,48 @@ def main(argv=None):
             result["cost_usd"] = cost_usd(model, result["input_tokens"], result["output_tokens"])
         workers.append(result)
         record(dict(base, kind="worker_result", role="worker", recorded_at=stamp,
+                    prompt_variant=args.prompt_variant,
                     text=result["text"][:MAX_STORED_CHARS], **{k: v for k, v in result.items() if k != "text"}))
 
     if all("error" in w for w in workers):
         print("all workers failed; aborting", file=sys.stderr)
         sys.exit(1)
-    try:
-        arbiter = call(ARBITER, arbiter_prompt(source, args.path, workers))
-    except Exception as error:
-        message = f"{type(error).__name__}: {error}"
-        record(dict(base, kind="arbiter_decision", role="arbiter", recorded_at=stamp, model=ARBITER,
-                    text="", latency_ms=None, stop_reason=None, input_tokens=None,
-                    output_tokens=None, cost_usd=None, error=message))
-        print(f"arbiter failed: {message}", file=sys.stderr)
-        sys.exit(1)
-    arbiter["cost_usd"] = cost_usd(ARBITER, arbiter["input_tokens"], arbiter["output_tokens"])
-    record(dict(base, kind="arbiter_decision", role="arbiter", recorded_at=stamp,
-                text=arbiter["text"][:MAX_STORED_CHARS], **{k: v for k, v in arbiter.items() if k != "text"}))
+
+    arbiter_passes = []
+    if depth >= 2:
+        try:
+            arbiter = call(ARBITER, arbiter_prompt(source, args.path, workers))
+        except Exception as error:
+            message = f"{type(error).__name__}: {error}"
+            record(dict(base, kind="arbiter_decision", role="arbiter", recorded_at=stamp, model=ARBITER,
+                        text="", latency_ms=None, stop_reason=None, input_tokens=None,
+                        output_tokens=None, cost_usd=None, error=message))
+            print(f"arbiter failed: {message}", file=sys.stderr)
+            sys.exit(1)
+        arbiter["cost_usd"] = cost_usd(ARBITER, arbiter["input_tokens"], arbiter["output_tokens"])
+        record(dict(base, kind="arbiter_decision", role="arbiter", recorded_at=stamp,
+                    text=arbiter["text"][:MAX_STORED_CHARS], **{k: v for k, v in arbiter.items() if k != "text"}))
+        arbiter_passes.append(arbiter)
+        if depth >= 3:
+            # Depth 3: the arbiter re-checks its own decision against the code.
+            try:
+                verification = call(ARBITER, verification_prompt(source, args.path, arbiter["text"]))
+            except Exception as error:
+                message = f"{type(error).__name__}: {error}"
+                record(dict(base, kind="arbiter_verification", role="arbiter", recorded_at=stamp,
+                            model=ARBITER, text="", latency_ms=None, stop_reason=None,
+                            input_tokens=None, output_tokens=None, cost_usd=None, error=message))
+                print(f"arbiter verification failed: {message}; keeping the depth-2 decision",
+                      file=sys.stderr)
+            else:
+                verification["cost_usd"] = cost_usd(ARBITER, verification["input_tokens"],
+                                                    verification["output_tokens"])
+                record(dict(base, kind="arbiter_verification", role="arbiter", recorded_at=stamp,
+                            text=verification["text"][:MAX_STORED_CHARS],
+                            **{k: v for k, v in verification.items() if k != "text"}))
+                arbiter_passes.append(verification)
+    else:
+        print("review depth 1: workers only, no arbiter adjudication", file=sys.stderr)
 
     # Feed this review's outcomes to Thompson so model selection learns from
     # real results (worker: usable text; arbiter: parseable verdict). Failure
@@ -277,17 +405,30 @@ def main(argv=None):
     except Exception as exc:
         print(f"thompson outcome sync failed: {exc}", file=sys.stderr)
 
-    summary = {"review_id": review_id, "workers": [{k: w[k] for k in ("model", "latency_ms", "output_tokens",
-                                                                       "stop_reason", "cost_usd")} for w in workers],
-               "arbiter": {k: arbiter[k] for k in ("model", "latency_ms", "output_tokens", "stop_reason", "cost_usd")},
-               "total_cost_usd": round(sum(w["cost_usd"] or 0.0 for w in workers) + (arbiter["cost_usd"] or 0.0), 6)}
+    final_arbiter = arbiter_passes[-1] if arbiter_passes else None
+    summary = {"review_id": review_id, "review_depth": depth,
+               "review_depth_source": depth_source, "prompt_variant": args.prompt_variant,
+               "workers": [{k: w[k] for k in ("model", "latency_ms", "output_tokens",
+                                              "stop_reason", "cost_usd")} for w in workers],
+               "arbiter": ({k: final_arbiter[k] for k in ("model", "latency_ms", "output_tokens",
+                                                         "stop_reason", "cost_usd")}
+                           if final_arbiter else None),
+               "total_cost_usd": round(sum(w["cost_usd"] or 0.0 for w in workers)
+                                       + sum(a["cost_usd"] or 0.0 for a in arbiter_passes), 6)}
     if crew is not None:
         summary["thompson_crew"] = {"status": crew.get("status"), "reason": crew.get("reason"),
                                     "arms": [w["arm"] for w in crew.get("workers", [])],
                                     "selection_id": crew.get("selection_id"),
+                                    "learned_size": crew.get("learned_size"),
                                     "ledger_path": crew.get("ledger_path")}
+    # Only the opt-in learning path mutates meta state: --learn-size means the
+    # crew-size domain is in use, so this review's evidence is folded in.
+    if args.learn_size and crew is not None:
+        summary["meta_backfill"] = sync_meta_outcomes()
+
     print(json.dumps(summary, indent=2))
-    print("\n=== ARBITER DECISION ===\n" + arbiter["text"])
+    if final_arbiter is not None:
+        print("\n=== ARBITER DECISION ===\n" + final_arbiter["text"])
 
 
 if __name__ == "__main__":

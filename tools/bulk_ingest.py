@@ -6,11 +6,19 @@ The ingestion service never reads files; this client is the only reader.
 
 Usage:
   python3 tools/bulk_ingest.py PATH [--source NAME] [--origin NAME]
-    [--gateway URL] [--limit N] [--dry-run] [--resume-state FILE]
+    [--gateway URL] [--limit N] [--learn-batch] [--dry-run] [--resume-state FILE]
 
   python3 tools/bulk_ingest.py PATH --format pdf [--source books]
     [--origin books] [--limit N] [--max-pdf-bytes N] [--max-pdf-pages N]
     [--max-text-chars N] [--dry-run] [--resume-state FILE]
+
+--learn-batch draws this run's item budget from the meta-learning batch_size
+domain (25/50/100/250/500).  The client pushes items one at a time, so the
+run's item budget is the only batching boundary it controls; the draw is used
+when --limit is absent, and the run's throughput/failure outcome is recorded
+afterwards.  Succeeded/failed ingest ledger rows also carry the chunking
+profile identity from the preview response, which the meta-learning chunking
+domain compares.
 
 Formats:
   json (default)  Scraped JSON item files. Each object is normalized to
@@ -74,6 +82,32 @@ DEFAULT_LIMIT = None                     # no limit unless --limit
 REQUEST_TIMEOUT = 180                   # ingestion can take minutes
 
 INPUT_FORMATS = ("json", "pdf")
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SERVICES = os.path.join(REPO, "services")
+
+
+def chunk_profile_of(preview_body):
+    """The chunking profile identity (name@version) from a preview response."""
+    profiles = preview_body.get("profiles") if isinstance(preview_body, dict) else None
+    if isinstance(profiles, dict):
+        value = profiles.get("chunking")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def meta_learner():
+    """The meta-learning learner, or None when the services tree is absent."""
+    try:
+        if SERVICES not in sys.path:
+            sys.path.insert(0, SERVICES)
+        from learning.meta import MetaLearner
+
+        return MetaLearner()
+    except Exception as exc:  # noqa: BLE001 - learning is additive, never fatal
+        print(f"meta-learning unavailable: {exc}", file=sys.stderr)
+        return None
 
 # ---------------------------------------------------------------------------
 # Field normalization: try known variants for each logical field.
@@ -392,6 +426,10 @@ def push_text_item(
         append_ledger(ledger_path, entry({"status": "failed", "stage": "preview", "response": preview_body}))
         return "failed"
 
+    # The preview advertises the profile identity the ingest will use, so the
+    # ledger can attribute chunks to a chunking profile.
+    chunk_profile = chunk_profile_of(preview_body)
+
     # Ingest
     ingest_payload = {"preview_id": preview_id}
     status2, ingest_body = gateway_post(gateway, "/api/v1/ingestion/ingest", ingest_payload)
@@ -408,6 +446,7 @@ def push_text_item(
                 "decision": ingest_body.get("decision"),
                 "chunks": ingest_body.get("chunks"),
                 "vectors": ingest_body.get("vectors"),
+                "chunk_profile": chunk_profile,
                 "status": "succeeded",
                 "response": ingest_body,
             }))
@@ -416,7 +455,8 @@ def push_text_item(
 
         report["failed"] += 1
         append_ledger(ledger_path, entry({
-            "status": "failed", "stage": "ingest", "http_status": status2, "response": ingest_body,
+            "status": "failed", "stage": "ingest", "http_status": status2,
+            "chunk_profile": chunk_profile, "response": ingest_body,
         }))
         return "failed"
 
@@ -425,6 +465,7 @@ def push_text_item(
     report["errors"].append({"file": source_file, "stage": "ingest", "status": status2, "detail": err_detail2})
     append_ledger(ledger_path, entry({
         "status": "failed", "stage": "ingest", "http_status": status2,
+        "chunk_profile": chunk_profile,
         "response": ingest_body if isinstance(ingest_body, dict) else {"error": ingest_body},
     }))
     return "failed"
@@ -671,6 +712,9 @@ def main() -> None:
     parser.add_argument("--gateway", default=os.environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", "http://127.0.0.1:8080"),
                         help="Gateway base URL (default: $POC_CLAUDE_ENSEMBLE_GATEWAY_URL or http://127.0.0.1:8080)")
     parser.add_argument("--limit", type=int, default=None, help="Max items to ingest this run")
+    parser.add_argument("--learn-batch", action="store_true",
+                        help="draw this run's item budget from the meta-learning batch_size domain "
+                             "(used when --limit is not given; the outcome is recorded afterwards)")
     parser.add_argument("--dry-run", action="store_true", help="Parse and ledger without POSTing to the gateway")
     parser.add_argument("--resume-state", default=None,
                         help="Ledger file path (default: ~/.FlossWare/ledger/bulk-ingest/<source>.jsonl)")
@@ -714,12 +758,35 @@ def main() -> None:
     if args.max_pdf_pages < 1:
         parser.error("--max-pdf-pages must be >= 1")
 
+    # Meta-learning batch size: the client processes items one at a time, so
+    # the only batching boundary it controls is this run's item budget.  The
+    # drawn arm is applied as the limit (unless the operator set one) and the
+    # run's own throughput/failure outcome is recorded afterwards.
+    learner = None
+    batch_arm = None
+    batch_applied = False
+    limit = args.limit
+    if args.learn_batch:
+        learner = meta_learner()
+        if learner is not None:
+            try:
+                detail = learner.decide("batch_size", {"op": "bulk_ingest"})
+                batch_arm = int(detail["choice"])
+                if limit is None:
+                    limit = batch_arm
+                    batch_applied = True
+                print(f"batch size (meta-learning): {batch_arm} ({detail['source']}); "
+                      f"items this run: {limit}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 - fall back to normal limits
+                print(f"batch-size draw failed: {exc}; using --limit as given", file=sys.stderr)
+
+    started = time.perf_counter()
     report = run(
         input_path=input_path,
         source=source,
         origin=origin,
         gateway=args.gateway,
-        limit=args.limit,
+        limit=limit,
         dry_run=args.dry_run,
         ledger_path=ledger_path,
         max_file_bytes=args.max_file_bytes,
@@ -728,6 +795,27 @@ def main() -> None:
         max_pdf_bytes=args.max_pdf_bytes,
         max_pdf_pages=args.max_pdf_pages,
     )
+    elapsed = time.perf_counter() - started
+
+    # A dry run never touches the gateway, so it is not evidence about a real
+    # batch's throughput or failure rate.
+    if batch_arm is not None and learner is not None and batch_applied and not args.dry_run:
+        total = (report["ingested"] + report["skipped_duplicate"]
+                 + report["skipped_malformed"] + report["failed"])
+        if total > 0:
+            reward = round(max(0.0, 1.0 - report["failed"] / total), 6)
+            try:
+                learner.record(
+                    "batch_size", batch_arm, reward, elapsed / max(1, total),
+                    {"outcome_id": f"bulk-ingest:{source}:{time.time_ns()}:{batch_arm}",
+                     "source": source, "processed": total, "failed": report["failed"],
+                     "elapsed_seconds": round(elapsed, 3)},
+                    context={"op": "bulk_ingest"},
+                )
+                print(f"batch-size outcome recorded (reward {reward}, "
+                      f"{total} items, {report['failed']} failed)", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 - the ingest already happened
+                print(f"batch-size outcome record failed: {exc}", file=sys.stderr)
 
     # Final report to stdout
     print(json.dumps(report, indent=2, sort_keys=True))

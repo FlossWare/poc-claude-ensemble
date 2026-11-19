@@ -17,6 +17,14 @@ os.environ["POC_CLAUDE_ENSEMBLE_LEDGER_ROOT"] = os.path.join(_TEST_ROOT, "ledger
 os.environ["POC_CLAUDE_ENSEMBLE_PROMPT_LEDGER"] = os.path.join(_TEST_ROOT, "ledger", "prompts", "prompts.jsonl")
 os.environ["POC_CLAUDE_ENSEMBLE_SCRAPE_LEDGER"] = os.path.join(_TEST_ROOT, "ledger", "scrape", "fetches.jsonl")
 os.environ["POC_CLAUDE_ENSEMBLE_OUTCOME_LEDGER"] = os.path.join(_TEST_ROOT, "ledger", "outcomes", "outcomes.jsonl")
+# Operational telemetry (e.g. graph traversal rows) and the new meta-learning
+# ledgers must never touch the live tree during tests.
+os.environ["POC_CLAUDE_ENSEMBLE_OPS_LEDGER_DIR"] = os.path.join(_TEST_ROOT, "ledger", "ops")
+os.environ["POC_CLAUDE_ENSEMBLE_META_LEDGER_DIR"] = os.path.join(_TEST_ROOT, "ledger", "meta")
+os.environ["POC_CLAUDE_ENSEMBLE_TOOL_LEDGER"] = os.path.join(_TEST_ROOT, "ledger", "tools", "tools.jsonl")
+os.environ["POC_CLAUDE_ENSEMBLE_BULK_LEDGER_DIR"] = os.path.join(_TEST_ROOT, "ledger", "bulk-ingest")
+os.environ["POC_CLAUDE_ENSEMBLE_CREW_LEDGER_DIR"] = os.path.join(_TEST_ROOT, "ledger", "crews")
+os.environ["FLOSSWARE_CE_RAG_JOURNAL"] = os.path.join(_TEST_ROOT, "ledger", "rag", "injections.jsonl")
 
 # GA state, the Thompson policy file, and the review/selection ledgers must never
 # be the live ones during tests.

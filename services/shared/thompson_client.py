@@ -9,14 +9,27 @@ Gracefully degrades if daemon is down.
 
 import json
 import logging
+import math
 import os
+import random
 import urllib.error
 import urllib.request
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, Optional, Any
+from typing import Dict, Iterable, Optional, Any
+
+
+try:  # imported as a top-level module with services/shared on sys.path
+    from thompson_policy import default_params, load_policy_file, policy_for_task, select as policy_select
+except ImportError:  # imported as shared.thompson_client
+    from shared.thompson_policy import (  # type: ignore[no-redef]
+        default_params,
+        load_policy_file,
+        policy_for_task,
+        select as policy_select,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -217,6 +230,39 @@ class ThompsonClient:
         else:
             logger.warning(f"[{request_id}] Thompson service unavailable, falling back to haiku")
             return 'haiku'
+
+    def select_arm(self, domain: str, arms: Iterable[Any], *, task_type: str | None = None,
+                   required_capability: float = 0.0, max_cost: float = math.inf,
+                   rng: Any = None) -> str:
+        """Draw one arm for an arbitrary decision domain (crew size, review depth, ...).
+
+        The HTTP protocol is model-selection only, and non-model posters live
+        in the meta ledger, so this draw happens locally.  It still runs the
+        *same* pure function the live service and the GA replay share
+        (:func:`thompson_policy.select`) against the *same* GA-tuned policy
+        file, so a policy promoted for Target A changes every domain.
+
+        Args:
+            domain: Domain name used as the policy lookup key (falls back to
+                the ``default`` policy entry, which is what the GA evolves).
+            arms: Iterable of :class:`thompson_policy.Arm` values.
+            task_type: Optional context task type (another policy lookup key).
+            required_capability / max_cost: Passed through to the policy.
+            rng: Injected generator (tests); defaults to the stdlib RNG.
+
+        Returns:
+            The selected arm name.
+        """
+        candidates = list(arms)
+        if not candidates:
+            raise ValueError("select_arm: no arms")
+        lookup = task_type if task_type is not None else domain
+        try:
+            params = policy_for_task(load_policy_file(), lookup)
+        except Exception:  # noqa: BLE001 - policy input must never stop a draw
+            params = default_params()
+        return policy_select(params, candidates, lookup, required_capability, max_cost,
+                             rng if rng is not None else random)
 
     def record_outcome(self, model: str, task_type: str, success: bool, cost: float, tokens: int = 0, request_id: str = None) -> bool:
         """

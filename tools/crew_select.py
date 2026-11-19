@@ -48,9 +48,18 @@ actually ran, and ``ledger_to_thompson`` maps it to the same arm name used
 here (see ``ARM_MODEL_IDS`` / ``MODEL_ALIASES``), so selection and outcome
 share one arm namespace and the loop closes without extra plumbing.
 
+Crew size
+---------
+``--learn-size`` asks the meta-learning ``crew_size`` domain how many workers
+to draw (arms 1-5).  The draw is recorded in the ledger row under
+``learned_size``; ``--workers`` is ignored in that mode.  Outcomes are derived
+from the review ledger by ``python -m learning.meta backfill crew_size`` (or
+automatically by ``multi_model_review --learn-size``), so a crew size is only
+credited once a later review of the same subject cannot overturn it.
+
 Usage
 -----
-    crew_select.py [DESCRIPTION] [--task-type TYPE] [--workers N]
+    crew_select.py [DESCRIPTION] [--task-type TYPE] [--workers N] [--learn-size]
                    [--arbiter MODEL] [--exclude ARM] [--json] [--no-record]
 
     crew_select.py "review the ingest retry path" --task-type code-review
@@ -165,6 +174,20 @@ def infer_task_type(description: Optional[str]) -> str:
 def crews_dir() -> Path:
     """Directory where crew-selection exposure rows are written."""
     return Path(os.path.expanduser(os.environ.get(CREWS_DIR_ENV, DEFAULT_CREWS_DIR)))
+
+
+def meta_learner():
+    """The meta-learning learner, or None when the services tree is absent."""
+    try:
+        services = os.path.join(REPO, "services")
+        if services not in sys.path:
+            sys.path.insert(0, services)
+        from learning.meta import MetaLearner
+
+        return MetaLearner()
+    except Exception as exc:  # noqa: BLE001 - size learning is optional
+        LOG.warning("crew-size meta-learning unavailable (%s); using requested size", exc)
+        return None
 
 
 def _prior_strength(task_type: str) -> float:
@@ -313,13 +336,15 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
                 ledger_dir: Optional[os.PathLike | str] = None,
                 max_draws_per_slot: int = MAX_DRAWS_PER_SLOT,
                 record_selection: bool = True,
-                correlation_id: Optional[str] = None) -> Dict[str, Any]:
+                correlation_id: Optional[str] = None,
+                learn_size: bool = False,
+                learner: Optional[Any] = None) -> Dict[str, Any]:
     """Draw a distinct-arm worker crew from Thompson, excluding the arbiter.
 
     Args:
         task_type: Thompson task type (e.g. ``code-review``).
         description: Free-text task description, recorded for context.
-        count: Desired number of workers.
+        count: Desired number of workers (ignored when ``learn_size`` is set).
         arbiter: Model ID or arm that must never appear in the crew.  The
             arbiter is configured separately (``multi_model_review.ARBITER``).
         exclude: Additional models/arms to exclude.
@@ -329,6 +354,9 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
         max_draws_per_slot: Rejection-sampling budget per slot.
         record_selection: Write the exposure row (tests may disable).
         correlation_id: Optional review/task id recorded for later joins.
+        learn_size: Draw the crew size from the meta-learning ``crew_size``
+            domain instead of using ``count``.
+        learner: MetaLearner override (tests); default constructs one.
 
     Returns:
         The ledger row (also written to ``<crews dir>/<ts>.jsonl``).
@@ -337,6 +365,30 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
         raise ValueError("count must be at least 1")
     if max_draws_per_slot < 1:
         raise ValueError("max_draws_per_slot must be at least 1")
+
+    learned_size: Optional[Dict[str, Any]] = None
+    if learn_size:
+        active = learner if learner is not None else meta_learner()
+        if active is None:
+            LOG.warning("--learn-size requested but meta-learning is unavailable; "
+                        "using %d workers", count)
+        else:
+            try:
+                detail = active.decide("crew_size", {"task_type": task_type})
+                count = int(detail["choice"])
+                learned_size = {
+                    "arm": detail["arm"],
+                    "choice": count,
+                    "source": detail["source"],
+                    "context_scope": detail["posterior"]["context_scope"],
+                    "posterior_mean": detail["posterior"]["arms"][detail["arm"]]["posterior_mean"],
+                    "state_path": detail["posterior"]["state_path"],
+                }
+                LOG.info("meta-learning drew crew size %d (%s, %s)",
+                         count, detail["arm"], detail["source"])
+            except Exception as exc:  # noqa: BLE001 - fall back to the requested size
+                LOG.warning("crew-size meta-learning draw failed (%s); using %d workers",
+                            exc, count)
 
     excluded: List[str] = []
     for value in ([arbiter] if arbiter else []) + list(exclude):
@@ -355,6 +407,8 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
         "task_type": task_type,
         "description": description,
         "requested_workers": count,
+        "learned_size": learned_size,
+        "size_source": "meta_learner" if learned_size else "requested",
         "method": "thompson-draw-without-replacement",
         "arbiter": {"configured": arbiter, "arm": arm_of(arbiter) if arbiter else None,
                     "excluded": arm_of(arbiter) in excluded if arbiter else False},
@@ -478,6 +532,11 @@ def _format_record(record: Dict[str, Any]) -> str:
              + (f" (description: {record['description']})" if record.get("description") else ""),
              f"status: {record['status']}"
              + (f" ({record['reason']}: {record['detail']})" if record.get("reason") else "")]
+    learned = record.get("learned_size")
+    if learned:
+        lines.append(f"size: {record['requested_workers']} workers "
+                     f"(meta-learning arm {learned['arm']}, {learned['source']}, "
+                     f"posterior mean {learned.get('posterior_mean')})")
     if record.get("excluded"):
         lines.append("excluded: " + ", ".join(record["excluded"]))
     lines.append("crew:")
@@ -509,8 +568,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="task description (used for the ledger and task-type inference)")
     parser.add_argument("--task-type", default=None,
                         help=f"Thompson task type (default: infer from description, else {DEFAULT_TASK_TYPE})")
-    parser.add_argument("--workers", type=int, default=DEFAULT_CREW_SIZE,
-                        help=f"number of workers (default {DEFAULT_CREW_SIZE})")
+    parser.add_argument("--workers", type=int, default=None,
+                        help=f"number of workers (default {DEFAULT_CREW_SIZE}, or the "
+                             f"meta-learning draw with --learn-size)")
+    parser.add_argument("--learn-size", action="store_true",
+                        help="let the meta-learning crew_size domain decide the worker count")
     parser.add_argument("--arbiter", default=DEFAULT_ARBITER,
                         help=f"arbiter model/arm never placed in the crew (default {DEFAULT_ARBITER})")
     parser.add_argument("--exclude", action="append", default=[], metavar="MODEL",
@@ -529,7 +591,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     logging.basicConfig(level=logging.ERROR if args.quiet else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
-    if args.workers < 1:
+    if args.workers is not None and args.workers < 1:
         parser.error("--workers must be at least 1")
     if not 0.0 <= args.capability <= 1.0:
         parser.error("--capability must be between 0 and 1")
@@ -537,16 +599,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("--max-cost must be at least 0")
 
     task_type = args.task_type or infer_task_type(args.description)
+    if args.learn_size and args.workers is not None:
+        LOG.warning("--workers is ignored when --learn-size draws the crew size")
+    count = args.workers if args.workers is not None else DEFAULT_CREW_SIZE
     record = select_crew(
         task_type,
         description=args.description,
-        count=args.workers,
+        count=count,
         arbiter=args.arbiter,
         exclude=args.exclude,
         required_capability=args.capability,
         max_cost=math.inf if args.max_cost is None else args.max_cost,
         max_draws_per_slot=args.max_draws_per_slot,
         record_selection=not args.no_record,
+        learn_size=args.learn_size,
     )
     print(json.dumps(record, indent=2) if args.json else _format_record(record))
     return 0
