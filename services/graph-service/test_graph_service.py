@@ -195,3 +195,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_remove_nodes_by_ids_and_prefix(tmp_path):
+    import graph_service as gs
+    store = gs.GraphStore(tmp_path / "g.json")
+    store.add_node("file", {"path": "/old/repo/a.py"}, "file:a")
+    store.add_node("file", {"path": "/new/repo/b.py"}, "file:b")
+    store.add_node("file", {"path": "/old/repo/c.py"}, "file:c")
+    store.add_edge("file:a", "file:b", "relates", {})
+
+    # dry run reports without mutating
+    dry = store.remove_nodes(path_prefix="/old/repo", dry_run=True)
+    assert dry["would_remove_nodes"] == 2 and dry["dry_run"] is True
+    assert store.graph.has_node("file:a")
+
+    # real removal drops nodes and their edges, persists
+    result = store.remove_nodes(path_prefix="/old/repo")
+    assert result["removed_nodes"] == 2 and result["removed_edges"] >= 1
+    assert not store.graph.has_node("file:a") and store.graph.has_node("file:b")
+
+    # reloaded from disk: removal is durable
+    store2 = gs.GraphStore(tmp_path / "g.json")
+    assert not store2.graph.has_node("file:a") and store2.graph.has_node("file:b")
+
+    # explicit ids + missing reporting
+    result = store.remove_nodes(ids=["file:b", "file:ghost"])
+    assert result["removed_nodes"] == 1 and result["missing"] == ["file:ghost"]
+
+    # bad input rejected
+    try:
+        store.remove_nodes()
+        assert False, "expected ValueError"
+    except ValueError:
+        pass

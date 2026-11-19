@@ -299,6 +299,50 @@ class GraphStore:
         attrs = self.graph.nodes[node_id]
         return {"id": node_id, "type": attrs["type"], "properties": attrs["properties"]}
 
+    def remove_nodes(self, ids: list[str] | None = None, path_prefix: str | None = None,
+                     dry_run: bool = False, max_removals: int = 10_000) -> dict[str, Any]:
+        """Remove nodes (and their edges) by explicit ids or by path prefix.
+
+        Bulk deletion by path_prefix is capped at max_removals per call so one
+        request cannot silently erase the whole graph. Durability follows the
+        service contract: the store is persisted before success is reported.
+        """
+        if not isinstance(ids, list) and path_prefix is None:
+            raise ValueError("provide ids (list) or path_prefix")
+        if path_prefix is not None and (not isinstance(path_prefix, str) or not path_prefix):
+            raise ValueError("path_prefix must be a non-empty string")
+        with self.lock:
+            if ids is not None:
+                targets = [node_id for node_id in ids if self.graph.has_node(node_id)]
+                missing = [node_id for node_id in ids if not self.graph.has_node(node_id)]
+            else:
+                targets = [
+                    node_id for node_id, attrs in self.graph.nodes(data=True)
+                    if str(attrs.get("properties", {}).get("path", "")).startswith(path_prefix)
+                ]
+                missing = []
+            if len(targets) > max_removals:
+                raise ValueError(f"refusing to remove {len(targets)} nodes (cap {max_removals}); "
+                                 "narrow the selection or raise the cap explicitly")
+            removed_edges = sum(self.graph.degree(node_id) for node_id in targets)
+            if dry_run or not targets:
+                return {"ok": True, "dry_run": bool(dry_run), "would_remove_nodes": len(targets),
+                        "would_remove_edges": removed_edges, "missing": missing,
+                        "sample_ids": targets[:10]}
+            proposed = self.graph.copy()
+            proposed.remove_nodes_from(targets)
+            self._persist(proposed)
+            self.graph = proposed
+            self._edge_index = {
+                attrs["id"]: (source, target)
+                for source, target, attrs in proposed.edges(data=True)
+            } if not proposed.is_multigraph() else {
+                attrs["id"]: (source, target)
+                for source, target, _, attrs in proposed.edges(keys=True, data=True)
+            }
+            return {"ok": True, "dry_run": False, "removed_nodes": len(targets),
+                    "removed_edges": removed_edges, "missing": missing}
+
     def _edge_record(self, edge_id: str) -> dict[str, Any]:
         source, target = self._edge_index[edge_id]
         attrs = self.graph.edges[source, target, edge_id]
@@ -454,6 +498,15 @@ class GraphRequestHandler(BaseHTTPRequestHandler):
             if path == "/graph/add-node":
                 node = self.store.add_node(body.get("type"), body.get("properties", {}), body.get("id"))
                 self._send(200, {"ok": True, "node": node})
+                return
+            if path == "/graph/remove-nodes":
+                result = self.store.remove_nodes(
+                    ids=body.get("ids"),
+                    path_prefix=body.get("path_prefix"),
+                    dry_run=bool(body.get("dry_run")),
+                    max_removals=int(body.get("max_removals") or 10_000),
+                )
+                self._send(200, result)
                 return
             if path == "/graph/add-edge":
                 edge = self.store.add_edge(
