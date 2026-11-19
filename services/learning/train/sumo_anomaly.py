@@ -84,7 +84,6 @@ COUNT_FEATURES = frozenset({"request_count", "error_count"})
 MIN_POINTS = 12
 #: IsolationForest cannot rank a feature that never varies; a tiny jitter keeps
 #: a constant column numerically harmless and the encoder deterministic.
-_CONSTANT_JITTER = 1e-9
 #: Deviation cap so an infinite robust z-score is still printable/serialisable.
 MAX_DEVIATION = 999.0
 
@@ -159,6 +158,7 @@ class SumoConfig:
             raise ValueError("zero_source_category must be a plain source category")
         if self.days <= 0:
             raise ValueError("days must be positive")
+        object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
         if not self.base_url.startswith("https://"):
             raise ValueError("base_url must use https")
         if self.poll_interval <= 0 or self.job_timeout <= 0:
@@ -1479,6 +1479,8 @@ def cmd_check(
         return 2
     detector = SumoAnomalyDetector.load(artifact)
     now = _parse_iso(args.now) if args.now else datetime.now(timezone.utc)
+    if args.now and now is None:
+        raise ValueError("--now must be an ISO timestamp")
     findings = detector.score(
         series.points,
         now=now,
