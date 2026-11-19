@@ -37,6 +37,7 @@ MAX_JSON_DEPTH = 32
 _READ_CHUNK = 64 * 1024
 
 ARM_RE = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
+TASK_TYPE_RE = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
 
 ROW_OUTCOMES = (
     "accepted",
@@ -126,6 +127,39 @@ class Corpus:
             grouped.setdefault(row.group_id, []).append(row)
         return sorted(grouped.items(), key=lambda item: (min(r.ts for r in item[1]), item[0]))
 
+    def task_types(self) -> List[str]:
+        """Distinct recorded task types, sorted.  Unrecorded rows are not a type."""
+        return sorted({row.task_type for row in self.rows if row.task_type})
+
+    def rows_for_task_type(self, task_type: Optional[str]) -> List[Row]:
+        """Rows for one task type; ``None`` selects the rows written before it was recorded."""
+        return [row for row in self.rows if row.task_type == task_type]
+
+    def group_by_task_type(self) -> Dict[Optional[str], List[Row]]:
+        """Rows grouped by task type, with ``None`` holding untagged (legacy) rows."""
+        grouped: Dict[Optional[str], List[Row]] = {}
+        for row in self.rows:
+            grouped.setdefault(row.task_type, []).append(row)
+        return grouped
+
+    def task_type_coverage(self) -> Dict[str, Any]:
+        """How many rows carry a task type.  Never guesses a value for a legacy row."""
+        total = len(self.rows)
+        counts: Dict[str, int] = {}
+        tagged = 0
+        for row in self.rows:
+            if row.task_type:
+                tagged += 1
+                counts[row.task_type] = counts.get(row.task_type, 0) + 1
+        return {
+            "rows": total,
+            "with_task_type": tagged,
+            "without_task_type": total - tagged,
+            "coverage": round(tagged / total, 6) if total else 0.0,
+            "present": tagged > 0,
+            "task_types": dict(sorted(counts.items())),
+        }
+
     def fingerprint(self) -> Dict[str, Any]:
         return {
             "kind": self.kind,
@@ -145,6 +179,7 @@ class Corpus:
             "accepted": len(self.rows),
             "universe": list(self.universe),
             "as_of": self.as_of,
+            "task_type_coverage": self.task_type_coverage(),
         }
 
 
@@ -428,6 +463,13 @@ def _project_outcome(raw: Dict[str, Any], source: str, line: int) -> Tuple[str, 
             return "rejected_schema", None
         tokens = token_value
 
+    # Rows written before task_type was recorded omit it (or carry null) and are
+    # accepted with task_type=None, so the existing ledger loads unchanged.
+    task_type = raw.get("task_type")
+    if task_type is not None:
+        if not isinstance(task_type, str) or not TASK_TYPE_RE.match(task_type):
+            return "rejected_schema", None
+
     return "accepted", Row(
         source_path=source,
         source_line=line,
@@ -438,7 +480,7 @@ def _project_outcome(raw: Dict[str, Any], source: str, line: int) -> Tuple[str, 
         cost=cost,
         tokens=tokens,
         group_id=None,
-        task_type=None,
+        task_type=task_type,
     )
 
 
@@ -631,6 +673,7 @@ __all__ = [
     "MAX_ROWS",
     "ROW_OUTCOMES",
     "Row",
+    "TASK_TYPE_RE",
     "allowed_roots",
     "build_corpora",
     "ingest_review_corpus",

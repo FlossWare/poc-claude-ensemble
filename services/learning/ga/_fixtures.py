@@ -78,6 +78,7 @@ def outcome_row(
     status: str = "pending",
     tokens: int = 100,
     kind: str = "turn_outcome",
+    task_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     row = {
         "schema_version": 1,
@@ -94,6 +95,8 @@ def outcome_row(
         "tokens": tokens,
         "timestamp": iso(ts),
     }
+    if task_type is not None:
+        row["task_type"] = task_type
     if status != "pending":
         for key in ("arm", "success", "cost", "tokens", "timestamp"):
             row.pop(key, None)
