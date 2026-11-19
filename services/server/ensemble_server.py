@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from capability_health import CapabilityHealthView
+from corpus_export import CorpusError, CorpusExportStore
 from experiments import Experiment, ExperimentStore, evaluate as evaluate_experiment
 from decision_provenance import DecisionProvenanceStore, DecisionRecord
 from operational_metrics import MetricsRecord, MetricsStore
@@ -360,6 +361,7 @@ class EnsembleApplication:
         self.provenance = DecisionProvenanceStore(provenance_path)
         self.memory_writer = OperationalMemoryWriter()
         self.operational_dashboard = OperationalDashboard()
+        self.corpus = CorpusExportStore()
         experiment_path = os.environ.get("POC_CLAUDE_ENSEMBLE_EXPERIMENT_FILE")
         self.experiments = ExperimentStore(experiment_path)
         self.decision = DecisionSupportAPI(
@@ -452,6 +454,9 @@ class EnsembleApplication:
             return
         if service == "metrics":
             self._handle_metrics(handler, remainder, parsed.query)
+            return
+        if service == "corpus":
+            self._handle_corpus(handler, remainder, parsed.query)
             return
         try:
             if service == "decision":
@@ -637,6 +642,32 @@ class EnsembleApplication:
                     _send(handler, HTTPStatus.BAD_REQUEST, {"ok": False, "error_code": "invalid_request", "error": str(exc)})
             return
         _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "metrics endpoint not found"})
+
+    def _handle_corpus(self, handler: BaseHTTPRequestHandler, path: str, query: str = "") -> None:
+        """Read-only export of ingested Knowledge records.
+
+        This route is intentionally GET-only and local: it reads the Knowledge
+        SQLite store through a read-only connection instead of forwarding, so
+        export traffic cannot mutate the corpus or fan out across gateways.
+        """
+        if handler.command != "GET":
+            _send(handler, HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
+            return
+        try:
+            if path == "/records":
+                parameters = parse_qs(query, keep_blank_values=True) if query else {}
+                _send(handler, HTTPStatus.OK, self.corpus.records(parameters))
+                return
+            if path == "/origins":
+                if query:
+                    raise CorpusError("invalid_request", "origins does not accept query parameters")
+                _send(handler, HTTPStatus.OK, self.corpus.origins())
+                return
+        except CorpusError as exc:
+            if not getattr(handler, "_ensemble_response_started", False):
+                _send(handler, exc.status, {"ok": False, "error_code": exc.code, "error": str(exc)})
+            return
+        _send(handler, HTTPStatus.NOT_FOUND, {"ok": False, "error": "corpus endpoint not found"})
 
     def _handle_experiments(self, handler: BaseHTTPRequestHandler, path: str) -> None:
         if handler.command == "POST" and path == "/evaluate":

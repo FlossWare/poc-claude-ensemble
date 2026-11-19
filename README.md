@@ -391,3 +391,22 @@ without overwriting existing values. The backfill log is written to
 Options: `--workers N` sets how many batches are posted to the lexical service at once
 (default 4). `--start-offset N` resumes a run at a record offset, for example after an
 interrupted run. `--limit N` stops early for trial runs.
+
+## Corpus export
+
+The gateway exposes ingested Knowledge records through a read-only, paginated
+REST API so external applications can pull the corpus without touching SQLite
+or the ingestion pipeline. There is no write endpoint.
+
+- `GET /api/v1/corpus/records?origin=…&source_id=…&limit=100&cursor=…` lists
+  live records ordered by `source_id` and `revision_sequence`.
+- `GET /api/v1/corpus/origins` lists each origin with its record count.
+
+The default page size is 100 and the maximum is 1000. `next_cursor` is an
+opaque keyset cursor rather than an offset, so appends between page requests
+cannot duplicate or skip rows. Per-record content is capped with an explicit
+`content_truncated` flag, and a page stops early at a content budget so one
+request cannot read unbounded data. The gateway reads the store through a
+`mode=ro` SQLite connection and never creates or migrates its schema. See
+[`services/docs/CORPUS_EXPORT_API.md`](services/docs/CORPUS_EXPORT_API.md) for
+the full contract, configuration, and curl examples.
