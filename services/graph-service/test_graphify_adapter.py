@@ -228,3 +228,31 @@ class GraphifyAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_normalize_deduplicates_repeated_symbol_ids():
+    """Two source files emitting the same Graphify symbol id must yield one node.
+
+    The batch store rejects duplicate node ids, so the adapter must merge
+    repeats and record the additional provenance instead of failing.
+    """
+    from graphify_adapter import normalize_extraction
+    result = {
+        "nodes": [
+            {"id": "node_crypto", "type": "module", "source_file": "a/crypto.py"},
+            {"id": "node_crypto", "type": "module", "source_file": "b/crypto.py"},
+            {"id": "node_other", "type": "class", "source_file": "a/other.py"},
+        ],
+        "edges": [
+            {"source": "node_crypto", "target": "node_other", "relation": "imports"},
+            {"source": "node_crypto", "target": "node_other", "relation": "imports"},
+        ],
+    }
+    nodes, edges = normalize_extraction(result, "corpustest")
+    ids = [n["id"] for n in nodes]
+    assert len(ids) == len(set(ids)), "duplicate node ids in batch"
+    assert len(nodes) == 2
+    merged = next(n for n in nodes if n["id"].endswith("node_crypto"))
+    assert "a/crypto.py" in merged["properties"]["source_file"]
+    assert "b/crypto.py" in merged["properties"]["source_file"]
+    assert len(edges) == 1, "duplicate edges in batch"
