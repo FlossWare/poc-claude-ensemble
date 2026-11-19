@@ -12,6 +12,7 @@ explicit opt-ins through POC_CLAUDE_ENSEMBLE_EMBED_BACKEND. GPU selection fails 
 rather than silently falling back to CPU.
 """
 import json
+import time
 import os
 import sys
 import threading
@@ -140,13 +141,16 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
                 self._error(413, "payload_too_large", f"each text is limited to {MAX_TEXT_CHARS} characters")
                 return
         if _embedder is None:
+            _record_embedding(len(texts), mode, 503, 0.0)
             self._error(503, "service_unavailable", f"model not loaded: {_load_error}")
             return
+        started = time.perf_counter()
         with _MODEL_LOCK:
             if mode == "query":
                 vectors = _embedder.embed_queries(texts)
             else:
                 vectors = _embedder.embed_documents(texts)
+        _record_embedding(len(texts), mode, 200, time.perf_counter() - started)
         self._send(200, {
             "ok": True,
             "model": MODEL_ID,
@@ -179,3 +183,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _record_embedding(n_texts: int, mode: str, status: int, elapsed: float) -> None:
+    """Best-effort per-batch telemetry for future tuning (never raises)."""
+    try:
+        from shared.op_telemetry import record
+        record("embedding_batch", n_texts=int(n_texts), mode=mode, status=int(status),
+               latency_ms=round(elapsed * 1000, 1))
+    except Exception:  # noqa: BLE001 - telemetry must never break embedding
+        pass

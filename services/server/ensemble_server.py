@@ -308,15 +308,31 @@ def _forward(
             request.add_header(name, value)
     if remote_ensemble:
         request.add_header(FORWARD_MARKER, ", ".join(next_chain))
+    started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, response.read()
+            payload = response.read()
+            _record_forward(path, method, response.status, started, len(next_chain))
+            return response.status, payload
     except urllib.error.HTTPError as exc:
         _invalidate_ensemble_target(base)
-        return exc.code, exc.read()
+        payload = exc.read()
+        _record_forward(path, method, exc.code, started, len(next_chain))
+        return exc.code, payload
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         _invalidate_ensemble_target(base)
+        _record_forward(path, method, 503, started, len(next_chain))
         raise ServiceUnavailable(f"service unavailable: {exc}") from exc
+
+
+def _record_forward(path: str, method: str, status: int, started: float, hops: int) -> None:
+    """Best-effort per-forward telemetry for future routing-policy tuning."""
+    try:
+        from shared.op_telemetry import record
+        record("gateway_forward", path=str(path)[:256], method=method, status=int(status),
+               latency_ms=round((time.perf_counter() - started) * 1000, 1), hops=int(hops))
+    except Exception:  # noqa: BLE001 - telemetry must never break forwarding
+        pass
 
 class EnsembleApplication:
     """Single REST boundary over independently owned services."""
