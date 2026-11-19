@@ -60,6 +60,34 @@ entirely when the data hash is unchanged, so repeated runs are idempotent.
 Every integration is fail-open: a missing or corrupt artifact leaves the
 existing behavior unchanged.
 
+## Sumo anomaly detector (unsupervised)
+
+`sumo_anomaly.py` fetches Disseminator search metrics from the Sumo Search Job
+API and fits an `IsolationForest` over per-timeslice features: p95 and average
+processing latency, request count, HTTP error count, and zero-result rate.
+
+```bash
+PYTHONPATH=services python3 -m learning.train.sumo_anomaly fetch   # pull 7 days
+PYTHONPATH=services python3 -m learning.train.sumo_anomaly train   # fit the model
+PYTHONPATH=services python3 -m learning.train.sumo_anomaly check   # report anomalies
+```
+
+Credentials come from `SUMO_ACCESS_ID` / `SUMO_ACCESS_KEY` in the process
+environment, falling back to the `env` block of `~/.claude/settings.json`.
+They are never printed or persisted. Only aggregate queries are used, so no raw
+log content is fetched; the series file stores metrics only. Both the series
+(`sumo_anomaly_series.json`) and the model (`sumo_anomaly.joblib`) are 0600 and
+honor `POC_CLAUDE_ENSEMBLE_TRAIN_DIR`.
+
+`check` reports the abnormal timeslices, the metrics that deviate (robust
+median/MAD z-scores), each timeslice's anomaly score, and whether the finding
+is recent (default: last 60 minutes). A finding is flagged when the
+IsolationForest labels it an outlier **or** a metric crosses the flag threshold
+(default 4σ); the univariate leg catches single-metric events such as traffic
+collapsing to near zero. Deviating metrics are named at 3σ (`--z-threshold`)
+even when the flag came from the forest. `--fail-on-anomaly` exits 3 when a
+recent anomaly exists.
+
 ## Tests
 
 ```bash
