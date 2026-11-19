@@ -8,3 +8,6 @@ onnxruntime==1.32.0
 tokenizers==0.23.3
 # Dataset inventory (PR 1) uses yaml.SafeLoader only; pinned for Python 3.11/3.14.
 PyYAML==6.0.3
+# PDF text extraction for tools/bulk_ingest.py --format pdf (books adapter).
+# Imported lazily: the JSON ingestion paths do not require it.
+pypdf==6.1.1
