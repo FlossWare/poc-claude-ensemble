@@ -143,6 +143,53 @@ def write_raw(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+
+
+def build_pdf(page_texts: list[str]) -> bytes:
+    """Build a minimal valid PDF with one Helvetica text line per page.
+
+    Stdlib only, so PDF fixtures do not depend on reportlab or pypdf. An empty
+    string produces a page with an empty content stream (no text layer), which
+    is how scanned/image-only PDFs look to an extractor. ASCII only.
+    """
+    count = len(page_texts)
+    kids = " ".join(f"{4 + 2 * index} 0 R" for index in range(count))
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Count {count} /Kids [{kids}] >>".encode("ascii"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for index, text in enumerate(page_texts):
+        content_id = 4 + 2 * index + 1
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")
+        )
+        stream = (b"" if not text else
+                  b"BT /F1 12 Tf 72 720 Td (" + _pdf_escape(text).encode("ascii") + b") Tj ET")
+        objects.append(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n"
+                       + stream + b"\nendstream")
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets: list[int] = []
+    for object_id, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{object_id} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode("ascii") + b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode("ascii")
+    out += (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_at}\n%%EOF\n").encode("ascii")
+    return bytes(out)
+
+
+def write_pdf(path: Path, page_texts: list[str]) -> None:
+    path.write_bytes(build_pdf(page_texts))
+
+
 # ---------------------------------------------------------------------------
 # Tests: field extraction
 # ---------------------------------------------------------------------------
@@ -348,6 +395,233 @@ class BulkIngestE2ETests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# PDF extraction (fixtures generated locally, no network)
+# ---------------------------------------------------------------------------
+
+class PDFExtractionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_extracts_page_text(self):
+        path = self.dir / "book.pdf"
+        write_pdf(path, ["Chapter one text", "Chapter two text"])
+        text, meta, reason = bulk_ingest.extract_pdf_text(path)
+        self.assertIsNone(reason)
+        self.assertEqual(text, "Chapter one text\n\nChapter two text")
+        self.assertEqual(meta["pdf_pages"], 2)
+        self.assertEqual(meta["pdf_pages_with_text"], 2)
+        self.assertEqual(meta["pdf_pages_failed"], 0)
+
+    def test_title_from_filename(self):
+        self.assertEqual(bulk_ingest.pdf_title(Path("/x/The_Great_Book.pdf")), "The Great Book")
+        self.assertEqual(bulk_ingest.pdf_title(Path("/x/plain name.pdf")), "plain name")
+        self.assertEqual(bulk_ingest.pdf_title(Path("/x/  .pdf")), "  .pdf")
+
+    def test_no_text_layer(self):
+        path = self.dir / "scan.pdf"
+        write_pdf(path, [""])
+        text, meta, reason = bulk_ingest.extract_pdf_text(path)
+        self.assertIsNone(reason)
+        self.assertEqual(text, "")
+        self.assertEqual(meta["pdf_pages"], 1)
+        self.assertEqual(meta["pdf_pages_with_text"], 0)
+
+    def test_corrupt_pdf_is_a_skip_not_a_crash(self):
+        path = self.dir / "broken.pdf"
+        path.write_bytes(b"%PDF-1.4 not actually a pdf")
+        text, _meta, reason = bulk_ingest.extract_pdf_text(path)
+        self.assertIsNone(text)
+        self.assertTrue(str(reason).startswith("pdf_unreadable:"), reason)
+
+    def test_page_cap(self):
+        path = self.dir / "long.pdf"
+        write_pdf(path, ["one", "two", "three"])
+        text, meta, reason = bulk_ingest.extract_pdf_text(path, max_pdf_pages=2)
+        self.assertIsNone(text)
+        self.assertEqual(reason, "too_many_pages")
+        self.assertEqual(meta["pdf_pages"], 3)
+
+    def test_encrypted_pdf_skipped(self):
+        class FakeReader:
+            is_encrypted = True
+
+            def __init__(self, name):
+                self.name = name
+
+            def decrypt(self, password):
+                return 0  # PasswordType.NOT_DECRYPTED
+
+        path = self.dir / "locked.pdf"
+        write_pdf(path, ["secret"])
+        with patch("pypdf.PdfReader", FakeReader):
+            text, _meta, reason = bulk_ingest.extract_pdf_text(path)
+        self.assertIsNone(text)
+        self.assertEqual(reason, "pdf_encrypted")
+
+
+# ---------------------------------------------------------------------------
+# PDF ingestion through the gateway (--format pdf)
+# ---------------------------------------------------------------------------
+
+class PDFIngestE2ETests(unittest.TestCase):
+    def setUp(self):
+        self.server, self.gateway = start_fake_gateway()
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.input_dir = Path(self.tmpdir.name) / "books"
+        self.input_dir.mkdir()
+        self.ledger = Path(self.tmpdir.name) / "ledger.jsonl"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmpdir.cleanup()
+
+    def _run(self, **kwargs) -> dict:
+        defaults = dict(
+            input_path=self.input_dir,
+            source="books",
+            origin="books",
+            gateway=self.gateway,
+            limit=None,
+            dry_run=False,
+            ledger_path=self.ledger,
+            input_format="pdf",
+        )
+        defaults.update(kwargs)
+        return bulk_ingest.run(**defaults)
+
+    def _entries(self) -> list[dict]:
+        if not self.ledger.exists():
+            return []
+        return [json.loads(line) for line in self.ledger.read_text().splitlines() if line.strip()]
+
+    def test_happy_path_ingests_extracted_text(self):
+        write_pdf(self.input_dir / "Book_One.pdf", ["Alpha text"])
+        write_pdf(self.input_dir / "Book Two.pdf", ["Beta text"])
+        report = self._run()
+        self.assertEqual(report["ingested"], 2)
+        self.assertEqual(report["failed"], 0)
+        self.assertEqual(report["skipped_malformed"], 0)
+        self.assertEqual(report["format"], "pdf")
+
+        entries = {entry["title"]: entry for entry in self._entries()}
+        self.assertEqual(sorted(entries), ["Book One", "Book Two"])
+        first = entries["Book One"]
+        self.assertEqual(first["status"], "succeeded")
+        self.assertEqual(first["source"], "books")
+        self.assertEqual(first["origin"], "books")
+        self.assertEqual(first["title"], "Book One")
+        self.assertEqual(first["locator"], (self.input_dir / "Book_One.pdf").as_uri())
+        self.assertTrue(first["locator"].startswith("file:///"))
+        self.assertEqual(first["format"], "pdf")
+        self.assertEqual(first["pdf_pages"], 1)
+        # Idempotency key is the hash of the EXTRACTED text, not the PDF bytes
+        self.assertEqual(first["content_sha256"], hashlib.sha256(b"Alpha text").hexdigest())
+        self.assertEqual(first["characters"], len("Alpha text"))
+        # The gateway received the extracted text, titled from the file name
+        titles = sorted(item["source"]["title"] for item in FakeGatewayHandler.ingestions)
+        self.assertEqual(titles, ["Book One", "Book Two"])
+        texts = {item["source"]["text"] for item in FakeGatewayHandler.ingestions}
+        self.assertEqual(texts, {"Alpha text", "Beta text"})
+
+    def test_no_text_pdf_skipped_with_explicit_reason(self):
+        write_pdf(self.input_dir / "scan.pdf", [""])
+        write_pdf(self.input_dir / "good.pdf", ["Real words"])
+        report = self._run()
+        self.assertEqual(report["ingested"], 1)
+        self.assertEqual(report["skipped_malformed"], 1)
+        self.assertEqual(report["skipped_reasons"].get("no_extractable_text"), 1)
+        self.assertEqual(len(self._entries()), 1)  # skipped PDFs leave no ledger row
+
+    def test_corrupt_pdf_skipped_and_run_continues(self):
+        write_pdf(self.input_dir / "good.pdf", ["Fine"])
+        (self.input_dir / "broken.pdf").write_bytes(b"%PDF-1.4 broken")
+        report = self._run()
+        self.assertEqual(report["ingested"], 1)
+        self.assertEqual(report["failed"], 0)
+        self.assertEqual(report["skipped_malformed"], 1)
+        reasons = report["skipped_reasons"]
+        self.assertTrue(any(key.startswith("pdf_unreadable:") for key in reasons), reasons)
+
+    def test_pdf_size_cap(self):
+        write_pdf(self.input_dir / "book.pdf", ["Some text here"])
+        report = self._run(max_pdf_bytes=10)
+        self.assertEqual(report["ingested"], 0)
+        self.assertEqual(report["skipped_reasons"].get("pdf_too_large"), 1)
+
+    def test_extracted_text_cap(self):
+        write_pdf(self.input_dir / "book.pdf", ["x" * 200])
+        report = self._run(max_text_chars=50)
+        self.assertEqual(report["ingested"], 0)
+        self.assertEqual(report["skipped_reasons"].get("text_too_large"), 1)
+        self.assertEqual(len(FakeGatewayHandler.ingestions), 0)
+
+    def test_page_cap_skip(self):
+        write_pdf(self.input_dir / "thick.pdf", ["a", "b", "c"])
+        report = self._run(max_pdf_pages=2)
+        self.assertEqual(report["ingested"], 0)
+        self.assertEqual(report["skipped_reasons"].get("too_many_pages"), 1)
+
+    def test_duplicate_extracted_text_dedups(self):
+        # Same text in two different PDFs: the second is a ledger duplicate.
+        write_pdf(self.input_dir / "a.pdf", ["Shared content"])
+        write_pdf(self.input_dir / "b.pdf", ["Shared content"])
+        report = self._run()
+        self.assertEqual(report["ingested"], 1)
+        self.assertEqual(report["skipped_duplicate"], 1)
+        self.assertEqual(report["skipped_reasons"].get("ledger_duplicate"), 1)
+        self.assertEqual(len(FakeGatewayHandler.ingestions), 1)
+
+    def test_rerun_skips_already_ingested(self):
+        write_pdf(self.input_dir / "a.pdf", ["Stable text"])
+        self.assertEqual(self._run()["ingested"], 1)
+        report2 = self._run()
+        self.assertEqual(report2["ingested"], 0)
+        self.assertEqual(report2["skipped_duplicate"], 1)
+
+    def test_limit_bounds_pdfs(self):
+        for index in range(4):
+            write_pdf(self.input_dir / f"{index}.pdf", [f"Text {index}"])
+        report = self._run(limit=2)
+        self.assertEqual(report["ingested"], 2)
+        self.assertEqual(len(FakeGatewayHandler.ingestions), 2)
+
+    def test_dry_run_does_not_post(self):
+        write_pdf(self.input_dir / "a.pdf", ["Dry text"])
+        report = self._run(dry_run=True)
+        self.assertEqual(report["ingested"], 1)
+        self.assertEqual(len(FakeGatewayHandler.ingestions), 0)
+        self.assertEqual(self._entries()[0]["status"], "dry_run")
+        self.assertEqual(self._entries()[0]["locator"], (self.input_dir / "a.pdf").as_uri())
+
+    def test_nested_walk_is_case_insensitive(self):
+        sub = self.input_dir / "subdir"
+        sub.mkdir()
+        write_pdf(sub / "nested.pdf", ["Nested"])
+        (sub / "UPPER.PDF").write_bytes(build_pdf(["Upper"]))
+        (self.input_dir / "notes.txt").write_text("ignore me", encoding="utf-8")
+        report = self._run()
+        self.assertEqual(report["ingested"], 2)
+
+    def test_failed_ingest_recorded(self):
+        FakeGatewayHandler.fail_ingest = True
+        write_pdf(self.input_dir / "a.pdf", ["Text"])
+        report = self._run()
+        self.assertEqual(report["failed"], 1)
+        self.assertEqual(self._entries()[0]["stage"], "ingest")
+        self.assertEqual(self._entries()[0]["status"], "failed")
+
+    def test_provenance_note_documents_service_locator(self):
+        write_pdf(self.input_dir / "a.pdf", ["Text"])
+        report = self._run()
+        self.assertIn("provenance_note", report)
+
+
+# ---------------------------------------------------------------------------
 # CLI smoke test
 # ---------------------------------------------------------------------------
 
@@ -393,6 +667,48 @@ class CLITests(unittest.TestCase):
             capture_output=True, text=True, timeout=15,
         )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_cli_pdf_defaults_source_and_origin_to_books(self):
+        write_pdf(self.input_dir / "A_Book.pdf", ["Clipped text"])
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "bulk_ingest.py"), str(self.input_dir),
+             "--format", "pdf", "--gateway", self.gateway,
+             "--resume-state", str(self.ledger)],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}\nstdout: {result.stdout}")
+        report = json.loads(result.stdout)
+        self.assertEqual(report["source"], "books")
+        self.assertEqual(report["origin"], "books")
+        self.assertEqual(report["format"], "pdf")
+        self.assertEqual(report["ingested"], 1)
+        entry = json.loads(self.ledger.read_text().splitlines()[0])
+        self.assertEqual(entry["title"], "A Book")
+        self.assertEqual(entry["locator"], (self.input_dir / "A_Book.pdf").as_uri())
+
+    def test_cli_pdf_limit_against_gateway(self):
+        for index in range(4):
+            write_pdf(self.input_dir / f"{index}.pdf", [f"Text {index}"])
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "bulk_ingest.py"), str(self.input_dir),
+             "--format", "pdf", "--gateway", self.gateway, "--resume-state", str(self.ledger),
+             "--limit", "2"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        report = json.loads(result.stdout)
+        self.assertEqual(report["ingested"], 2)
+
+    def test_cli_pdf_rejects_non_pdf_file(self):
+        target = self.input_dir / "notapdf.txt"
+        target.write_text("hello", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "bulk_ingest.py"), str(target),
+             "--format", "pdf", "--resume-state", str(self.ledger), "--dry-run"],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expects a .pdf file", result.stderr)
 
 
 if __name__ == "__main__":

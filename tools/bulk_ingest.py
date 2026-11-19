@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
-"""Bulk ingestion client: reads scraped JSON items from a local directory
-and pushes them through the POC ingestion REST boundary.
+"""Bulk ingestion client: reads local scraped JSON items (or PDFs) and pushes
+them through the POC ingestion REST boundary.
 
 The ingestion service never reads files; this client is the only reader.
 
 Usage:
   python3 tools/bulk_ingest.py PATH [--source NAME] [--origin NAME]
     [--gateway URL] [--limit N] [--dry-run] [--resume-state FILE]
+
+  python3 tools/bulk_ingest.py PATH --format pdf [--source books]
+    [--origin books] [--limit N] [--max-pdf-bytes N] [--max-pdf-pages N]
+    [--max-text-chars N] [--dry-run] [--resume-state FILE]
+
+Formats:
+  json (default)  Scraped JSON item files. Each object is normalized to
+                  {title, text, url}; files may hold one object or a list.
+  pdf             A directory tree (or single file) of PDFs. Text is
+                  extracted locally with pypdf and pushed as inline text.
+                  Title comes from the file name; locator is file://<path>.
+                  PDFs are untrusted input: extraction is bounded by
+                  --max-pdf-bytes, --max-pdf-pages, and --max-text-chars.
 
 Gateway contract (via services/server/ensemble_server.py):
   POST /api/v1/ingestion/preview  -> {"preview_id": ..., "source": {...}}
@@ -18,16 +31,23 @@ Gateway contract (via services/server/ensemble_server.py):
 Ledger (default ~/.FlossWare/ledger/bulk-ingest/<source>.jsonl):
   One JSON line per item with content_sha256 + service response.
   Re-runs skip hashes already marked succeeded.
-  Service-side content_sha256 dedup is the final guard.
+  Idempotency is client-side: ingestion_service passes
+  revision_sequence=time.time_ns() on every push, so the Knowledge service
+  accepts a repeat of identical content as a new revision instead of
+  rejecting it (observed against the live gateway). Keep the ledger.
+  For --format pdf the hash is sha256 of the EXTRACTED text (the bytes the
+  service actually stores), not of the PDF file, so re-extraction of the
+  same document dedups even if the PDF container changes.
 
 Treat all file content as untrusted: cap sizes, validate JSON shape,
-never execute.
+never execute. PDF parsing runs in-process on untrusted bytes; parser
+errors are recorded as skip reasons, never allowed to abort the run.
 
 Provenance note: the ingestion service's text path hard-codes
 origin=inline-text and locator=text://sha256/<hash>. The requested
 origin/locator/retrieved fields are recorded in the ledger and log but
 cannot override the service's locator for text ingestion. This is
-documented as a deviation in the report output.
+documented as a deviation in the report output (provenance_note).
 """
 from __future__ import annotations
 
@@ -44,12 +64,16 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Limits (mirrored from ingestion_service.py)
 # ---------------------------------------------------------------------------
-MAX_FILE_BYTES = 1 * 1024 * 1024        # per-file cap (client-side)
+MAX_FILE_BYTES = 1 * 1024 * 1024        # per-JSON-file cap (client-side)
+MAX_PDF_BYTES = 128 * 1024 * 1024       # per-PDF file cap (client-side)
+MAX_PDF_PAGES = 2_000                   # per-PDF page cap (client-side)
 MAX_TEXT_CHARS = 4_000_000              # ingestion_service.MAX_TEXT_CHARS
 MAX_REQUEST_BYTES = 12 * 1024 * 1024     # ingestion_service.MAX_BODY_BYTES
 MAX_TOTAL_ITEMS = 100_000                # max items per run (safety)
 DEFAULT_LIMIT = None                     # no limit unless --limit
 REQUEST_TIMEOUT = 180                   # ingestion can take minutes
+
+INPUT_FORMATS = ("json", "pdf")
 
 # ---------------------------------------------------------------------------
 # Field normalization: try known variants for each logical field.
@@ -122,6 +146,70 @@ def content_hash(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# PDF helpers
+# ---------------------------------------------------------------------------
+
+def _require_pypdf():
+    """Import pypdf lazily so JSON ingestion does not need the PDF dependency."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        print("error: --format pdf requires pypdf; install requirements.txt "
+              "(pip install 'pypdf==6.1.1')", file=sys.stderr)
+        sys.exit(2)
+    return PdfReader
+
+
+def pdf_title(file_path: Path) -> str:
+    """Title from the file name: underscores become spaces, whitespace collapsed."""
+    stem = " ".join(file_path.stem.replace("_", " ").split())
+    return (stem or file_path.name)[:300]
+
+
+def extract_pdf_text(file_path: Path, max_pdf_pages: int = MAX_PDF_PAGES) -> tuple[str | None, dict, str | None]:
+    """Extract text from one PDF.
+
+    Returns (text, meta, reason). On success reason is None and text is the
+    per-page text joined by blank lines (empty string when no page has a text
+    layer). On skip text is None and reason is one of:
+      pdf_encrypted      password protected and not openable with ""
+      too_many_pages     page count exceeds max_pdf_pages
+      pdf_unreadable:<T> parser raised <T>
+    A page that fails to extract is counted in meta["pdf_pages_failed"] and does
+    not abort the document; total extraction failure still yields "".
+    """
+    PdfReader = _require_pypdf()
+    meta: dict = {}
+    try:
+        reader = PdfReader(str(file_path))
+        if reader.is_encrypted:
+            try:
+                if not reader.decrypt(""):
+                    return None, meta, "pdf_encrypted"
+            except Exception:
+                return None, meta, "pdf_encrypted"
+        pages = len(reader.pages)
+        meta["pdf_pages"] = pages
+        if pages > max_pdf_pages:
+            return None, meta, "too_many_pages"
+        chunks: list[str] = []
+        failed = 0
+        for page in reader.pages:
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                failed += 1
+                continue
+            if page_text.strip():
+                chunks.append(page_text.strip())
+        meta["pdf_pages_failed"] = failed
+        meta["pdf_pages_with_text"] = len(chunks)
+    except Exception as exc:  # untrusted bytes: parser failures are data, not bugs
+        return None, meta, f"pdf_unreadable:{type(exc).__name__}"
+    return "\n\n".join(chunks), meta, None
+
+
+# ---------------------------------------------------------------------------
 # Ledger helpers
 # ---------------------------------------------------------------------------
 
@@ -187,6 +275,168 @@ def gateway_post(gateway: str, route: str, payload: dict, timeout: int = REQUEST
 # Core ingestion
 # ---------------------------------------------------------------------------
 
+def count_skip(report: dict, reason: str) -> None:
+    report["skipped_reasons"][reason] = report["skipped_reasons"].get(reason, 0) + 1
+
+
+def _ledger_entry(
+    *,
+    source: str,
+    origin: str | None,
+    locator: str | None,
+    retrieved_at: str | None,
+    source_file: str,
+    title: str,
+    digest: str,
+    characters: int,
+    extra_fields: dict | None,
+) -> dict:
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": source,
+        "origin": origin,
+        "locator": locator,
+        "retrieved_at": retrieved_at,
+        "file": source_file,
+        "title": title,
+        "content_sha256": digest,
+        "characters": characters,
+    }
+    if extra_fields:
+        entry.update(extra_fields)
+    return entry
+
+
+def push_text_item(
+    *,
+    text: str,
+    title: str,
+    locator: str | None,
+    retrieved_at: str | None,
+    source_file: str,
+    source: str,
+    origin: str | None,
+    gateway: str,
+    dry_run: bool,
+    ledger_path: Path,
+    succeeded_hashes: set[str],
+    report: dict,
+    max_text_chars: int = MAX_TEXT_CHARS,
+    extra_fields: dict | None = None,
+) -> str:
+    """Validate, dedup and push one text item through preview+ingest.
+
+    Returns "skipped", "dry_run", "succeeded" or "failed" so the caller can
+    apply its own run-level bounds. Mutates report counters and the ledger.
+    """
+    def entry(fields: dict) -> dict:
+        """Ledger entry for this item: common fields + per-outcome fields."""
+        merged = dict(extra_fields or {})
+        merged.update(fields)  # outcome fields win over document metadata
+        return _ledger_entry(source=source, origin=origin, locator=locator,
+                             retrieved_at=retrieved_at, source_file=source_file,
+                             title=title, digest=h, characters=len(text),
+                             extra_fields=merged)
+
+    if not text.strip():
+        report["skipped_malformed"] += 1
+        count_skip(report, "empty_text")
+        return "skipped"
+
+    if len(text) > max_text_chars:
+        report["skipped_malformed"] += 1
+        count_skip(report, "text_too_large")
+        return "skipped"
+
+    # Request size guard (JSON overhead estimate)
+    est_bytes = len(text.encode("utf-8")) + len(title.encode("utf-8")) + 1024
+    if est_bytes > MAX_REQUEST_BYTES:
+        report["skipped_malformed"] += 1
+        count_skip(report, "request_too_large")
+        return "skipped"
+
+    h = content_hash(text)
+
+    # Ledger dedup (client-side fast path)
+    if h in succeeded_hashes:
+        report["skipped_duplicate"] += 1
+        count_skip(report, "ledger_duplicate")
+        return "skipped"
+
+    # Dry run: count but don't POST
+    if dry_run:
+        report["ingested"] += 1  # would have ingested
+        append_ledger(ledger_path, entry({"status": "dry_run", "response": None}))
+        succeeded_hashes.add(h)
+        return "dry_run"
+
+    # --- Gateway: preview then ingest ---
+    preview_payload: dict = {"text": text, "title": title[:300]}
+
+    status, preview_body = gateway_post(gateway, "/api/v1/ingestion/preview", preview_payload)
+
+    if status != 200 or not isinstance(preview_body, dict) or not preview_body.get("ok"):
+        report["failed"] += 1
+        err_detail = preview_body if isinstance(preview_body, str) else json.dumps(preview_body)[:500]
+        report["errors"].append({"file": source_file, "stage": "preview", "status": status, "detail": err_detail})
+        append_ledger(ledger_path, entry({
+            "status": "failed", "stage": "preview", "http_status": status,
+            "response": preview_body if isinstance(preview_body, dict) else {"error": preview_body},
+        }))
+        return "failed"
+
+    preview_id = preview_body.get("preview_id")
+    if not isinstance(preview_id, str) or not preview_id:
+        report["failed"] += 1
+        report["errors"].append({"file": source_file, "stage": "preview", "status": status, "detail": "missing preview_id"})
+        append_ledger(ledger_path, entry({"status": "failed", "stage": "preview", "response": preview_body}))
+        return "failed"
+
+    # Ingest
+    ingest_payload = {"preview_id": preview_id}
+    status2, ingest_body = gateway_post(gateway, "/api/v1/ingestion/ingest", ingest_payload)
+
+    if status2 == 200 and isinstance(ingest_body, dict) and ingest_body.get("ok"):
+        ingest_status = ingest_body.get("status", "unknown")
+        if ingest_status in ("completed", "rejected"):
+            # Rejected means known but not stored (e.g. duplicate content);
+            # treat as success for dedup purposes.
+            report["ingested"] += 1
+            append_ledger(ledger_path, entry({
+                "ingestion_id": ingest_body.get("ingestion_id"),
+                "ingest_status": ingest_status,
+                "decision": ingest_body.get("decision"),
+                "chunks": ingest_body.get("chunks"),
+                "vectors": ingest_body.get("vectors"),
+                "status": "succeeded",
+                "response": ingest_body,
+            }))
+            succeeded_hashes.add(h)
+            return "succeeded"
+
+        report["failed"] += 1
+        append_ledger(ledger_path, entry({
+            "status": "failed", "stage": "ingest", "http_status": status2, "response": ingest_body,
+        }))
+        return "failed"
+
+    report["failed"] += 1
+    err_detail2 = ingest_body if isinstance(ingest_body, str) else json.dumps(ingest_body)[:500]
+    report["errors"].append({"file": source_file, "stage": "ingest", "status": status2, "detail": err_detail2})
+    append_ledger(ledger_path, entry({
+        "status": "failed", "stage": "ingest", "http_status": status2,
+        "response": ingest_body if isinstance(ingest_body, dict) else {"error": ingest_body},
+    }))
+    return "failed"
+
+
+def _pdf_candidates(input_path: Path) -> list[Path]:
+    """Enumerate PDFs under PATH (case-insensitive suffix), sorted for determinism."""
+    if input_path.is_file():
+        return [input_path]
+    return sorted(p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf")
+
+
 def run(
     input_path: Path,
     source: str,
@@ -197,15 +447,28 @@ def run(
     ledger_path: Path,
     max_file_bytes: int = MAX_FILE_BYTES,
     max_total_items: int = MAX_TOTAL_ITEMS,
+    input_format: str = "json",
+    max_text_chars: int = MAX_TEXT_CHARS,
+    max_pdf_bytes: int = MAX_PDF_BYTES,
+    max_pdf_pages: int = MAX_PDF_PAGES,
 ) -> dict:
+    if input_format not in INPUT_FORMATS:
+        raise ValueError(f"unsupported input_format: {input_format}")
+    if input_format == "pdf":
+        _require_pypdf()
+
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     _all_entries, succeeded_hashes = load_ledger(ledger_path)
 
     # Enumerate files (sorted for determinism)
     if input_path.is_file():
         candidates = [input_path]
+        if input_format == "pdf" and input_path.suffix.lower() != ".pdf":
+            print(f"error: --format pdf expects a .pdf file: {input_path}", file=sys.stderr)
+            sys.exit(2)
     elif input_path.is_dir():
-        candidates = sorted(input_path.rglob("*.json"))
+        candidates = (_pdf_candidates(input_path) if input_format == "pdf"
+                      else sorted(input_path.rglob("*.json")))
     else:
         print(f"error: PATH does not exist: {input_path}", file=sys.stderr)
         sys.exit(2)
@@ -213,6 +476,7 @@ def run(
     report: dict = {
         "source": source,
         "origin": origin,
+        "format": input_format,
         "gateway": gateway,
         "ledger": str(ledger_path),
         "input_path": str(input_path),
@@ -232,9 +496,6 @@ def run(
     if origin:
         report["provenance_note"] = provenance_note
 
-    def count_skip(reason: str) -> None:
-        report["skipped_reasons"][reason] = report["skipped_reasons"].get(reason, 0) + 1
-
     processed = 0  # number of items we attempted to push (or would have)
 
     for file_path in candidates:
@@ -250,16 +511,67 @@ def run(
             fsize = file_path.stat().st_size
         except OSError as exc:
             report["skipped_malformed"] += 1
-            count_skip(f"stat_error:{type(exc).__name__}")
+            count_skip(report, f"stat_error:{type(exc).__name__}")
             continue
 
-        if fsize > max_file_bytes:
-            report["skipped_malformed"] += 1
-            count_skip("file_too_large")
-            continue
         if fsize == 0:
             report["skipped_malformed"] += 1
-            count_skip("empty_file")
+            count_skip(report, "empty_file")
+            continue
+
+        if input_format == "pdf":
+            if fsize > max_pdf_bytes:
+                report["skipped_malformed"] += 1
+                count_skip(report, "pdf_too_large")
+                continue
+
+            text, meta, reason = extract_pdf_text(file_path, max_pdf_pages=max_pdf_pages)
+            if text is None:
+                report["skipped_malformed"] += 1
+                count_skip(report, reason or "unknown")
+                continue
+            if not text.strip():
+                # Scanned/image-only PDF or a PDF with no text layer.
+                report["skipped_malformed"] += 1
+                count_skip(report, "no_extractable_text")
+                continue
+            if len(text) > max_text_chars:
+                report["skipped_malformed"] += 1
+                count_skip(report, "text_too_large")
+                continue
+
+            try:
+                modified = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(file_path.stat().st_mtime))
+            except OSError:
+                modified = None
+
+            extra = {"format": "pdf", "pdf_bytes": fsize, "file_modified": modified}
+            extra.update(meta)
+
+            outcome = push_text_item(
+                text=text,
+                title=pdf_title(file_path),
+                locator=file_path.as_uri(),  # file://<absolute path>
+                retrieved_at=None,
+                source_file=str(file_path),
+                source=source,
+                origin=origin,
+                gateway=gateway,
+                dry_run=dry_run,
+                ledger_path=ledger_path,
+                succeeded_hashes=succeeded_hashes,
+                report=report,
+                max_text_chars=max_text_chars,
+                extra_fields=extra,
+            )
+            if outcome != "skipped":
+                processed += 1
+            continue
+
+        # --- JSON path ---
+        if fsize > max_file_bytes:
+            report["skipped_malformed"] += 1
+            count_skip(report, "file_too_large")
             continue
 
         # Read + parse (capped read)
@@ -267,12 +579,12 @@ def run(
             raw_bytes = file_path.read_bytes()
         except OSError as exc:
             report["skipped_malformed"] += 1
-            count_skip(f"read_error:{type(exc).__name__}")
+            count_skip(report, f"read_error:{type(exc).__name__}")
             continue
 
         if len(raw_bytes) > max_file_bytes:
             report["skipped_malformed"] += 1
-            count_skip("file_too_large")
+            count_skip(report, "file_too_large")
             continue
 
         try:
@@ -284,14 +596,14 @@ def run(
         # Cap JSON text length to avoid huge parse
         if len(raw_text) > MAX_TEXT_CHARS * 2:
             report["skipped_malformed"] += 1
-            count_skip("json_too_large")
+            count_skip(report, "json_too_large")
             continue
 
         try:
             raw_item = json.loads(raw_text)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError):
             report["skipped_malformed"] += 1
-            count_skip("invalid_json")
+            count_skip(report, "invalid_json")
             continue
 
         # Handle both single-object and array-of-objects files
@@ -302,12 +614,12 @@ def run(
                     items_to_extract.append(elem)
                 else:
                     report["skipped_malformed"] += 1
-                    count_skip("array_element_not_object")
+                    count_skip(report, "array_element_not_object")
         elif isinstance(raw_item, dict):
             items_to_extract.append(raw_item)
         else:
             report["skipped_malformed"] += 1
-            count_skip("not_a_json_object")
+            count_skip(report, "not_a_json_object")
             continue
 
         for raw_obj in items_to_extract:
@@ -319,181 +631,43 @@ def run(
             normalized, reason = extract_item(raw_obj, str(file_path))
             if normalized is None:
                 report["skipped_malformed"] += 1
-                count_skip(reason or "unknown")
+                count_skip(report, reason or "unknown")
                 continue
 
-            text = normalized["text"]
-            title = normalized["title"]
-
-            # Text size guard
-            if len(text) > MAX_TEXT_CHARS:
-                report["skipped_malformed"] += 1
-                count_skip("text_too_large")
-                continue
-            if not text.strip():
-                report["skipped_malformed"] += 1
-                count_skip("empty_text")
-                continue
-
-            # Request size guard (JSON overhead estimate)
-            est_bytes = len(text.encode("utf-8")) + len(title.encode("utf-8")) + 1024
-            if est_bytes > MAX_REQUEST_BYTES:
-                report["skipped_malformed"] += 1
-                count_skip("request_too_large")
-                continue
-
-            h = content_hash(text)
-
-            # Ledger dedup (client-side fast path)
-            if h in succeeded_hashes:
-                report["skipped_duplicate"] += 1
-                count_skip("ledger_duplicate")
-                continue
-
-            # Dry run: count but don't POST
-            if dry_run:
-                report["ingested"] += 1  # would have ingested
+            outcome = push_text_item(
+                text=normalized["text"],
+                title=normalized["title"],
+                locator=normalized.get("url"),
+                retrieved_at=normalized.get("timestamp"),
+                source_file=str(file_path),
+                source=source,
+                origin=origin,
+                gateway=gateway,
+                dry_run=dry_run,
+                ledger_path=ledger_path,
+                succeeded_hashes=succeeded_hashes,
+                report=report,
+                max_text_chars=max_text_chars,
+            )
+            if outcome != "skipped":
                 processed += 1
-                append_ledger(ledger_path, {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": source,
-                    "origin": origin,
-                    "locator": normalized.get("url"),
-                    "retrieved_at": normalized.get("timestamp"),
-                    "file": str(file_path),
-                    "title": title,
-                    "content_sha256": h,
-                    "characters": len(text),
-                    "status": "dry_run",
-                    "response": None,
-                })
-                succeeded_hashes.add(h)
-                continue
-
-            # --- Gateway: preview then ingest ---
-            processed += 1
-
-            # Build preview payload (text path)
-            preview_payload: dict = {"text": text, "title": title[:300]}
-
-            status, preview_body = gateway_post(gateway, "/api/v1/ingestion/preview", preview_payload)
-
-            if status != 200 or not isinstance(preview_body, dict) or not preview_body.get("ok"):
-                report["failed"] += 1
-                err_detail = preview_body if isinstance(preview_body, str) else json.dumps(preview_body)[:500]
-                report["errors"].append({"file": str(file_path), "stage": "preview", "status": status, "detail": err_detail})
-                append_ledger(ledger_path, {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": source,
-                    "origin": origin,
-                    "locator": normalized.get("url"),
-                    "retrieved_at": normalized.get("timestamp"),
-                    "file": str(file_path),
-                    "title": title,
-                    "content_sha256": h,
-                    "characters": len(text),
-                    "status": "failed",
-                    "stage": "preview",
-                    "http_status": status,
-                    "response": preview_body if isinstance(preview_body, dict) else {"error": preview_body},
-                })
-                continue
-
-            preview_id = preview_body.get("preview_id")
-            if not isinstance(preview_id, str) or not preview_id:
-                report["failed"] += 1
-                report["errors"].append({"file": str(file_path), "stage": "preview", "status": status, "detail": "missing preview_id"})
-                append_ledger(ledger_path, {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": source,
-                    "origin": origin,
-                    "locator": normalized.get("url"),
-                    "retrieved_at": normalized.get("timestamp"),
-                    "file": str(file_path),
-                    "title": title,
-                    "content_sha256": h,
-                    "characters": len(text),
-                    "status": "failed",
-                    "stage": "preview",
-                    "response": preview_body,
-                })
-                continue
-
-            # Ingest
-            ingest_payload = {"preview_id": preview_id}
-            status2, ingest_body = gateway_post(gateway, "/api/v1/ingestion/ingest", ingest_payload)
-
-            if status2 == 200 and isinstance(ingest_body, dict) and ingest_body.get("ok"):
-                ingest_status = ingest_body.get("status", "unknown")
-                if ingest_status in ("completed", "rejected"):
-                    # Rejected means known but not stored (e.g. duplicate content);
-                    # treat as success for dedup purposes.
-                    report["ingested"] += 1
-                    append_ledger(ledger_path, {
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "source": source,
-                        "origin": origin,
-                        "locator": normalized.get("url"),
-                        "retrieved_at": normalized.get("timestamp"),
-                        "file": str(file_path),
-                        "title": title,
-                        "content_sha256": h,
-                        "ingestion_id": ingest_body.get("ingestion_id"),
-                        "ingest_status": ingest_status,
-                        "decision": ingest_body.get("decision"),
-                        "chunks": ingest_body.get("chunks"),
-                        "vectors": ingest_body.get("vectors"),
-                        "characters": len(text),
-                        "status": "succeeded",
-                        "response": ingest_body,
-                    })
-                    succeeded_hashes.add(h)
-                else:
-                    report["failed"] += 1
-                    append_ledger(ledger_path, {
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "source": source,
-                        "origin": origin,
-                        "locator": normalized.get("url"),
-                        "retrieved_at": normalized.get("timestamp"),
-                        "file": str(file_path),
-                        "title": title,
-                        "content_sha256": h,
-                        "status": "failed",
-                        "stage": "ingest",
-                        "http_status": status2,
-                        "response": ingest_body,
-                    })
-            else:
-                report["failed"] += 1
-                err_detail2 = ingest_body if isinstance(ingest_body, str) else json.dumps(ingest_body)[:500]
-                report["errors"].append({"file": str(file_path), "stage": "ingest", "status": status2, "detail": err_detail2})
-                append_ledger(ledger_path, {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": source,
-                    "origin": origin,
-                    "locator": normalized.get("url"),
-                    "retrieved_at": normalized.get("timestamp"),
-                    "file": str(file_path),
-                    "title": title,
-                    "content_sha256": h,
-                    "status": "failed",
-                    "stage": "ingest",
-                    "http_status": status2,
-                    "response": ingest_body if isinstance(ingest_body, dict) else {"error": ingest_body},
-                })
 
     return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Bulk ingestion client: push scraped JSON items through the POC ingestion REST boundary.",
+        description="Bulk ingestion client: push local JSON items or extracted PDF text "
+                    "through the POC ingestion REST boundary.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("path", help="Path to a JSON file or directory tree containing scraper item files")
-    parser.add_argument("--source", default=None, help="Source name (default: basename of PATH)")
-    parser.add_argument("--origin", default=None, help="Origin tag recorded in ledger (e.g. web-scrape)")
+    parser.add_argument("path", help="Path to a JSON file/directory (default) or a PDF file/directory (--format pdf)")
+    parser.add_argument("--format", dest="input_format", choices=INPUT_FORMATS, default="json",
+                        help="Input format: json (scraped items) or pdf (extract text with pypdf)")
+    parser.add_argument("--source", default=None,
+                        help="Source name (default: basename of PATH; 'books' for --format pdf)")
+    parser.add_argument("--origin", default=None,
+                        help="Origin tag recorded in ledger (default: none; 'books' for --format pdf)")
     parser.add_argument("--gateway", default=os.environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", "http://127.0.0.1:8080"),
                         help="Gateway base URL (default: $POC_CLAUDE_ENSEMBLE_GATEWAY_URL or http://127.0.0.1:8080)")
     parser.add_argument("--limit", type=int, default=None, help="Max items to ingest this run")
@@ -502,6 +676,13 @@ def main() -> None:
                         help="Ledger file path (default: ~/.FlossWare/ledger/bulk-ingest/<source>.jsonl)")
     parser.add_argument("--max-file-bytes", type=int, default=MAX_FILE_BYTES,
                         help=f"Max bytes per JSON file (default: {MAX_FILE_BYTES})")
+    parser.add_argument("--max-pdf-bytes", type=int, default=MAX_PDF_BYTES,
+                        help=f"Max bytes per PDF (default: {MAX_PDF_BYTES})")
+    parser.add_argument("--max-pdf-pages", type=int, default=MAX_PDF_PAGES,
+                        help=f"Max pages per PDF (default: {MAX_PDF_PAGES})")
+    parser.add_argument("--max-text-chars", type=int, default=MAX_TEXT_CHARS,
+                        help=f"Max extracted text characters per item, capped by the service "
+                             f"limit {MAX_TEXT_CHARS} (default: {MAX_TEXT_CHARS})")
     args = parser.parse_args()
 
     input_path = Path(args.path).resolve()
@@ -509,7 +690,13 @@ def main() -> None:
         print(f"error: PATH does not exist: {input_path}", file=sys.stderr)
         sys.exit(2)
 
-    source = args.source or (input_path.name if input_path.name else "bulk-ingest")
+    if args.input_format == "pdf":
+        source = args.source or "books"
+        origin = args.origin if args.origin is not None else "books"
+    else:
+        source = args.source or (input_path.name if input_path.name else "bulk-ingest")
+        origin = args.origin
+
     # Sanitize source for filename
     safe_source = "".join(c if c.isalnum() or c in "-_." else "_" for c in source).strip("._") or "bulk-ingest"
     if args.resume_state:
@@ -519,16 +706,27 @@ def main() -> None:
 
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be >= 1")
+    if not 1 <= args.max_text_chars <= MAX_TEXT_CHARS:
+        parser.error(f"--max-text-chars must be between 1 and {MAX_TEXT_CHARS} "
+                     f"(ingestion service limit)")
+    if args.max_pdf_bytes < 1:
+        parser.error("--max-pdf-bytes must be >= 1")
+    if args.max_pdf_pages < 1:
+        parser.error("--max-pdf-pages must be >= 1")
 
     report = run(
         input_path=input_path,
         source=source,
-        origin=args.origin,
+        origin=origin,
         gateway=args.gateway,
         limit=args.limit,
         dry_run=args.dry_run,
         ledger_path=ledger_path,
         max_file_bytes=args.max_file_bytes,
+        input_format=args.input_format,
+        max_text_chars=args.max_text_chars,
+        max_pdf_bytes=args.max_pdf_bytes,
+        max_pdf_pages=args.max_pdf_pages,
     )
 
     # Final report to stdout
