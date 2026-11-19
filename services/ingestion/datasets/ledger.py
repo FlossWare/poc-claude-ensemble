@@ -184,6 +184,101 @@ def build_resolution_entry(
     }
 
 
+def acquisition_event_id(
+    config: Config,
+    snapshot: CatalogSnapshot,
+    *,
+    acquire_version: int,
+    selection_hash: str,
+    sample: int | None,
+    limit: int | None,
+) -> str:
+    return sha256_hex(
+        canonical_json(
+            {
+                "entry_id": "apd:catalog",
+                "stage": "acquire",
+                "input_hash": sha256_hex(
+                    canonical_json(
+                        {
+                            "schema_version": config.schema_version,
+                            "catalog_repo": snapshot.repo,
+                            "catalog_commit": snapshot.commit,
+                            "snapshot_sha256": snapshot.snapshot_sha256,
+                            "acquire_version": acquire_version,
+                            "selection_hash": selection_hash,
+                            "sample": sample,
+                            "limit": limit,
+                        }
+                    )
+                ),
+                "outcome_code": "acquisition_complete",
+                "attempt": 1,
+            }
+        )
+    )
+
+
+def build_acquisition_entry(
+    *,
+    event_id: str,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    report: dict[str, object],
+    exit_code: int,
+    duration_ms: int,
+    manifest_changed: bool,
+    outcomes_added: int,
+    acquire_version: int,
+    adapter_version: int,
+) -> dict[str, object]:
+    """Numeric and enum projections only: no URLs, content, hashes or query strings."""
+    counts = report.get("counts") or {}
+    assert isinstance(counts, dict)
+    funnel = report.get("funnel") or {}
+    assert isinstance(funnel, dict)
+    adapter = counts.get("adapter") if isinstance(counts.get("adapter"), dict) else {}
+    return {
+        "event_id": event_id,
+        "event_type": "dataset_acquisition",
+        "event_name": "dataset.acquire.completed",
+        "source": "poc-dataset-ingest",
+        "producer": "poc-claude-ensemble",
+        "timestamp": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "correlation_id": run_id,
+        "execution_id": run_id,
+        "schema_version": 1,
+        "acquire_version": int(acquire_version),
+        "adapter_version": int(adapter_version),
+        "catalog_commit": snapshot.commit,
+        "snapshot_sha256": snapshot.snapshot_sha256,
+        "discovered": int(counts.get("discovered") or 0),
+        "status_counts": _int_map(counts.get("status")),
+        "reason_counts": _int_map(counts.get("reason")),
+        "parse_status_counts": _int_map(counts.get("parse_status")),
+        "adapter_counts": _int_map(adapter),
+        "license_policy_counts": _int_map(counts.get("license_policy")),
+        "acquired": int(funnel.get("acquired") or 0),
+        "parsed": int(funnel.get("parsed") or 0),
+        "skipped": int(funnel.get("skipped") or 0),
+        "deferred": int(funnel.get("deferred") or 0),
+        "failed": int(funnel.get("failed") or 0),
+        "files": int(funnel.get("files") or 0),
+        "bytes": int(funnel.get("bytes") or 0),
+        "records": int(funnel.get("records") or 0),
+        "sample": report.get("sample"),
+        "limit": report.get("limit"),
+        "invariant_ok": bool((report.get("invariant") or {}).get("ok")),
+        "exit_code": int(exit_code),
+        "duration_ms": int(duration_ms),
+        "manifest_changed": bool(manifest_changed),
+        "outcomes_added": int(outcomes_added),
+    }
+
+
 def _int_map(value: object) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}

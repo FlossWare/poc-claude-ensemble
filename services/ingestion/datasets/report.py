@@ -401,9 +401,298 @@ def render_resolution_markdown(report: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _acquired_files(acquisition: object) -> list[dict[str, object]]:
+    artifact = acquisition.to_artifact()  # type: ignore[attr-defined]
+    files = artifact.get("files") or []
+    return [item for item in files if isinstance(item, dict)]
+
+
+def _adapter_counts(files: list[dict[str, object]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in files:
+        parse = item.get("parse")
+        if isinstance(parse, dict) and parse.get("adapter"):
+            counter[str(parse["adapter"])] += 1
+        archive_block = item.get("archive")
+        if isinstance(archive_block, dict):
+            for member in archive_block.get("members") or []:
+                if not isinstance(member, dict):
+                    continue
+                member_parse = member.get("parse")
+                if isinstance(member_parse, dict) and member_parse.get("adapter"):
+                    counter[str(member_parse["adapter"])] += 1
+    return dict(sorted(counter.items()))
+
+
+def build_acquisition_report(
+    rows: list[dict[str, object]],
+    acquisitions: list[object],
+    *,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    accounting: object,
+    generated_at: str,
+    duration_ms: int,
+    exit_code: int,
+    manifest_path: str,
+    manifest_changed: bool,
+    outcomes_added: int,
+    ledger_result: dict[str, object],
+    acquire_version: int,
+    adapter_version: int,
+    archive_version: int,
+    sample: int | None,
+    limit: int | None,
+    unhandled: int,
+    truncated: bool,
+    cache_hits: int,
+    cache_misses: int,
+    budget: dict[str, object] | None = None,
+    resolutions_used: int = 0,
+    resolved_during_run: int = 0,
+) -> dict[str, object]:
+    by_entry = {item.entry_id: item for item in acquisitions}  # type: ignore[attr-defined]
+    status_counts = dict(accounting.status_counts)  # type: ignore[attr-defined]
+    entries: list[dict[str, object]] = []
+    adapter_totals: Counter[str] = Counter()
+    for row in sorted(rows, key=lambda item: str(item.get("entry_id"))):
+        entry_id = str(row.get("entry_id") or "")
+        acquisition = by_entry.get(entry_id)
+        if acquisition is None:
+            continue
+        artifact = acquisition.to_artifact()  # type: ignore[attr-defined]
+        files = _acquired_files(acquisition)
+        adapters = _adapter_counts(files)
+        adapter_totals.update(adapters)
+        entries.append(
+            {
+                "entry_id": entry_id,
+                "title": row.get("title"),
+                "category": row.get("category"),
+                "disposition": row.get("disposition"),
+                "formats": (row.get("classes") or {}).get("format")
+                if isinstance(row.get("classes"), dict)
+                else None,
+                "license_policy": _license_policy(row),
+                "status": artifact.get("status"),
+                "reason_code": artifact.get("reason_code"),
+                "next_action": artifact.get("next_action"),
+                "resolution_method": artifact.get("resolution_method"),
+                "files_total": artifact.get("files_total"),
+                "files_acquired": artifact.get("files_acquired"),
+                "files_failed": artifact.get("files_failed"),
+                "bytes_total": artifact.get("bytes_total"),
+                "records_total": artifact.get("records_total"),
+                "parse_status": artifact.get("parse_status"),
+                "cached": artifact.get("cached"),
+                "adapters": adapters,
+                "files": [
+                    {
+                        "uri": item.get("uri"),
+                        "member": item.get("member"),
+                        "status": item.get("status"),
+                        "reason_code": item.get("reason_code"),
+                        "bytes": item.get("bytes"),
+                        "sha256": item.get("sha256"),
+                        "checksum_declared": item.get("checksum_declared"),
+                        "checksum_verified": item.get("checksum_verified"),
+                        "resumed": item.get("resumed"),
+                        "cached": item.get("cached"),
+                        "etag": item.get("etag"),
+                        "last_modified": item.get("last_modified"),
+                        "retrieved_at": item.get("retrieved_at"),
+                        "archive": item.get("archive"),
+                        "parse": item.get("parse"),
+                    }
+                    for item in files
+                ],
+            }
+        )
+    counts = {
+        "status": status_counts,
+        "reason": _count(entries, lambda entry: entry.get("reason_code")),
+        "parse_status": _count(entries, lambda entry: entry.get("parse_status")),
+        "license_policy": _count(entries, lambda entry: entry.get("license_policy")),
+        "category": _count(entries, lambda entry: entry.get("category")),
+        "resolution_method": _count(entries, lambda entry: entry.get("resolution_method")),
+        "adapter": dict(sorted(adapter_totals.items())),
+    }
+    files_all = [item for entry in entries for item in entry.get("files") or [] if isinstance(item, dict)]
+    funnel = {
+        "discovered": accounting.discovered,  # type: ignore[attr-defined]
+        "resolved": resolutions_used,
+        "acquired": status_counts.get("acquired", 0) + status_counts.get("unchanged", 0),
+        "parsed": sum(1 for entry in entries if entry.get("parse_status") == "parsed"),
+        "indexed": 0,
+        "skipped": status_counts.get("skipped", 0),
+        "failed": status_counts.get("failed", 0),
+        "deferred": status_counts.get("deferred", 0),
+        "files": sum(1 for item in files_all if item.get("status") == "acquired"),
+        "bytes": sum(int(item.get("bytes") or 0) for item in files_all),
+        "records": sum(int(entry.get("records_total") or 0) for entry in entries),
+    }
+    return {
+        "schema_version": 1,
+        "report_type": "acquisition",
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "sample": sample,
+        "limit": limit,
+        "truncated": truncated,
+        "acquire_version": acquire_version,
+        "adapter_version": adapter_version,
+        "archive_version": archive_version,
+        "catalog": {
+            "repo": snapshot.repo,
+            "commit": snapshot.commit,
+            "snapshot_sha256": snapshot.snapshot_sha256,
+            "mode": snapshot.mode,
+            "entries": len(entries),
+            "discovered_files": len(snapshot.files),
+            "warnings": snapshot.warnings,
+        },
+        "counts": {"discovered": accounting.discovered, **counts},  # type: ignore[attr-defined]
+        "funnel": funnel,
+        "invariant": {
+            "ok": accounting.ok,  # type: ignore[attr-defined]
+            "discovered": accounting.discovered,  # type: ignore[attr-defined]
+            "status_total": accounting.status_total,  # type: ignore[attr-defined]
+            "missing_reason": accounting.missing_reason[:100],  # type: ignore[attr-defined]
+            "problems": accounting.problems,  # type: ignore[attr-defined]
+        },
+        "manifest": {"path": manifest_path, "changed": manifest_changed},
+        "outcomes_added": outcomes_added,
+        "unhandled": unhandled,
+        "cache": {"hits": cache_hits, "misses": cache_misses},
+        "budget": budget or {},
+        "resolution": {
+            "reused": resolutions_used - resolved_during_run,
+            "resolved_during_run": resolved_during_run,
+        },
+        "ledger": ledger_result,
+        "entries": entries,
+    }
+
+
+def render_acquisition_markdown(report: dict[str, object]) -> str:
+    catalog = report.get("catalog") or {}
+    counts = report.get("counts") or {}
+    funnel = report.get("funnel") or {}
+    invariant = report.get("invariant") or {}
+    cache = report.get("cache") or {}
+    budget = report.get("budget") or {}
+    resolution = report.get("resolution") or {}
+    assert isinstance(catalog, dict)
+    assert isinstance(counts, dict)
+    assert isinstance(funnel, dict)
+    assert isinstance(invariant, dict)
+    assert isinstance(cache, dict)
+    assert isinstance(budget, dict)
+    assert isinstance(resolution, dict)
+    lines: list[str] = [
+        "# Dataset acquisition report",
+        "",
+        f"- Run: `{report.get('run_id')}`",
+        f"- Generated: {report.get('generated_at')}",
+        f"- Catalog: `{catalog.get('repo')}` @ `{catalog.get('commit')}`",
+        f"- Acquire version: {report.get('acquire_version')} (adapter "
+        f"{report.get('adapter_version')}, archive {report.get('archive_version')})",
+        f"- Sample: {report.get('sample')} / Limit: {report.get('limit')}",
+        f"- Exit code: {report.get('exit_code')}",
+        f"- Cache: {cache.get('hits')} hit(s), {cache.get('misses')} miss(es)",
+        f"- Resolution: {resolution.get('resolved_during_run')} resolved during this run, "
+        f"{resolution.get('reused')} reused",
+        f"- Budget: {budget.get('bytes_used')} byte(s) used, "
+        f"{budget.get('datasets_used')} dataset(s) started",
+        "",
+        "## Accounting invariant",
+        "",
+        f"- Holds: **{invariant.get('ok')}**",
+        f"- Discovered: {invariant.get('discovered')}",
+        f"- Current statuses: {invariant.get('status_total')}",
+        f"- Missing reason codes: {len(invariant.get('missing_reason') or [])}",
+    ]
+    problems = invariant.get("problems") or []
+    if problems:
+        lines.append(f"- Problems: {', '.join(_md(item) for item in problems)}")
+    lines.extend(["", "## Funnel", "", "| Stage | Count |", "|---|---:|"])
+    for key, value in funnel.items():
+        lines.append(f"| {_md(key)} | {value} |")
+    lines.append("")
+    for key in ("status", "reason", "parse_status", "adapter", "license_policy", "category"):
+        lines.extend(_table(key.replace("_", " ").title(), counts.get(key) or {}))
+    ledger = report.get("ledger") or {}
+    lines.extend(
+        [
+            "## Ledger",
+            "",
+            f"- Enabled: {ledger.get('enabled')}",
+            f"- Posted: {ledger.get('posted')}",
+            f"- Duplicate (append-once): {ledger.get('duplicate')}",
+            "",
+            "## Acquired content",
+            "",
+            "| Entry | Status | Reason | Files | Bytes | Records | SHA-256 |",
+            "|---|---|---|---:|---:|---:|---|",
+        ]
+    )
+    for entry in report.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") not in {"acquired", "unchanged"}:
+            continue
+        digests = [
+            str(item.get("sha256") or "")[:16]
+            for item in entry.get("files") or []
+            if isinstance(item, dict) and item.get("sha256")
+        ]
+        lines.append(
+            "| {entry} | {status} | {reason} | {files} | {bytes} | {records} | {sha} |".format(
+                entry=_md(entry.get("entry_id")),
+                status=_md(entry.get("status")),
+                reason=_md(entry.get("reason_code") or "(none)"),
+                files=entry.get("files_acquired"),
+                bytes=entry.get("bytes_total"),
+                records=entry.get("records_total"),
+                sha=_md(", ".join(digests) or "(none)"),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Per-entry outcomes",
+            "",
+            "| Entry | Status | Reason | Parse | Adapters |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for entry in report.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        adapters = entry.get("adapters") or {}
+        assert isinstance(adapters, dict)
+        lines.append(
+            "| {entry} | {status} | {reason} | {parse} | {adapters} |".format(
+                entry=_md(entry.get("entry_id")),
+                status=_md(entry.get("status")),
+                reason=_md(entry.get("reason_code") or "(none)"),
+                parse=_md(entry.get("parse_status") or "(none)"),
+                adapters=_md(
+                    ", ".join(f"{key}:{value}" for key, value in adapters.items()) or "(none)"
+                ),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_markdown(report: dict[str, object]) -> str:
     if report.get("report_type") == "resolution":
         return render_resolution_markdown(report)
+    if report.get("report_type") == "acquisition":
+        return render_acquisition_markdown(report)
     catalog = report.get("catalog") or {}
     counts = report.get("counts") or {}
     funnel = report.get("funnel") or {}

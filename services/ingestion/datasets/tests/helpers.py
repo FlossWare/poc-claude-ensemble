@@ -222,6 +222,82 @@ class FakeProbeTransport:
         return value
 
 
+class FakeStreamResponse:
+    """A canned live response for :class:`FakeStreamTransport`."""
+
+    def __init__(
+        self,
+        body: bytes = b"",
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+        final_url: str = "",
+        redirect_chain: list[str] | None = None,
+    ) -> None:
+        self._body = body
+        self._offset = 0
+        self.status = status
+        self.headers = {key.lower(): value for key, value in (headers or {}).items()}
+        self.final_url = final_url
+        self.redirect_chain = list(redirect_chain or [])
+        self.reads: list[int] = []
+
+    @property
+    def has_body(self) -> bool:
+        return self.status in {200, 206}
+
+    def read(self, size: int = 64 * 1024) -> bytes:
+        self.reads.append(size)
+        chunk = self._body[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+class FakeStreamTransport:
+    """Transport double for acquisition: no sockets, no DNS, canned bodies.
+
+    A route value may be a :class:`FakeStreamResponse`, an exception instance,
+    or a callable that receives the request headers and returns either.
+    """
+
+    def __init__(self, routes: dict[str, object] | None = None) -> None:
+        self.routes = dict(routes or {})
+        self.calls: list[dict[str, object]] = []
+        self._lock = threading.Lock()
+
+    def add(self, url: str, value: object) -> None:
+        self.routes[url] = value
+
+    @contextmanager
+    def open_stream(self, url, *, method="GET", headers=None):
+        with self._lock:
+            self.calls.append(
+                {"url": url, "method": method, "headers": dict(headers or {})}
+            )
+        value = self.routes.get(url)
+        if value is None:
+            raise AssertionError(f"unexpected stream request {url}")
+        if callable(value):
+            value = value(dict(headers or {}))
+        if isinstance(value, BaseException):
+            raise value
+        if not isinstance(value, FakeStreamResponse):
+            raise AssertionError(f"bad canned stream for {url}")
+        yield value
+
+    def urls(self) -> list[str]:
+        return [str(call["url"]) for call in self.calls]
+
+
+class FakeDiskUsage:
+    """A ``shutil.disk_usage`` stand-in with a controllable free byte count."""
+
+    def __init__(self, free: int) -> None:
+        self.free = free
+        self.total = free * 4
+        self.used = self.total - free
+
+
 class MemoryHandler(BaseHTTPRequestHandler):
     seen: set[str] = set()
     posts: list[dict[str, object]] = []

@@ -1,7 +1,8 @@
-# Dataset inventory, classification and resolution (PR 1 + PR 2)
+# Dataset inventory, classification, resolution and acquisition (PR 1 + PR 2 + PR 3)
 
-This package implements sections 5 (PR 1) and the resolution stage of the
-arbitrated Awesome Public Datasets ingestion design:
+This package implements sections 5 (PR 1), the resolution stage (PR 2) and the
+acquisition/archive/adapter stage (PR 3) of the arbitrated Awesome Public
+Datasets ingestion design:
 
 - **PR 1**: full-catalog inventory, license/format/scheme classification, an
   optional bounded accessibility probe, a manifest, a report and one summary
@@ -9,10 +10,14 @@ arbitrated Awesome Public Datasets ingestion design:
 - **PR 2**: resolution of every catalog entry to its authoritative dataset
   source, with explicit reason codes, a resumable cache and an accounting
   invariant. Resolution never downloads dataset bodies.
+- **PR 3**: streaming, bounded, resumable acquisition of `index_content`
+  entries whose license permits it, into a content-addressed store; hostile
+  archive inspection and member-by-member extraction; and format adapters for
+  CSV/TSV, JSON, JSONL/NDJSON, XML, text/Markdown and (optionally) Parquet.
 
-Out of scope for PR 2 (and deliberately not built here): dataset acquisition,
-archive expansion, adapters, normalization/indexing, Knowledge writes and
-Graph writes.
+Out of scope for PR 3 (and deliberately not built here): normalization and
+text projection, Knowledge/Index/Lexical/Vector writes, Graph writes, retry
+hardening beyond the recorded `next_retry_at`, and nested archive expansion.
 
 ## Commands
 
@@ -22,10 +27,27 @@ PYTHONPATH=services python3 -m ingestion.dataset_ingest inventory \
 PYTHONPATH=services python3 -m ingestion.dataset_ingest resolve \
     [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N] \
     [--no-cache] [--no-ledger]
+PYTHONPATH=services python3 -m ingestion.dataset_ingest acquire \
+    [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N] \
+    [--dry-run] [--max-files N] [--max-bytes N] \
+    [--no-resume] [--no-reuse] [--no-resolve] [--no-ledger]
 PYTHONPATH=services python3 -m ingestion.dataset_ingest report [--format md|json]
 ```
 
-`report` renders the newest run (inventory or resolution) from `runs/`.
+`report` renders the newest run (inventory, resolution or acquisition) from
+`runs/`.
+
+For `acquire`, only entries whose `disposition` is `index_content` and whose
+license policy allows content indexing are candidates. `--sample N` is a
+deterministic round-robin sample stratified by primary format, so a bounded run
+spans the format classes; `--limit N` takes the first `N` candidates by
+`entry_id`. Missing resolution evidence is resolved in-process through the PR 2
+code path unless `--no-resolve` is given. `--dry-run` prints the plan (as JSON)
+and makes no network requests and no writes.
+
+A second `acquire` run is offline: resolutions come from the resolution cache,
+content comes from the per-entry acquisition cache and the content store, and
+the run reports `unchanged`.
 
 Exit codes:
 
@@ -112,12 +134,93 @@ catalog/<repo>@<commit>/      # validated snapshot (remote mode only)
 manifest/<commit>.jsonl       # inventory: one row per discovered entry, deterministic
 manifest/<commit>.resolution.jsonl
                               # resolution: one row per discovered entry, deterministic
+manifest/<commit>.acquisition.jsonl
+                              # acquisition: one row per discovered entry
 outcomes.jsonl                # append-only stage outcomes, deduplicated by event_id
 cache/probes/<sha256>.json    # probe evidence only; no bodies or query strings
 cache/resolutions/<sha256>.json
                               # resolution evidence only; no API or HTML bodies
+cache/acquisitions/<sha256>.json
+                              # per-entry acquisition evidence and parse summaries
+cache/blobs/<sha[:2]>/<sha256>
+                              # acquired content, content-addressed, mode 0600
+cache/partial/<sha[:2]>/<sha>.part
+cache/partial/<sha[:2]>/<sha>.json
+                              # in-progress download plus its URL/validator sidecar
+tmp/archive-*/                # 0700 extraction roots, removed after parsing
 runs/<run_id>.json            # latest run report
 ```
+
+Blob names are SHA-256 digests; a filename supplied by a remote server is never
+used as a path. Completed blobs are adopted with an atomic rename, so an
+interrupted run never leaves a partially written blob under a content hash.
+
+### Acquisition manifest row (PR 3)
+
+One row per discovered entry, so `discovered == count(acquisition statuses)`.
+Each row carries `entry_id`, `metadata_sha256`, `catalog{repo,commit,path,
+meta_url}`, `category`, `title`, `disposition`, `license_policy`, `formats` and
+an `acquisition` block:
+
+```json
+{
+  "status": "acquired|unchanged|skipped|deferred|failed",
+  "reason_code": null,
+  "files_total": 2, "files_acquired": 2, "files_failed": 0,
+  "bytes_total": 1234, "records_total": 42,
+  "parse_status": "parsed|skipped|failed|null",
+  "retryable": false, "next_retry_at": null, "attempts_count": 1,
+  "checked_at": "2026-01-01T00:00:00Z",
+  "resolution_method": "zenodo_api",
+  "cached": false,
+  "next_action": "normalize|resume|resolve|review|retry",
+  "files": [
+    {
+      "uri": "https://…", "member": "table.csv", "kind": "direct_file",
+      "status": "acquired", "media_type": "text/csv",
+      "declared_bytes": 1234, "bytes": 1234, "sha256": "…",
+      "blob": "cache/blobs/ab/ab…", "checksum_declared": "md5:…",
+      "checksum_verified": true, "etag": "…", "last_modified": "…",
+      "final_url": "https://…", "retrieved_at": "…",
+      "resumed": false, "cached": false, "attempts": 1,
+      "parse": {"adapter": "csv", "status": "parsed", "record_count": 40,
+                "fields": ["name", "value"], "truncated": false,
+                "sample": [{"index": 0, "kind": "row", "data": {"name": "a"}}]},
+      "archive": null
+    }
+  ]
+}
+```
+
+For an archive, `parse` is `null` and `archive` carries the inspection
+(`format`, `member_count`, `total_uncompressed`, `ratio`, `nested`, `junk`,
+`members[]`) plus one `parse` artifact per extracted data member.
+
+### Acquisition statuses and reason codes (PR 3)
+
+- `acquired`: at least one file was downloaded and stored this run.
+- `unchanged`: the resolved content was already stored and reused (no network).
+- `skipped`: refused by policy or scope — `license_unknown_metadata_only`,
+  `license_restricted`, `license_review_required`, `no_source_url`,
+  `not_resolved`, `repository_requires_clone` (a repository/collection source
+  names a whole repository; cloning is out of scope, so the HTML page it points
+  at is not downloaded).
+- `deferred`: retryable — `run_budget_exhausted`, `disk_guard`,
+  `oversized_declared`, `oversized_stream`, `checksum_mismatch`,
+  `partial_download`, `unsupported_format`, `adapter_unavailable`,
+  `encoding_error`, `limits_exceeded`, plus network reasons
+  (`not_found`, `blocked`, `rate_limited`, `timeout`, `dns_failure`,
+  `tls_failure`, `connection_failed`, `server_error`) inherited from the
+  resolution stage.
+- `failed`: terminal — `content_type_mismatch` (including an HTML page served
+  as a data file, and binary bytes served as text), `ssrf_blocked`,
+  `unsafe_redirect`, `too_many_redirects`, `gated_authentication`, and catalog
+  failures inherited from PR 1.
+- Archive outcomes: `archive_unsafe_path`, `archive_link_or_device`,
+  `archive_bomb`, `archive_too_many_entries`, `archive_encrypted`,
+  `archive_nested`, `parse_error`, `empty_content`.
+- Parse outcomes: `parse_error`, `encoding_error`, `limits_exceeded`,
+  `xml_unsafe`, `unsupported_format`, `adapter_unavailable`, `empty_content`.
 
 A re-run on the same snapshot produces a byte-identical manifest and appends
 no duplicate outcome or ledger events.
@@ -273,6 +376,48 @@ A real `resolve --sample 60` against the pinned local snapshot
 
 These counts are a bounded sample, not a yield guarantee: a large share of the
 catalog is homepage-only and many landing pages expose no data-like links.
+
+## Measured PR 3 acquisition (2026-11-19)
+
+Real runs over the network through `netguard`, against the pinned local
+snapshot (`92d1b210…`, 1,142 entries), with `--no-ledger`:
+
+```bash
+PYTHONPATH=services python3 -m ingestion.dataset_ingest acquire \
+    --catalog-dir /tmp/apd-design/apd-core \
+    --sample 32 --max-files 2 --max-bytes 52428800 --no-ledger
+```
+
+- 32 of the 441 `index_content` entries were selected (round-robin by primary
+  format). The remaining 1,110 rows carry an explicit status, so
+  `discovered == 1,142 == count(statuses)`.
+- 20 entries ended up with stored content: 23 files, 68,048,494 bytes and
+  201,875 normalized records (adapter/record counts only; nothing is indexed).
+- Adapters that produced records: csv 9 files, json 8, text 2, markdown 2.
+  Two PDFs were acquired and refused with `adapter_unavailable`, which is the
+  documented PDF policy.
+- A targeted `--entry` run also stored a 3.7 MB `gzip` member
+  (`entries.csv`, 28,032,537 uncompressed bytes); it was expanded
+  member-by-member and parsed into 93,634 rows with 15 fields.
+- Reason codes observed in the final run: `license_unknown_metadata_only` 644,
+  `license_restricted` 57, `run_budget_exhausted` 409,
+  `repository_requires_clone` 6, `not_found` 2, `connection_failed` 2,
+  `landing_page_only` 1, `rate_limited` 1, `oversized_stream` 1.
+  `repository_requires_clone` is the only addition to the design's taxonomy
+  here: a GitHub `repository` source names a repo page, and PR 3 refuses it
+  rather than downloading HTML.
+- **Resume**: a second identical run made zero network calls
+  (`budget.bytes_used = 0`, 20 acquisition-cache hits, 0 misses) and finished
+  in 2.7 s. A partial entry (one file stored, one source 404) keeps its stored
+  file and retries only the failing source on the next run.
+- A bounded selection exits 3 (a `--sample` is a cap), matching `resolve`;
+  `--entry <id>` runs exit 0.
+
+Format coverage of the real sample was CSV (including CSV inside a gzip), JSON
+(object, array and GeoJSON), `text/plain` and Markdown, plus PDF refusal. The
+catalog declares **no** TSV entries at all, and every JSONL-declaring entry in
+this sample either resolved to a repository or failed before download, so TSV
+and JSONL parsing are covered by offline tests rather than by this run.
 
 ## Packaging note
 
