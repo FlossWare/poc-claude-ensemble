@@ -139,10 +139,37 @@ def sync(dry_run=False):
     client = None if dry_run else ThompsonClient()
     recorded = 0
     for review_id in pending:
+        # Quality weighting: parse the arbiter's decision for this review first,
+        # so each worker outcome can be weighted by whether the arbiter judged
+        # that worker's analysis the strongest. SELECTED names the winner.
+        arbiter_rows = [r for r in by_review[review_id] if r.get("kind") == "arbiter_decision"]
+        selected_model = None
+        for arow in reversed(arbiter_rows):
+            verdict_text = arow.get("text") or ""
+            for line in reversed(verdict_text.strip().splitlines()):
+                if line.strip().upper().startswith("SELECTED:"):
+                    selected_model = line.split(":", 1)[1].strip()
+                    break
+            if selected_model:
+                break
         for row in by_review[review_id]:
             kind = row.get("kind")
             if kind == "worker_result":
                 success = bool((row.get("text") or "").strip()) and not row.get("error")
+                # Quality weighting: Thompson's record_outcome is binary, so we
+                # sharpen the signal by recording the arbiter's winner with an
+                # additional positive outcome (a bonus success) when the arbiter
+                # SELECTED this worker. Models that win arbitration learn faster
+                # than models that merely produce usable text.
+                model_label = row.get("model", "")
+                if selected_model and _label_matches(selected_model, model_label):
+                    if dry_run:
+                        print(f"would record BONUS: {model_label} (arbiter-selected)")
+                    else:
+                        client.record_outcome(model=model_label, task_type="code-review",
+                                              success=True, cost=0.0, tokens=0,
+                                              request_id=f"ledger-quality-{review_id}")
+                    recorded += 1
             elif kind == "arbiter_decision":
                 success = verdict_of(row.get("text")) in VERDICTS
             else:
@@ -179,3 +206,18 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+def _label_matches(selected: str, model: str) -> bool:
+    """Whether an arbiter's SELECTED label refers to this worker's model."""
+    aliases = {
+        "GLM 5.3": ("glm-5-3", "rits/zai-org/glm-5-3"),
+        "DeepSeek V4.1 Flash": ("deepseek", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
+        "Muse Spark Open": ("muse", "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"),
+    }
+    model_lower = model.lower()
+    for label, keys in aliases.items():
+        if selected.strip() == label or any(k.lower() in model_lower for k in keys):
+            if selected.strip() == label:
+                return True
+    return False
