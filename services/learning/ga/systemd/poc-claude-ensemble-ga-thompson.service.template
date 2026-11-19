@@ -1,0 +1,29 @@
+[Unit]
+Description=Claude Ensemble GA tuning (Target A: Thompson policy, report-only)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%REPO_PATH%
+ExecStart=/usr/bin/env python3 -m learning.ga run --target thompson_policy --report-only
+
+# The GA makes no network calls and never writes a ledger. Report-only is the
+# shipped mode; set POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY=1 only after a human has
+# reviewed the first runs and the cooldown gate has been exercised.
+Environment="PYTHONPATH=%REPO_PATH%/services"
+Environment="PYTHONUNBUFFERED=1"
+Environment="POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY=0"
+EnvironmentFile=-%h/.config/claude-ensemble/environment
+
+# Resource limits (design section 4). Nice/IOSchedulingClass keep a replay
+# from competing with the interactive services.
+MemoryMax=512M
+Nice=10
+IOSchedulingClass=idle
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-ensemble-ga-thompson
+
+[Install]
+WantedBy=default.target

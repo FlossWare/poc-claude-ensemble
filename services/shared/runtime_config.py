@@ -53,6 +53,19 @@ def thompson_state_file() -> Path:
     )
 
 
+def thompson_policy_file() -> Path:
+    """Policy file consumed by the live Thompson service (GA Target A output)."""
+    return path_from_env(
+        "POC_CLAUDE_ENSEMBLE_THOMPSON_POLICY_FILE",
+        thompson_state_file().parent / "thompson-policy.json",
+    )
+
+
+def ga_dir() -> Path:
+    """Root for GA run artifacts, journals, and locks."""
+    return path_from_env("POC_CLAUDE_ENSEMBLE_GA_DIR", learning_dir() / "ga")
+
+
 def alert_dir() -> Path:
     return path_from_env("POC_CLAUDE_ENSEMBLE_ALERT_DIR", Path.home() / ".FlossWare" / "claude-ensemble-state" / "data" / "alerts")
 

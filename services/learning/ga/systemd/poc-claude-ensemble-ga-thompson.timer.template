@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily GA replay for the Thompson selection policy (report-only)
+
+[Timer]
+# Off-peak daily run with jitter; Persistent=true catches up after downtime.
+OnCalendar=*-*-* 03:17
+RandomizedDelaySec=20m
+Persistent=true
+Unit=poc-claude-ensemble-ga-thompson.service
+
+[Install]
+WantedBy=timers.target
