@@ -153,9 +153,59 @@ def model_of(arm: str) -> str:
     return ARM_MODEL_IDS.get(arm, arm)
 
 
+# learning.train task types -> this module's Thompson task types. ``other`` and
+# ``implementation`` have no exact equivalent here, so they fall through to the
+# keyword rules below rather than being forced into a misleading bucket.
+_CLASSIFIER_TASK_MAP: Dict[str, str] = {
+    "code-review": "code-review",
+    "qa": "testing",
+    "documentation": "documentation",
+    "research": "research",
+}
+# Below this confidence the trained classifier is not trusted for routing; the
+# deterministic keyword lookup is more predictable.
+CLASSIFIER_MIN_CONFIDENCE = 0.35
+_TASK_CLASSIFIER = "unset"
+
+
+def _load_task_classifier():
+    """Optional trained task classifier; ``None`` when unavailable.
+
+    Never fatal: crew selection must work before the model is trained.
+    """
+    global _TASK_CLASSIFIER
+    if _TASK_CLASSIFIER != "unset":
+        return _TASK_CLASSIFIER
+    root = os.environ.get("POC_CLAUDE_ENSEMBLE_TRAIN_DIR")
+    root = os.path.expanduser(root) if root else os.path.expanduser("~/.FlossWare/learning/train")
+    path = os.path.join(root, "task_classifier.joblib")
+    try:
+        if not os.path.exists(path):
+            _TASK_CLASSIFIER = None
+            return None
+        services = os.path.join(REPO, "services")
+        if services not in sys.path:
+            sys.path.insert(0, services)
+        from learning.train.task_classifier import TaskClassifier
+
+        _TASK_CLASSIFIER = TaskClassifier.load(path)
+    except Exception:
+        _TASK_CLASSIFIER = None
+    return _TASK_CLASSIFIER
+
+
 def infer_task_type(description: Optional[str]) -> str:
-    """Coarse keyword task-type inference; defaults to code-review."""
+    """Task-type inference: trained classifier when confident, else keywords."""
     text = (description or "").lower()
+    model = _load_task_classifier()
+    if model is not None and text:
+        try:
+            label, confidence = model.classify(description or "")
+            mapped = _CLASSIFIER_TASK_MAP.get(label)
+            if mapped and confidence >= CLASSIFIER_MIN_CONFIDENCE:
+                return mapped
+        except Exception:
+            pass
     for task_type, keywords in TASK_KEYWORDS:
         if any(keyword in text for keyword in keywords):
             return task_type

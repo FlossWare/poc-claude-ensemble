@@ -29,6 +29,9 @@ os.environ["POC_CLAUDE_ENSEMBLE_THOMPSON_POLICY_FILE"] = os.path.join(
     _TEST_ROOT, "learning", "thompson-policy.json"
 )
 os.environ["POC_CLAUDE_ENSEMBLE_GA_DIR"] = os.path.join(_TEST_ROOT, "learning", "ga")
+# learning.train artifacts are read lazily by tools/ledger_to_thompson.py; keep
+# tests away from any operator-trained model.
+os.environ["POC_CLAUDE_ENSEMBLE_TRAIN_DIR"] = os.path.join(_TEST_ROOT, "learning", "train")
 # The corpus allowlist must include the redirected ledger/policy roots.
 os.environ["POC_CLAUDE_ENSEMBLE_GA_ALLOWED_ROOTS"] = _TEST_ROOT
 os.environ.setdefault("POC_CLAUDE_ENSEMBLE_DEPLOYED_SERVICES_DIR", os.path.join(_TEST_ROOT, "deployed-services"))

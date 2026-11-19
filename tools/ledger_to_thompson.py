@@ -57,6 +57,58 @@ GA_TRIGGER_MIN_ROWS = 4
 GA_ARGV = ["-m", "learning.ga", "run", "--target", "thompson_policy"] + (
     ["--apply"] if os.environ.get("POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY") == "1" else ["--report-only"])
 
+# Quality predictor (learning.train): when an artifact exists, its probability
+# complements the binary arbiter-SELECTED bonus. The score is recorded as an
+# extra positive outcome for workers whose output the model rates highly, so
+# Thompson learns from graded quality, not only the winner-take-all selection.
+QUALITY_BONUS_THRESHOLD = float(os.environ.get("POC_CLAUDE_ENSEMBLE_QUALITY_BONUS_THRESHOLD", "0.5"))
+_QUALITY_MODEL = "unset"
+
+
+def _quality_artifact():
+    root = os.environ.get("POC_CLAUDE_ENSEMBLE_TRAIN_DIR")
+    root = os.path.expanduser(root) if root else os.path.expanduser("~/.FlossWare/learning/train")
+    return os.path.join(root, "quality_predictor.joblib")
+
+
+def _load_quality_model():
+    """Load the trained quality predictor once; ``None`` when unavailable.
+
+    Import errors and corrupt artifacts are non-fatal: review recording must
+    never depend on an optional model.
+    """
+    global _QUALITY_MODEL
+    if _QUALITY_MODEL != "unset":
+        return _QUALITY_MODEL
+    path = _quality_artifact()
+    try:
+        if not os.path.exists(path):
+            _QUALITY_MODEL = None
+            return None
+        services = os.path.join(REPO, "services")
+        if services not in sys.path:
+            sys.path.insert(0, services)
+        from learning.train.quality_predictor import QualityPredictor
+
+        _QUALITY_MODEL = QualityPredictor.load(path)
+    except Exception as exc:
+        print(f"quality predictor unavailable: {exc}", file=sys.stderr)
+        _QUALITY_MODEL = None
+    return _QUALITY_MODEL
+
+
+def _quality_score(row):
+    """The model's P(selected/usable) for one worker row, or ``None``."""
+    model = _load_quality_model()
+    if model is None:
+        return None
+    try:
+        from learning.train.quality_predictor import worker_features
+
+        return float(model.predict_quality(worker_features(row)))
+    except Exception:
+        return None
+
 
 def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen=subprocess.Popen):
     """Spawn a detached, report-only GA run when enough new rows were recorded.
@@ -179,14 +231,22 @@ def sync(dry_run=False):
             if kind == "worker_result":
                 success = bool((row.get("text") or "").strip()) and not row.get("error")
                 # Quality weighting: Thompson's record_outcome is binary, so we
-                # sharpen the signal by recording the arbiter's winner with an
-                # additional positive outcome (a bonus success) when the arbiter
-                # SELECTED this worker. Models that win arbitration learn faster
-                # than models that merely produce usable text.
+                # sharpen the signal by recording an additional positive outcome
+                # (a bonus success) when either the arbiter SELECTED this worker
+                # or the trained quality predictor scores it highly. The two
+                # signals complement each other: SELECTED is authoritative but
+                # sparse; the predictor generalises to reviews without it.
                 model_label = row.get("model", "")
-                if selected_model and _label_matches(selected_model, model_label):
+                arbiter_selected = bool(selected_model and _label_matches(selected_model, model_label))
+                quality = _quality_score(row) if success else None
+                quality_bonus = quality is not None and quality >= QUALITY_BONUS_THRESHOLD
+                if success and (arbiter_selected or quality_bonus):
+                    if arbiter_selected:
+                        reason = "arbiter-selected"
+                    else:
+                        reason = f"quality={quality:.3f}"
                     if dry_run:
-                        print(f"would record BONUS: {model_label} (arbiter-selected, cost={row.get('cost_usd') or 0.0})")
+                        print(f"would record BONUS: {model_label} ({reason}, cost={row.get('cost_usd') or 0.0})")
                     else:
                         # Cost-normalized: the bonus carries the worker's real cost
                         # so Thompson's cost-weighted draws prefer efficient winners.
@@ -194,7 +254,7 @@ def sync(dry_run=False):
                                               success=True,
                                               cost=row.get("cost_usd") or 0.0,
                                               tokens=(row.get("input_tokens") or 0) + (row.get("output_tokens") or 0),
-                                              request_id=f"ledger-quality-{review_id}")
+                                              request_id=f"ledger-quality-{review_id}-{model_label}")
                     recorded += 1
             elif kind == "arbiter_decision":
                 success = verdict_of(row.get("text")) in VERDICTS
