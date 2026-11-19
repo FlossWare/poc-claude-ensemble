@@ -51,7 +51,11 @@ VERDICTS = ("approve with fixes", "approve", "reject")
 # detached report-only GA run is launched. It never blocks the caller; the GA
 # holds an flock, so overlapping triggers are no-ops.
 GA_TRIGGER_MIN_ROWS = 4
-GA_ARGV = ["-m", "learning.ga", "run", "--target", "thompson_policy", "--report-only"]
+# Auto-apply is env-gated (POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY=1) per the GA design;
+# the trigger passes --apply only when the env var is set, so report-only remains
+# the default everywhere the variable is unset.
+GA_ARGV = ["-m", "learning.ga", "run", "--target", "thompson_policy"] + (
+    ["--apply"] if os.environ.get("POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY") == "1" else ["--report-only"])
 
 
 def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen=subprocess.Popen):

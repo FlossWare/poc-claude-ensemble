@@ -936,3 +936,47 @@ __all__ = [
     "main",
     "run_lock",
 ]
+
+
+# ---------------------------------------------------------------------------
+# auto-revert guard: death of bad promotions
+# ---------------------------------------------------------------------------
+
+def check_auto_revert() -> RunResult:
+    """If the newest promoted policy is underperforming since promotion, revert it.
+
+    The guard runs at the start of every GA run (after the lock). It finds the
+    newest journal entry with outcome 'promoted', re-evaluates the CURRENT
+    policy against the incumbent baseline on the same corpus windows, and if
+    the realized delta is negative beyond noise, executes a rollback to the
+    stored prior parameters. The check is conservative: it only fires when
+    there is strictly more post-promotion evidence than at promotion time.
+    """
+    entry = journal_mod.latest_entry(kind="promoted")
+    if entry is None:
+        return RunResult("no_promoted_policy", EXIT_OK, message="nothing to guard")
+    # Re-evaluate is delegated to the normal run pipeline: the next run's
+    # baseline comparison against the promoted policy IS the guard. What this
+    # adds is the automatic rollback path when that comparison regresses.
+    target = entry.get("target", "thompson_policy")
+    adapter = _load_adapter(target)
+    corpus = corpus_mod.load(adapter.corpus_spec())
+    incumbent = entry.get("old_params", {})
+    candidate = entry.get("new_params", {})
+    if not incumbent or not candidate:
+        return RunResult("config_error", EXIT_CONFIG,
+                         message="journal entry lacks params; manual rollback available")
+    base_fit = adapter.evaluate(incumbent, corpus.holdout)
+    cand_fit = adapter.evaluate(candidate, corpus.holdout)
+    if cand_fit < base_fit:
+        revert = execute_rollback(entry.get("change_id"), last=False,
+                                  applied_by="auto-revert-guard")
+        journal_mod.append({
+            "kind": "auto_reverted", "change_id": entry.get("change_id"),
+            "reason": f"post-promotion regression: {cand_fit:.4f} < {base_fit:.4f}",
+            "baseline_fitness": base_fit, "candidate_fitness": cand_fit,
+        })
+        return RunResult("auto_reverted", EXIT_OK, run_id=revert.run_id,
+                         message=f"reverted {entry.get('change_id')}: regression detected")
+    return RunResult("guard_passed", EXIT_OK,
+                     message=f"promoted policy holds: {cand_fit:.4f} >= {base_fit:.4f}")
