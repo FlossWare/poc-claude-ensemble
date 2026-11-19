@@ -40,6 +40,7 @@ MODEL_ALIASES = {
     "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4": "muse-spark-open",
     "claude-opus-5-5": "opus",
     "claude-sonnet-5": "sonnet",
+    "claude-sonnet-5-5": "sonnet",
     "claude-haiku-4-5-20251001": "haiku",
     "claude-haiku-5-5": "haiku",
 }
