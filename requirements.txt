@@ -6,6 +6,9 @@ scipy==1.17.1
 numpy==1.26.4
 onnxruntime==1.32.0
 tokenizers==0.23.3
+# Real model training in services/learning/train (gradient descent, CPU-only).
+scikit-learn==1.9.0
+joblib==1.5.3
 # Dataset inventory (PR 1) uses yaml.SafeLoader only; pinned for Python 3.11/3.14.
 PyYAML==6.0.3
 # PDF text extraction for tools/bulk_ingest.py --format pdf (books adapter).
