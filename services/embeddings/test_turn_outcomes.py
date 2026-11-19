@@ -208,6 +208,23 @@ class RecordingTests(unittest.TestCase):
         rows = [json.loads(l) for l in open(to.LEDGER)]
         self.assertEqual([r["status"] for r in rows], ["pending"])
 
+    def test_pending_row_records_the_task_type_sent_to_thompson(self):
+        to.record_pending(self.outcomes(assistant("tt1", "claude-haiku-5-5")))
+        rows = [json.loads(l) for l in open(to.LEDGER)]
+        pending = next(r for r in rows if r["status"] == "pending")
+        self.assertEqual(pending["task_type"], to.TASK_TYPE)
+        self.assertEqual(self.fake.received[0]["task_type"], pending["task_type"])
+
+    def test_legacy_pending_row_without_task_type_is_still_retried(self):
+        legacy = {"schema_version": 1, "producer": "claude-code", "kind": "turn_outcome",
+                  "event_id": "legacy-row", "status": "pending", "uuid": "legacy-row",
+                  "arm": "haiku", "model": "claude-haiku-5-5", "success": True, "signal": "none",
+                  "cost": 0.001, "tokens": 15, "timestamp": "2026-10-29T10:00:00Z"}
+        with open(to.LEDGER, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(legacy) + "\n")
+        self.assertEqual(to.retry_pending(), (1, 0))
+        self.assertEqual(self.fake.received[0]["task_type"], to.TASK_TYPE)
+
 
 
 

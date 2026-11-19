@@ -5,6 +5,8 @@ Each finished assistant turn (stop_reason end_turn) becomes one outcome:
 - arm: the model family, haiku, sonnet, or opus; each gateway model is its own arm.
 - success: true unless a tool result in that turn was an error.
 - cost: from the central pricing table, including prompt-cache tokens.
+- task_type: the fixed task type sent to Thompson (``claude_code_turn``), recorded
+  so the GA can group turn outcomes the same way Thompson does.
 - turns that stopped at max_tokens are not recorded.
 
 Every outcome is appended to the ledger before it is sent. The ledger then gets a second row
@@ -253,7 +255,7 @@ def record_pending(outcomes):
             _append({"schema_version": 1, "producer": "claude-code", "kind": "turn_outcome",
                      "event_id": eid, "status": "pending", "uuid": outcome["uuid"], "arm": outcome["arm"],
                      "model": outcome["model"], "success": outcome["success"], "signal": outcome["signal"],
-                     "cost": outcome["cost"],
+                     "cost": outcome["cost"], "task_type": TASK_TYPE,
                      "tokens": outcome["tokens"], "timestamp": outcome["timestamp"]})
             seen.add(eid)
         if post_to_thompson(outcome):
@@ -267,7 +269,11 @@ def record_pending(outcomes):
 
 
 def retry_pending():
-    """Resend outcomes that were written but never accepted. Safe to call on every ingest."""
+    """Resend outcomes that were written but never accepted. Safe to call on every ingest.
+
+    Rows written before ``task_type`` was recorded have no such field; they still post with
+    ``TASK_TYPE``, so a retry behaves exactly as it did when the row was first written.
+    """
     rows = _ledger_rows()
     done = {r["event_id"] for r in rows if r.get("status") == "accepted"}
     retried = failed = 0

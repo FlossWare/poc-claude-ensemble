@@ -98,6 +98,8 @@ class EvalResult:
     unsupported_fraction: float = 0.0
     coverage: float = 0.0
     fitness: float = 0.0
+    task_type_coverage: float = 0.0
+    task_types: Dict[str, int] = field(default_factory=dict)
     per_arm: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     contributions: List[float] = field(default_factory=list)
     block_keys: List[str] = field(default_factory=list)
@@ -115,6 +117,8 @@ class EvalResult:
             "unsupported_fraction": self.unsupported_fraction,
             "coverage": self.coverage,
             "fitness": self.fitness,
+            "task_type_coverage": self.task_type_coverage,
+            "task_types": {name: int(count) for name, count in sorted(self.task_types.items())},
             "per_arm": {name: dict(stats) for name, stats in sorted(self.per_arm.items())},
         }
 
@@ -171,6 +175,23 @@ def _update_state(state: Dict[str, List[float]], row: corpus_mod.Row) -> None:
         entry[1] += 1
     entry[2] += row.cost
     entry[3] += 1
+
+
+def _task_type_summary(rows: Sequence[corpus_mod.Row]) -> Tuple[float, Dict[str, int]]:
+    """Coverage of ``task_type`` over the scored rows, plus per-type counts.
+
+    Rows written before the field existed contribute to the denominator but
+    never to the counts, so an untagged corpus reports coverage 0.0 rather
+    than implying a task type it does not have.
+    """
+    counts: Dict[str, int] = {}
+    tagged = 0
+    for row in rows:
+        if row.task_type:
+            tagged += 1
+            counts[row.task_type] = counts.get(row.task_type, 0) + 1
+    coverage = (tagged / len(rows)) if rows else 0.0
+    return coverage, counts
 
 
 def _per_arm_stats(decisions: Dict[str, int], model: RewardModel) -> Dict[str, Dict[str, Any]]:
@@ -270,6 +291,7 @@ def replay_turn(
         _update_state(state, row)
 
     result.per_arm = _per_arm_stats(per_arm_decisions, model)
+    result.task_type_coverage, result.task_types = _task_type_summary(scored)
     return _finalise(result, cfg, decisions, unsupported, realized, success_total, cost_total)
 
 
@@ -350,6 +372,7 @@ def replay_review(
             _update_state(state, row)
 
     result.per_arm = _per_arm_stats(per_arm_decisions, logged)
+    result.task_type_coverage, result.task_types = _task_type_summary(scored_rows)
     return _finalise(result, cfg, decisions, unsupported, realized, success_total, cost_total)
 
 

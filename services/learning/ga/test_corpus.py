@@ -60,6 +60,58 @@ def test_outcome_taxonomy_and_projection(isolated):
     assert "not a valid arm!" not in json.dumps([row._asdict() for row in corpus.rows])
 
 
+def test_task_type_is_projected_grouped_filtered_and_counted(isolated):
+    path = isolated / "outcomes" / "outcomes.jsonl"
+    rows = [
+        fx.outcome_row("legacy-1", "haiku", True, 0.01, fx.EPOCH),
+        fx.outcome_row("tagged-1", "haiku", True, 0.01, fx.EPOCH + 1, task_type="claude_code_turn"),
+        fx.outcome_row("tagged-2", "sonnet", False, 0.02, fx.EPOCH + 2, task_type="claude_code_turn"),
+        json.dumps({**fx.outcome_row("bad-type", "haiku", True, 0.01, fx.EPOCH + 3),
+                    "task_type": "not a task type!"}),
+        json.dumps({**fx.outcome_row("bool-type", "haiku", True, 0.01, fx.EPOCH + 4),
+                    "task_type": True}),
+    ]
+    fx.write_jsonl(path, rows)
+
+    corpus = corpus_mod.ingest_turn_corpus()
+    assert corpus.counts["accepted"] == 3
+    assert corpus.counts["rejected_schema"] == 2
+    # Legacy rows keep loading unchanged; they just carry no task type.
+    assert [row.row_key for row in corpus.rows_for_task_type(None)] == ["legacy-1"]
+    assert [row.row_key for row in corpus.rows_for_task_type("claude_code_turn")] == [
+        "tagged-1", "tagged-2"
+    ]
+    assert corpus.task_types() == ["claude_code_turn"]
+    assert set(corpus.group_by_task_type()) == {None, "claude_code_turn"}
+
+    coverage = corpus.task_type_coverage()
+    assert coverage == {
+        "rows": 3,
+        "with_task_type": 2,
+        "without_task_type": 1,
+        "coverage": round(2 / 3, 6),
+        "present": True,
+        "task_types": {"claude_code_turn": 2},
+    }
+    assert corpus.to_manifest()["task_type_coverage"] == coverage
+
+
+def test_task_type_coverage_is_absent_for_a_legacy_only_corpus(isolated):
+    fx.write_tiny_corpora(isolated)
+    turn = corpus_mod.ingest_turn_corpus()
+    assert turn.task_type_coverage() == {
+        "rows": 40,
+        "with_task_type": 0,
+        "without_task_type": 40,
+        "coverage": 0.0,
+        "present": False,
+        "task_types": {},
+    }
+    assert turn.task_types() == []
+    # Review rows have always carried a task type.
+    assert corpus_mod.ingest_review_corpus().task_type_coverage()["task_types"] == {"code-review": 38}
+
+
 def test_oversize_line_rejected_and_counted(isolated):
     path = isolated / "outcomes" / "outcomes.jsonl"
     huge = json.dumps({"kind": "turn_outcome", "status": "pending", "arm": "a", "success": True,

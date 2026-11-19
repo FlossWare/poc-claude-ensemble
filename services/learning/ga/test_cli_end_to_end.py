@@ -201,6 +201,62 @@ def test_report_and_cli_exit_codes(isolated, capsys):
     assert excinfo.value.code == 2
 
 
+def test_report_states_task_type_absent_for_legacy_turn_rows(isolated, capsys):
+    fx.write_tiny_corpora(isolated)
+    assert cli.main(["run", "--target", "thompson_policy", "--seed", "3"]) == 0
+    output = capsys.readouterr().out
+    assert "task_type (turn holdout): absent" in output
+    assert "task_type (review holdout): present" in output
+
+    results = cli.load_results(None)
+    turn = results["baseline"]["holdout"]["turn"]
+    assert turn["task_type_coverage"] == 0.0
+    assert turn["task_types"] == {}
+    review = results["baseline"]["holdout"]["review"]
+    assert review["task_type_coverage"] == 1.0
+    assert review["task_types"] == {"code-review": 12}
+
+
+def test_report_states_task_type_present_when_turn_rows_carry_it(isolated, capsys):
+    fx.write_tiny_corpora(isolated)
+    outcomes = isolated / "outcomes" / "outcomes.jsonl"
+    rows = [json.loads(line) for line in outcomes.read_text().splitlines() if line]
+    for row in rows:
+        row["task_type"] = "claude_code_turn"
+    fx.write_jsonl(outcomes, rows)
+
+    assert cli.main(["run", "--target", "thompson_policy", "--seed", "3"]) == 0
+    output = capsys.readouterr().out
+    assert "task_type (turn holdout): present" in output
+
+    turn = cli.load_results(None)["baseline"]["holdout"]["turn"]
+    assert turn["task_type_coverage"] == 1.0
+    assert turn["task_types"] == {"claude_code_turn": 12}  # the holdout window's rows
+
+
+def test_report_does_not_call_an_old_run_absent():
+    """A stored run without the field never measured coverage; say so."""
+    report = cli.format_report(
+        {
+            "run_id": "old",
+            "target": "thompson_policy",
+            "summary": {},
+            "baseline": {
+                "holdout": {
+                    "turn": {
+                        "window": "holdout",
+                        "fitness": 0.0,
+                        "succ_hat": 0.0,
+                        "cost_hat": 0.0,
+                        "coverage": 0.0,
+                    }
+                }
+            },
+        }
+    )
+    assert "task_type (turn holdout): not measured" in report
+
+
 def test_module_entry_point_refuses_on_tiny_corpus(isolated):
     fx.write_tiny_corpora(isolated)
     env = dict(os.environ)

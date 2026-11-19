@@ -667,6 +667,23 @@ def load_results(run_id: Optional[str]) -> Optional[Dict[str, Any]]:
     return _read_json(journal_mod.run_dir(identifier) / "results.json")
 
 
+def _task_type_line(label: str, payload: Optional[Mapping[str, Any]]) -> str:
+    """Say plainly whether the scored rows carry a task type."""
+    if not payload:
+        return f"{label}: no evaluation"
+    if "task_type_coverage" not in payload:
+        # A run recorded before this field existed did not measure it; do not
+        # pass that off as "absent".
+        return f"{label}: not measured (run predates task_type reporting)"
+    coverage = float(payload.get("task_type_coverage") or 0.0)
+    counts = payload.get("task_types") or {}
+    state = "present" if coverage > 0.0 else "absent"
+    detail = f"coverage {coverage:.1%} of scored rows"
+    if counts:
+        detail += f" {json.dumps(counts, sort_keys=True)}"
+    return f"{label}: {state} ({detail})"
+
+
 def format_report(results: Mapping[str, Any]) -> str:
     lines = [
         f"run: {results.get('run_id')}",
@@ -688,6 +705,7 @@ def format_report(results: Mapping[str, Any]) -> str:
                 baseline["fitness"], baseline["succ_hat"], baseline["cost_hat"], baseline["coverage"]
             )
         )
+        lines.append(_task_type_line("task_type (turn holdout)", baseline))
     candidate = results.get("candidate")
     if candidate:
         holdout = candidate["holdout"]["turn"]
@@ -704,6 +722,7 @@ def format_report(results: Mapping[str, Any]) -> str:
                 review_baseline["fitness"], review_baseline["decisions"]
             )
         )
+        lines.append(_task_type_line("task_type (review holdout)", review_baseline))
     for gate in results.get("gates", []):
         marker = "PASS" if gate["passed"] else "FAIL"
         lines.append(f"  [{marker}] {gate['name']}: {gate['detail']}")
@@ -810,6 +829,8 @@ def _eval_from_dict(payload: Mapping[str, Any]):
         unsupported_fraction=payload.get("unsupported_fraction", 0.0),
         coverage=payload.get("coverage", 0.0),
         fitness=payload.get("fitness", 0.0),
+        task_type_coverage=payload.get("task_type_coverage", 0.0),
+        task_types=payload.get("task_types", {}),
         per_arm=payload.get("per_arm", {}),
     )
 
