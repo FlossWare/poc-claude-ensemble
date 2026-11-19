@@ -138,6 +138,28 @@ def sync(dry_run=False):
 
     client = None if dry_run else ThompsonClient()
     recorded = 0
+
+    # Arbiter overturn detection: group completed reviews by subject hash;
+    # when two reviews cover the same subject and their arbiters selected
+    # different workers, the earlier arbiter's judgment was overturned.
+    by_subject = {}
+    for rid in pending:
+        for row in by_review[rid]:
+            if row.get("kind") == "arbiter_decision" and row.get("subject_sha256"):
+                by_subject.setdefault(row["subject_sha256"], []).append((rid, row))
+    overturned_arbiters = set()  # review_ids whose arbiter was overturned
+    for subject, reviews in by_subject.items():
+        if len(reviews) < 2:
+            continue
+        # Chronological by review_id (ledger order)
+        reviews.sort(key=lambda r: r[0])
+        first_selected = _parse_selected(reviews[0][1].get("text") or "")
+        for later_rid, later_row in reviews[1:]:
+            later_selected = _parse_selected(later_row.get("text") or "")
+            if first_selected and later_selected and first_selected != later_selected:
+                overturned_arbiters.add(reviews[0][0])
+                break  # only the first is "overturned" per subject
+
     for review_id in pending:
         # Quality weighting: parse the arbiter's decision for this review first,
         # so each worker outcome can be weighted by whether the arbiter judged
@@ -164,14 +186,22 @@ def sync(dry_run=False):
                 model_label = row.get("model", "")
                 if selected_model and _label_matches(selected_model, model_label):
                     if dry_run:
-                        print(f"would record BONUS: {model_label} (arbiter-selected)")
+                        print(f"would record BONUS: {model_label} (arbiter-selected, cost={row.get('cost_usd') or 0.0})")
                     else:
+                        # Cost-normalized: the bonus carries the worker's real cost
+                        # so Thompson's cost-weighted draws prefer efficient winners.
                         client.record_outcome(model=model_label, task_type="code-review",
-                                              success=True, cost=0.0, tokens=0,
+                                              success=True,
+                                              cost=row.get("cost_usd") or 0.0,
+                                              tokens=(row.get("input_tokens") or 0) + (row.get("output_tokens") or 0),
                                               request_id=f"ledger-quality-{review_id}")
                     recorded += 1
             elif kind == "arbiter_decision":
                 success = verdict_of(row.get("text")) in VERDICTS
+                # Overturn penalty: if this review's arbiter was overturned
+                # by a later review of the same subject, record a failure.
+                if review_id in overturned_arbiters:
+                    success = False
             else:
                 continue
             model = MODEL_ALIASES.get(row.get("model"), row.get("model"))
@@ -221,3 +251,11 @@ def _label_matches(selected: str, model: str) -> bool:
             if selected.strip() == label:
                 return True
     return False
+
+
+def _parse_selected(text: str):
+    """The model label from the last SELECTED: line, or None."""
+    for line in reversed((text or "").strip().splitlines()):
+        if line.strip().upper().startswith("SELECTED:"):
+            return line.split(":", 1)[1].strip()
+    return None
