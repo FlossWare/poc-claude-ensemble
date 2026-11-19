@@ -240,6 +240,15 @@ def main(argv=None):
     record(dict(base, kind="arbiter_decision", role="arbiter", recorded_at=stamp,
                 text=arbiter["text"][:MAX_STORED_CHARS], **{k: v for k, v in arbiter.items() if k != "text"}))
 
+    # Feed this review's outcomes to Thompson so model selection learns from
+    # real results (worker: usable text; arbiter: parseable verdict). Failure
+    # is non-fatal: the review itself is already recorded in the ledger.
+    try:
+        import ledger_to_thompson
+        ledger_to_thompson.sync()
+    except Exception as exc:
+        print(f"thompson outcome sync failed: {exc}", file=sys.stderr)
+
     summary = {"review_id": review_id, "workers": [{k: w[k] for k in ("model", "latency_ms", "output_tokens",
                                                                        "stop_reason", "cost_usd")} for w in workers],
                "arbiter": {k: arbiter[k] for k in ("model", "latency_ms", "output_tokens", "stop_reason", "cost_usd")},
