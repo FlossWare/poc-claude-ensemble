@@ -68,7 +68,7 @@ _health_cache_lock = threading.Lock()
 
 def _json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length", "0"))
-    if length <= 0 or length > 16 * 1024 * 1024:
+    if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
         raise ValueError("request body must be between 1 byte and 16 MiB")
     value = json.loads(handler.rfile.read(length).decode("utf-8"))
     if not isinstance(value, dict):
@@ -105,7 +105,9 @@ def _require_collaboration_auth(handler: BaseHTTPRequestHandler) -> None:
         )
     supplied = handler.headers.get("Authorization", "")
     scheme, _, token = supplied.partition(" ")
-    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
+    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(
+        token.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise AuthenticationRequired("invalid collaboration authorization")
 
 
