@@ -29,7 +29,10 @@ from policy import Policy, evaluate
 from collaboration import CollaborationOrchestrator
 from collaboration.reviewer import MCPReviewer
 from shared.operational_memory import OperationalMemoryWriter
-from operational_dashboard import OperationalDashboard
+try:
+    from .operational_dashboard import OperationalDashboard
+except ImportError:
+    from operational_dashboard import OperationalDashboard
 
 LOG = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
