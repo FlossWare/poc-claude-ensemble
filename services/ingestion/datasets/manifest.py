@@ -586,14 +586,8 @@ def _outcome_row(
     }
 
 
-def append_outcomes(
-    rows: list[dict[str, object]],
-    path: Path,
-    *,
-    run_id: str,
-    catalog_commit: str,
-    retrieved_at: str,
-) -> int:
+def append_outcome_rows(outcomes: list[dict[str, object]], path: Path) -> int:
+    """Append outcome rows, deduplicating by deterministic ``event_id``."""
     seen: set[str] = set()
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -611,10 +605,9 @@ def append_outcomes(
     except OSError:
         pass
     new_rows: list[dict[str, object]] = []
-    for row in sorted(rows, key=lambda item: str(item.get("entry_id"))):
-        outcome = _outcome_row(row, run_id, catalog_commit, retrieved_at)
-        event_id = str(outcome["event_id"])
-        if event_id in seen:
+    for outcome in outcomes:
+        event_id = str(outcome.get("event_id") or "")
+        if not event_id or event_id in seen:
             continue
         seen.add(event_id)
         new_rows.append(outcome)
@@ -635,6 +628,21 @@ def append_outcomes(
         if descriptor >= 0:
             os.close(descriptor)
     return len(new_rows)
+
+
+def append_outcomes(
+    rows: list[dict[str, object]],
+    path: Path,
+    *,
+    run_id: str,
+    catalog_commit: str,
+    retrieved_at: str,
+) -> int:
+    outcomes = [
+        _outcome_row(row, run_id, catalog_commit, retrieved_at)
+        for row in sorted(rows, key=lambda item: str(item.get("entry_id")))
+    ]
+    return append_outcome_rows(outcomes, path)
 
 
 def run_id_for(config: Config, snapshot: CatalogSnapshot) -> str:
