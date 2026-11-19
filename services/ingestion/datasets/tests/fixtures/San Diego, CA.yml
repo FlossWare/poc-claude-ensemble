@@ -1,0 +1,8 @@
+---
+title: San Diego, CA
+homepage: https://example.org/san-diego
+category: Test
+license: CC0 1.0
+sources:
+  - name: CSV
+    access_url: https://example.org/san-diego.csv

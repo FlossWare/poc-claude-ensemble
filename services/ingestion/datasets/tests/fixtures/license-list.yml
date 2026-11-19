@@ -1,0 +1,18 @@
+---
+title: License List
+homepage: https://example.org/list
+category: Test
+description: A list-of-dicts license and list-of-strings sources.
+license:
+  - name: CC BY 4.0 (data)
+    url: https://creativecommons.org/licenses/by/4.0/
+  - name: MIT (code)
+    url: https://opensource.org/licenses/MIT
+sources:
+  - https://example.org/list.json
+  - Some prose source
+publisher: Example String
+organization:
+  name: Dict Org
+  web: https://example.org/org
+issued_time: 2024.5

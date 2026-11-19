@@ -1,0 +1,262 @@
+"""Shared offline test helpers and fakes."""
+from __future__ import annotations
+
+import io
+import json
+import shutil
+import socket
+import tarfile
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from ingestion.datasets.config import Config
+from ingestion.datasets.netguard import NetResponse, RawResponse, Transport
+
+FIXTURES = Path(__file__).with_name("fixtures")
+
+ENTRY_FIXTURES = (
+    "full.yml",
+    "sparse.yml",
+    "license-list.yml",
+    "typo-name.yml",
+    "hhttps.yml",
+    "ftp.yml",
+    "San Diego, CA.yml",
+    "OpenNEURO",
+    "LocationData.wml",
+    "duplicate-keys.yml",
+    "restricted.yml",
+    "proprietary.yml",
+)
+
+GPL_LICENSE = "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n"
+MIT_LICENSE = "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy.\n"
+
+
+def build_readme(names, statuses: dict[str, str] | None = None, category: str = "Test") -> str:
+    statuses = statuses or {}
+    lines = [
+        "Mini Awesome Public Datasets",
+        "============================",
+        "",
+        ".. |OK_ICON| image:: https://example.org/ok.png",
+        ".. |FIXME_ICON| image:: https://example.org/fixme.png",
+        "",
+    ]
+    for name in names:
+        status = statuses.get(name, "OK")
+        icon = "OK_ICON" if status == "OK" else "FIXME_ICON"
+        title = name.rsplit(".", 1)[0]
+        lines.append(
+            f"* |{icon}| `{title} <https://example.org/>`_ "
+            f"[`Meta <https://github.com/awesomedata/apd-core/tree/master/core//{category}/{name}>`_]"
+        )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def make_catalog(
+    tmp_path: Path,
+    *,
+    names=ENTRY_FIXTURES,
+    readme: str | None = None,
+    statuses: dict[str, str] | None = None,
+    include_readme_in_root: bool = True,
+) -> Path:
+    root = tmp_path / "apd-core"
+    core = root / "core" / "Test"
+    core.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        shutil.copyfile(FIXTURES / name, core / name)
+    (root / "LICENSE").write_text(GPL_LICENSE, encoding="utf-8")
+    if include_readme_in_root:
+        # The real apd-core README has no Meta links; discovery must prefer the
+        # generated awesome-public-datasets README instead.
+        (root / "README.md").write_text("# apd-core\n", encoding="utf-8")
+    sibling = tmp_path / "awesome-public-datasets"
+    sibling.mkdir(exist_ok=True)
+    (sibling / "LICENSE").write_text(MIT_LICENSE, encoding="utf-8")
+    (sibling / "README.rst").write_text(
+        readme if readme is not None else build_readme(list(names), statuses),
+        encoding="utf-8",
+    )
+    return root
+
+
+def make_config(tmp_path: Path, root: Path | None = None, **overrides) -> Config:
+    if root is None:
+        root = make_catalog(tmp_path)
+    config = Config.load(
+        catalog_dir=root,
+        data_root=tmp_path / "data",
+        ledger_enabled=False,
+    )
+    changes = {"ledger_enabled": False, **overrides}
+    return config.replace(**changes)
+
+
+def tar_bytes(entries, *, mode: str = "w:gz") -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode=mode) as archive:
+        for info, data in entries:
+            archive.addfile(info, io.BytesIO(data) if data is not None else None)
+    return buffer.getvalue()
+
+
+def regular(name: str, data: bytes, *, mtime: int = 0) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.REGTYPE
+    info.mode = 0o644
+    info.size = len(data)
+    info.mtime = mtime
+    return info
+
+
+def directory(name: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o755
+    info.mtime = 0
+    return info
+
+
+def symlink(name: str, target: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.SYMTYPE
+    info.linkname = target
+    info.mtime = 0
+    return info
+
+
+def hardlink(name: str, target: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.LNKTYPE
+    info.linkname = target
+    info.mtime = 0
+    return info
+
+
+def device(name: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.CHRTYPE
+    info.devmajor = 1
+    info.devminor = 3
+    info.mtime = 0
+    return info
+
+
+def stub_resolver(mapping):
+    def resolve(host, port, *args, **kwargs):
+        value = mapping(host) if callable(mapping) else mapping[host]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (value, 0))]
+
+    return resolve
+
+
+def _no_connector(*args, **kwargs):
+    raise AssertionError("tests must override _request_once instead of connecting")
+
+
+class StubTransport(Transport):
+    """Transport whose per-hop request function is canned."""
+
+    def __init__(self, config: Config, resolver, responses: dict[str, object]):
+        super().__init__(config, resolver=resolver, connector=_no_connector)
+        self.responses = responses
+        self.calls: list[str] = []
+
+    def _request_once(self, validated, *, method, headers, max_bytes, store_body, deadline):
+        self.calls.append(validated.url)
+        value = self.responses.get(validated.url)
+        if value is None:
+            raise AssertionError(f"unexpected request to {validated.url}")
+        if isinstance(value, Exception):
+            raise value
+        if isinstance(value, RawResponse):
+            return value
+        raise AssertionError(f"bad canned response for {validated.url}")
+
+
+class FakeProbeTransport:
+    """Probe-level fake returning NetResponse objects."""
+
+    def __init__(self, responses: dict[object, object] | None = None, default=None):
+        self.responses = responses or {}
+        self.default = default
+        self.calls: list[dict[str, object]] = []
+        self._lock = threading.Lock()
+
+    def request(self, url, *, method="GET", headers=None, max_bytes=0, store_body=False):
+        with self._lock:
+            self.calls.append(
+                {
+                    "url": url,
+                    "method": method,
+                    "headers": dict(headers or {}),
+                    "max_bytes": max_bytes,
+                    "store_body": store_body,
+                }
+            )
+        value = self.responses.get((url, method))
+        if value is None:
+            value = self.responses.get(url, self.default)
+        if value is None:
+            raise AssertionError(f"unexpected probe request {method} {url}")
+        if isinstance(value, Exception):
+            raise value
+        if callable(value):
+            return value(url, method, headers)
+        if isinstance(value, dict):
+            return NetResponse(
+                status=int(value.get("status", 200)),
+                headers=dict(value.get("headers") or {}),
+                final_url=str(value.get("final_url") or url),
+                redirect_chain=list(value.get("redirect_chain") or []),
+                body=None,
+            )
+        return value
+
+
+class MemoryHandler(BaseHTTPRequestHandler):
+    seen: set[str] = set()
+    posts: list[dict[str, object]] = []
+    lock = threading.Lock()
+
+    def do_POST(self):  # noqa: N802 - http.server API
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = {}
+        event_id = str(payload.get("event_id") or "")
+        with self.lock:
+            duplicate = event_id in self.seen
+            self.seen.add(event_id)
+            self.posts.append(payload)
+        response = json.dumps({"ok": True, "duplicate": duplicate}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def log_message(self, *args):  # noqa: D401 - silence test server
+        return
+
+
+@contextmanager
+def memory_server():
+    MemoryHandler.seen = set()
+    MemoryHandler.posts = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MemoryHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", MemoryHandler
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
