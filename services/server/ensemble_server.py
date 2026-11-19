@@ -318,7 +318,11 @@ def _forward(
     elif path.lstrip("/").partition("/")[0].split("?", 1)[0] in ROOT_SCOPED_SERVICES:
         # Retrieval services expose their endpoints at the root; the public
         # gateway prefix identifies the service and is not part of its path.
-        target_path = "/" + path.lstrip("/").partition("/")[2]
+        # Split the query off first so a bare service root (e.g. /vector?offset=5)
+        # forwards to "/?offset=5" rather than silently dropping it.
+        raw = path.lstrip("/")
+        query = "?" + raw.partition("?")[2] if "?" in raw else ""
+        target_path = "/" + raw.partition("/")[2].partition("?")[0] + query
     else:
         target_path = path
     request = urllib.request.Request(base.rstrip("/") + target_path, data=body, method=method)
