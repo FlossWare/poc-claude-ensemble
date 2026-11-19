@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Worker/arbiter review of one code file through the gateway, with results recorded to the ledger.
 
-The three free EnMaaS gateway models review the same input as workers (Muse Spark, GLM, DeepSeek).
-Opus adjudicates. Each worker output, the arbiter decision, token counts, latency, and cost
-estimate are appended to ~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be
-compared over time.
+By default the three free EnMaaS gateway models review the same input as workers (Muse Spark, GLM,
+DeepSeek) and Opus adjudicates. With --thompson the worker lineup is drawn from the live Thompson
+router instead (tools/crew_select.py): measured review performance decides who works, arms are
+distinct, and the arbiter is excluded from the crew. The arbiter never changes. Each worker output,
+the arbiter decision, token counts, latency, and cost estimate are appended to
+~/.FlossWare/ledger/reviews/reviews.jsonl, so reviewer quality can be compared over time.
 
-Usage: multi_model_review.py PATH [--max-chars N]
+Usage: multi_model_review.py PATH [--max-chars N] [--thompson]
        multi_model_review.py --report
 """
 
@@ -180,6 +182,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("path", nargs="?")
     parser.add_argument("--max-chars", type=int, default=6000)
+    parser.add_argument("--thompson", action="store_true",
+                        help="draw the worker lineup from live Thompson (crew_select); arbiter unchanged")
     parser.add_argument("--report", action="store_true", help="summarize worker and arbiter results from the ledger")
     args = parser.parse_args(argv)
     if args.report:
@@ -203,15 +207,39 @@ def main(argv=None):
             "subject": args.path, "subject_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
             "truncated": truncated, "original_length": len(full_source)}
 
+    worker_models = list(WORKERS)
+    crew = None
+    if args.thompson:
+        # Measured performance decides who works; the arbiter stays configured
+        # separately and is excluded from the drawn crew.
+        try:
+            import crew_select
+        except ImportError:  # python -m tools.multi_model_review: tools/ is not sys.path[0]
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import crew_select
+        crew = crew_select.select_crew(task_type="code-review", description=f"review of {args.path}",
+                                       count=len(WORKERS), arbiter=ARBITER, correlation_id=review_id)
+        worker_models = crew["models"]
+        if crew.get("status") == "thompson":
+            print("crew (thompson): " + ", ".join(
+                f"{w['arm']}->{w['model']}" for w in crew["workers"]))
+        else:
+            print(f"crew_select: Thompson {crew.get('reason')} ({crew.get('detail')}); "
+                  "using the documented default crew", file=sys.stderr)
+        if not worker_models:
+            print("crew_select returned no workers; aborting", file=sys.stderr)
+            sys.exit(1)
+
     try:
         from shared import thompson_shadow
-        for slot in range(len(WORKERS)):
-            thompson_shadow.record("worker", [WORKERS[slot]], WORKERS, source="multi-model-review", slot=slot)
+        for slot in range(len(worker_models)):
+            thompson_shadow.record("worker", [worker_models[slot]], worker_models,
+                                   source="multi-model-review", slot=slot)
     except Exception:
         pass   # shadow selection is optional; the review itself does not depend on it
 
     workers = []
-    for model in WORKERS:
+    for model in worker_models:
         try:
             result = call(model, review_prompt(source, args.path))
         except Exception as error:
@@ -253,6 +281,11 @@ def main(argv=None):
                                                                        "stop_reason", "cost_usd")} for w in workers],
                "arbiter": {k: arbiter[k] for k in ("model", "latency_ms", "output_tokens", "stop_reason", "cost_usd")},
                "total_cost_usd": round(sum(w["cost_usd"] or 0.0 for w in workers) + (arbiter["cost_usd"] or 0.0), 6)}
+    if crew is not None:
+        summary["thompson_crew"] = {"status": crew.get("status"), "reason": crew.get("reason"),
+                                    "arms": [w["arm"] for w in crew.get("workers", [])],
+                                    "selection_id": crew.get("selection_id"),
+                                    "ledger_path": crew.get("ledger_path")}
     print(json.dumps(summary, indent=2))
     print("\n=== ARBITER DECISION ===\n" + arbiter["text"])
 
