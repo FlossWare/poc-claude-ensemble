@@ -517,6 +517,50 @@ def atomic_write(path: Path, data: bytes, *, mode: int = 0o600) -> None:
             pass
 
 
+def load_rows(path: Path) -> list[dict[str, object]] | None:
+    """Read a persisted inventory manifest as data, or ``None`` if unusable.
+
+    The graph stage prefers this over re-parsing the catalog: it is the same
+    PR 1 rows, and reading them means a projection resumes from the manifest
+    instead of from scratch.  A malformed or empty file is treated as absent.
+    """
+    rows: list[dict[str, object]] = []
+    try:
+        handle = Path(path).open("r", encoding="utf-8")
+    except OSError:
+        return None
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                return None
+            if not isinstance(row, dict) or "entry_id" not in row:
+                return None
+            rows.append(row)
+    return rows or None
+
+
+def rows_match_snapshot(
+    rows: list[dict[str, object]], snapshot: CatalogSnapshot
+) -> bool:
+    """Whether persisted rows still describe this catalog snapshot."""
+    if len(rows) != len(snapshot.files):
+        return False
+    for row in rows:
+        catalog = row.get("catalog")
+        if not isinstance(catalog, dict):
+            return False
+        if catalog.get("commit") != snapshot.commit:
+            return False
+        if catalog.get("snapshot_sha256") not in (None, snapshot.snapshot_sha256):
+            return False
+    return True
+
+
 def manifest_bytes(rows: list[dict[str, object]]) -> bytes:
     ordered = sorted(rows, key=lambda row: str(row.get("entry_id")))
     return "".join(model.canonical_json(row) + "\n" for row in ordered).encode("utf-8")

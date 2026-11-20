@@ -445,3 +445,195 @@ def build_integration_entry(
         "manifest_changed": bool(manifest_changed),
         "outcomes_added": int(outcomes_added),
     }
+
+
+# ---------------------------------------------------------------------------
+# PR 5: graph projection and retrieval verification
+# ---------------------------------------------------------------------------
+
+
+def _event_id(stage: str, input_hash: str, outcome_code: str) -> str:
+    return sha256_hex(
+        canonical_json(
+            {
+                "entry_id": "apd:catalog",
+                "stage": stage,
+                "input_hash": input_hash,
+                "outcome_code": outcome_code,
+                "attempt": 1,
+            }
+        )
+    )
+
+
+def graph_event_id(
+    config: Config,
+    snapshot: CatalogSnapshot,
+    *,
+    graph_version: int,
+    selection_hash: str,
+    sample: int | None,
+    limit: int | None,
+    dry_run: bool,
+) -> str:
+    return _event_id(
+        "graph",
+        sha256_hex(
+            canonical_json(
+                {
+                    "schema_version": config.schema_version,
+                    "catalog_repo": snapshot.repo,
+                    "catalog_commit": snapshot.commit,
+                    "snapshot_sha256": snapshot.snapshot_sha256,
+                    "graph_version": graph_version,
+                    "selection_hash": selection_hash,
+                    "sample": sample,
+                    "limit": limit,
+                    "dry_run": bool(dry_run),
+                }
+            )
+        ),
+        "graph_projection_complete",
+    )
+
+
+def build_graph_entry(
+    *,
+    event_id: str,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    report: dict[str, object],
+    exit_code: int,
+    duration_ms: int,
+    graph_version: int,
+    outcomes_added: int,
+    dry_run: bool,
+) -> dict[str, object]:
+    """Numeric and enum projections only: no node ids, URLs or content."""
+    counts = report.get("counts") if isinstance(report.get("counts"), dict) else {}
+    funnel = report.get("funnel") if isinstance(report.get("funnel"), dict) else {}
+    resume_state = report.get("resume") if isinstance(report.get("resume"), dict) else {}
+    assert isinstance(counts, dict)
+    assert isinstance(funnel, dict)
+    assert isinstance(resume_state, dict)
+    return {
+        "event_id": event_id,
+        "event_type": "dataset_graph",
+        "event_name": "dataset.graph.completed",
+        "source": "poc-dataset-ingest",
+        "producer": "poc-claude-ensemble",
+        "timestamp": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "correlation_id": run_id,
+        "execution_id": run_id,
+        "schema_version": 1,
+        "graph_version": int(graph_version),
+        "catalog_commit": snapshot.commit,
+        "snapshot_sha256": snapshot.snapshot_sha256,
+        "dry_run": bool(dry_run),
+        "discovered": int(counts.get("discovered") or 0),
+        "status_counts": _int_map(counts.get("status")),
+        "reason_counts": _int_map(counts.get("reason")),
+        "projected": int(funnel.get("projected") or 0),
+        "created": int(funnel.get("created") or 0),
+        "unchanged": int(funnel.get("unchanged") or 0),
+        "skipped": int(funnel.get("skipped") or 0),
+        "deferred": int(funnel.get("deferred") or 0),
+        "failed": int(funnel.get("failed") or 0),
+        "resumed": int(funnel.get("resumed") or 0),
+        "nodes_created": int(funnel.get("nodes_created") or 0),
+        "edges_created": int(funnel.get("edges_created") or 0),
+        "retried": int(resume_state.get("retried") or 0),
+        "retry_exhausted": int(resume_state.get("retry_exhausted") or 0),
+        "invariant_ok": bool((report.get("invariant") or {}).get("ok")),
+        "exit_code": int(exit_code),
+        "duration_ms": int(duration_ms),
+        "outcomes_added": int(outcomes_added),
+    }
+
+
+def verification_event_id(
+    config: Config,
+    *,
+    catalog_commit: str,
+    verify_version: int,
+    query_hash: str,
+    top_k: int,
+) -> str:
+    return _event_id(
+        "verify",
+        sha256_hex(
+            canonical_json(
+                {
+                    "schema_version": config.schema_version,
+                    "catalog_commit": catalog_commit,
+                    "verify_version": verify_version,
+                    "query_hash": query_hash,
+                    "top_k": top_k,
+                }
+            )
+        ),
+        "retrieval_verification_complete",
+    )
+
+
+def build_verification_entry(
+    *,
+    event_id: str,
+    run_id: str,
+    catalog_commit: str,
+    report: dict[str, object],
+    exit_code: int,
+    duration_ms: int,
+    verify_version: int,
+) -> dict[str, object]:
+    """Leg outcomes and counts only: never the queries or the retrieved text."""
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    vector_store = report.get("vector_store") if isinstance(report.get("vector_store"), dict) else {}
+    assert isinstance(summary, dict)
+    assert isinstance(vector_store, dict)
+    legs = summary.get("legs") if isinstance(summary.get("legs"), dict) else {}
+    assert isinstance(legs, dict)
+
+    def _leg_status(name: str) -> str:
+        value = legs.get(name) if isinstance(legs.get(name), dict) else {}
+        assert isinstance(value, dict)
+        return str(value.get("status") or "unknown")
+
+    return {
+        "event_id": event_id,
+        "event_type": "dataset_verification",
+        "event_name": "dataset.verify.completed",
+        "source": "poc-dataset-ingest",
+        "producer": "poc-claude-ensemble",
+        "timestamp": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "correlation_id": run_id,
+        "execution_id": run_id,
+        "schema_version": 1,
+        "verify_version": int(verify_version),
+        "catalog_commit": catalog_commit,
+        "queries": int(report.get("query_count") or 0),
+        "top_k": int(report.get("top_k") or 0),
+        "lexical_status": _leg_status("lexical"),
+        "vector_status": _leg_status("vector"),
+        "hybrid_status": _leg_status("hybrid"),
+        "lexical_matched": int((legs.get("lexical") or {}).get("matched") or 0)
+        if isinstance(legs.get("lexical"), dict)
+        else 0,
+        "vector_matched": int((legs.get("vector") or {}).get("matched") or 0)
+        if isinstance(legs.get("vector"), dict)
+        else 0,
+        "vector_functional": bool(vector_store.get("functional")),
+        "graph_verified": (summary.get("graph") or {}).get("verified")
+        if isinstance(summary.get("graph"), dict)
+        else None,
+        "ok": bool(summary.get("ok")),
+        "problem_count": len(summary.get("problems") or []),
+        "exit_code": int(exit_code),
+        "duration_ms": int(duration_ms),
+    }

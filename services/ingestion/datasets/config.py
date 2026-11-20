@@ -205,10 +205,27 @@ class Config:
     lexical_url: str = "http://127.0.0.1:8772"
     vector_url: str = "http://127.0.0.1:8771"
     index_url: str = "http://127.0.0.1:8777"
+    graph_url: str = "http://127.0.0.1:8766"
+    #: Knowledge search lives in the hybrid service; the port is read from the
+    #: same variable the rest of the stack uses rather than hard-coded.
+    hybrid_url: str = "http://127.0.0.1:8773"
     integration_timeout: float = 120.0
     integration_journal_enabled: bool = True
     integration_journal_root: Path | None = None
     integration_metadata_only: bool = False
+
+    # PR 5: graph projection, resume/retry and retrieval verification.
+    graph_timeout: float = 30.0
+    graph_check_tombstones: bool = False
+    graph_prune_enabled: bool = True
+    verify_top_k: int = 5
+    verify_queries: int = 5
+    verify_timeout: float = 30.0
+    resume_checkpoints_enabled: bool = True
+    resume_max_attempts: int = 3
+    resume_max_total_attempts: int = 12
+    resume_base_delay_seconds: float = 0.25
+    resume_max_delay_seconds: float = 4.0
 
     probe_enabled: bool = False
     limit: int | None = None
@@ -241,6 +258,9 @@ class Config:
         max_run_bytes: int | None = None,
         max_run_datasets: int | None = None,
         max_run_seconds: int | None = None,
+        resume_checkpoints_enabled: bool | None = None,
+        resume_max_attempts: int | None = None,
+        graph_check_tombstones: bool | None = None,
     ) -> "Config":
         default_root = Path(
             os.path.expanduser("~/.FlossWare/poc-claude-ensemble/data/datasets")
@@ -391,9 +411,40 @@ class Config:
             lexical_url=_service_url("LEXICAL", "http://127.0.0.1:8772"),
             vector_url=_service_url("VECTOR", "http://127.0.0.1:8771"),
             index_url=_service_url("INDEX", "http://127.0.0.1:8777"),
+            graph_url=_service_url("GRAPH", "http://127.0.0.1:8766"),
+            hybrid_url=_service_url("HYBRID", "http://127.0.0.1:8773"),
             integration_timeout=max(1.0, _env_float("INTEGRATION_TIMEOUT", 120.0)),
             integration_journal_enabled=_env_bool("INTEGRATION_JOURNAL_ENABLED", True),
             integration_metadata_only=_env_bool("INTEGRATION_METADATA_ONLY", False),
+            graph_timeout=max(1.0, _env_float("GRAPH_TIMEOUT", 30.0)),
+            graph_check_tombstones=(
+                _env_bool("GRAPH_CHECK_TOMBSTONES", False)
+                if graph_check_tombstones is None
+                else graph_check_tombstones
+            ),
+            graph_prune_enabled=_env_bool("GRAPH_PRUNE_ENABLED", True),
+            verify_top_k=max(1, _env_int("VERIFY_TOP_K", 5)),
+            verify_queries=max(1, _env_int("VERIFY_QUERIES", 5)),
+            verify_timeout=max(1.0, _env_float("VERIFY_TIMEOUT", 30.0)),
+            resume_checkpoints_enabled=(
+                _env_bool("RESUME_CHECKPOINTS_ENABLED", True)
+                if resume_checkpoints_enabled is None
+                else resume_checkpoints_enabled
+            ),
+            resume_max_attempts=max(
+                1,
+                _int_override(resume_max_attempts, "RESUME_MAX_ATTEMPTS", 3),
+            ),
+            resume_max_total_attempts=max(
+                1,
+                _env_int("RESUME_MAX_TOTAL_ATTEMPTS", 12),
+            ),
+            resume_base_delay_seconds=max(
+                0.0, _env_float("RESUME_BASE_DELAY_SECONDS", 0.25)
+            ),
+            resume_max_delay_seconds=max(
+                0.0, _env_float("RESUME_MAX_DELAY_SECONDS", 4.0)
+            ),
             probe_enabled=probe,
             limit=limit,
             sample=sample,

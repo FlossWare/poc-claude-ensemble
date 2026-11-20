@@ -14,15 +14,16 @@ no download, resolution or parsing policy is re-litigated here.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import adapters, indexing, manifest, model, normalize
+from . import adapters, indexing, manifest, model, normalize, resume
 from .config import Config
 
-INTEGRATE_VERSION = 1
+INTEGRATE_VERSION = 2
+INTEGRATE_STAGE = "integrate"
 
 #: Reasons that justify another attempt without operator action.
 RETRYABLE_REASONS = frozenset(
@@ -64,6 +65,8 @@ class EntryIntegration:
     vectors: int = 0
     truncated: bool = False
     tombstoned: tuple[str, ...] = ()
+    attempts: int = 1
+    resumed: bool = False
 
     def to_artifact(self) -> dict[str, object]:
         content = [item for item in self.record_outcomes if item.get("kind") == "content"]
@@ -76,6 +79,8 @@ class EntryIntegration:
             "reason_code": self.reason_code,
             "detail": self.detail[:500] if self.detail else None,
             "retryable": self.retryable,
+            "attempts": int(self.attempts),
+            "resumed": bool(self.resumed),
             "records_total": self.records_total,
             "shards": self.shards,
             "chunks": self.chunks,
@@ -93,6 +98,49 @@ class EntryIntegration:
             "files": list(self.files),
             "tombstoned": list(self.tombstoned),
         }
+
+    @classmethod
+    def from_artifact(
+        cls, entry_id: str, artifact: dict[str, object], *, resumed: bool = False
+    ) -> "EntryIntegration":
+        """Rebuild a terminal result from a manifest row or a checkpoint."""
+        content = artifact.get("content") if isinstance(artifact.get("content"), dict) else {}
+        assert isinstance(content, dict)
+        records = [item for item in content.get("records") or [] if isinstance(item, dict)]
+        metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else None
+        record_outcomes: list[dict[str, object]] = []
+        if isinstance(metadata, dict):
+            record_outcomes.append(metadata)
+        record_outcomes.extend(records)
+
+        def _int(key: str) -> int:
+            value = artifact.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+        def _text(key: str) -> str | None:
+            value = artifact.get(key)
+            return value if isinstance(value, str) else None
+
+        return cls(
+            entry_id=entry_id,
+            status=str(artifact.get("status") or "failed"),
+            reason_code=_text("reason_code"),
+            detail=_text("detail"),
+            retryable=bool(artifact.get("retryable")),
+            metadata=metadata if isinstance(metadata, dict) else None,
+            record_outcomes=tuple(record_outcomes),
+            files=tuple(item for item in artifact.get("files") or [] if isinstance(item, dict)),
+            records_total=_int("records_total"),
+            shards=_int("shards"),
+            chunks=_int("chunks"),
+            vectors=_int("vectors"),
+            truncated=bool(artifact.get("truncated")),
+            tombstoned=tuple(
+                item for item in artifact.get("tombstoned") or [] if isinstance(item, str)
+            ),
+            attempts=_int("attempts") or 1,
+            resumed=resumed,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +393,345 @@ def integrate_entry(
 
 
 # ---------------------------------------------------------------------------
+# Resume, retries and the per-entry runner
+# ---------------------------------------------------------------------------
+
+
+def entry_fingerprint(
+    row: dict[str, object],
+    acquisition: dict[str, object] | None,
+    *,
+    commit: str,
+    config: Config,
+) -> str:
+    """Everything that would change this entry's integration result.
+
+    Acquisition evidence is part of the fingerprint: re-acquiring a file with
+    different bytes must re-index it even when the catalog metadata is
+    unchanged.  Stage versions are included so a repair to the normalizer or
+    the indexing sequence invalidates old checkpoints instead of replaying
+    results that no longer reflect the code.
+    """
+    files: list[list[object]] = []
+    if isinstance(acquisition, dict):
+        for item in acquisition.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            files.append(
+                [
+                    item.get("status"),
+                    item.get("sha256"),
+                    model.sanitize_url(item.get("uri")),
+                    item.get("member"),
+                    item.get("bytes"),
+                ]
+            )
+    return resume.fingerprint(
+        INTEGRATE_STAGE,
+        entry_id=str(row.get("entry_id") or ""),
+        inputs={
+            "catalog_commit": commit,
+            "metadata_sha256": row.get("metadata_sha256"),
+            "license_policy": normalize.license_policy(row),
+            "acquisition_status": acquisition.get("status")
+            if isinstance(acquisition, dict)
+            else None,
+            "files": sorted(files, key=lambda item: model.canonical_json(item)),
+            "include_metadata_only": bool(config.integration_metadata_only),
+            "integrate_version": INTEGRATE_VERSION,
+            "normalize_version": normalize.NORMALIZE_VERSION,
+            "indexing_version": indexing.INDEXING_VERSION,
+            "adapter_version": adapters.ADAPTER_VERSION,
+            "profiles": dict(sorted(indexing.PROFILES.items())),
+        },
+    )
+
+
+def load_integration_manifest(path: Path) -> dict[str, dict[str, object]]:
+    """Read a previous integration manifest into ``entry_id -> artifact``.
+
+    This is the second resume source: a run that predates checkpoints (PR 4)
+    still leaves a manifest whose rows can be trusted when their metadata hash
+    and stage versions match.
+    """
+    artifacts: dict[str, dict[str, object]] = {}
+    try:
+        handle = Path(path).open("r", encoding="utf-8")
+    except OSError:
+        return artifacts
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            entry_id = row.get("entry_id")
+            integration = row.get("integration")
+            if isinstance(entry_id, str) and isinstance(integration, dict):
+                artifacts[entry_id] = integration
+    return artifacts
+
+
+def _manifest_matches(
+    artifact: dict[str, object], row: dict[str, object], config: Config
+) -> bool:
+    """Whether a previous manifest row still describes the current inputs."""
+    if artifact.get("integrate_version") != INTEGRATE_VERSION:
+        return False
+    if artifact.get("normalize_version") != normalize.NORMALIZE_VERSION:
+        return False
+    if artifact.get("indexing_version") != indexing.INDEXING_VERSION:
+        return False
+    if artifact.get("adapter_version") != adapters.ADAPTER_VERSION:
+        return False
+    status = artifact.get("status")
+    retryable = bool(artifact.get("retryable"))
+    if status in manifest.SUCCESS_STATUSES:
+        return True
+    if status in {"skipped", "failed"} and not retryable:
+        return True
+    return False
+
+
+def resumed_integration(
+    entry_id: str, artifact: dict[str, object], *, reason: str = "checkpoint_resume"
+) -> EntryIntegration:
+    """Present a reused success as ``unchanged``: nothing was written this run.
+
+    The recorded artifact keeps its original status, so the manifest history
+    still shows that the entry was indexed; only the *current run's* terminal
+    status becomes ``unchanged``, which is what the report and the "nothing was
+    written to a service" assertion mean.
+    """
+    result = EntryIntegration.from_artifact(entry_id, artifact, resumed=True)
+    if result.status in manifest.SUCCESS_STATUSES:
+        return replace(result, status="unchanged", reason_code=reason, retryable=False)
+    return result
+
+
+@dataclass
+class IntegrationRun:
+    """Results plus what the resume machinery did to produce them."""
+
+    integrations: list[EntryIntegration]
+    reused: int = 0
+    attempted: int = 0
+    retried: int = 0
+    attempts_total: int = 0
+    retry_exhausted: int = 0
+    manifest_reused: int = 0
+    checkpoint_entries: int = 0
+    unhandled: int = 0
+
+    def to_artifact(self, *, checkpoint: dict[str, object]) -> dict[str, object]:
+        return {
+            "checkpoint": checkpoint,
+            "reused": self.reused,
+            "attempted": self.attempted,
+            "retried": self.retried,
+            "attempts_total": self.attempts_total,
+            "retry_exhausted": self.retry_exhausted,
+            "manifest_reused": self.manifest_reused,
+            "unhandled": self.unhandled,
+        }
+
+
+def integrate_entries(
+    rows: Sequence[dict[str, object]],
+    acquisitions: dict[str, dict[str, object]],
+    selected: set[str],
+    *,
+    commit: str,
+    config: Config,
+    endpoints: indexing.Endpoints,
+    journal: indexing.CompletionJournal,
+    checkpoint: resume.CheckpointLog | None = None,
+    previous_manifest: dict[str, dict[str, object]] | None = None,
+    policy: resume.RetryPolicy | None = None,
+    post=None,
+    sleep=None,
+) -> IntegrationRun:
+    """Integrate every row, resuming and retrying per entry.
+
+    Precedence for reused work: a checkpoint (which knows the exact input
+    fingerprint) beats a previous manifest row (which only knows the stage
+    versions and the metadata hash).  Either way the reported status comes from
+    the recorded result, so a resume never turns a failure into a success.
+    """
+    policy = policy or resume.RetryPolicy()
+    previous_manifest = previous_manifest or {}
+    run = IntegrationRun(integrations=[])
+    checkpointed: set[str] = set()
+    if checkpoint is not None:
+        checkpoint.load()
+        run.checkpoint_entries = len(checkpoint)
+        checkpointed = checkpoint.entry_ids()
+
+    for row in rows:
+        entry_id = str(row.get("entry_id") or "")
+        if entry_id not in selected:
+            run.integrations.append(
+                EntryIntegration(
+                    entry_id=entry_id,
+                    status="deferred",
+                    reason_code="not_selected",
+                    detail="entry was outside the bounded selection for this run",
+                    retryable=True,
+                )
+            )
+            continue
+        acquisition = acquisitions.get(entry_id)
+        digest = entry_fingerprint(row, acquisition, commit=commit, config=config)
+        decision = (
+            checkpoint.decide(entry_id, digest, policy=policy)
+            if checkpoint is not None
+            else resume.ResumeDecision(reuse=False, reason="disabled")
+        )
+        if decision.exhausted and decision.checkpoint is not None:
+            artifact = dict(decision.checkpoint.result or {})
+            artifact.update(
+                {
+                    "status": "deferred",
+                    "reason_code": resume.RETRY_EXHAUSTED_REASON,
+                    "retryable": False,
+                    "attempts": decision.checkpoint.attempts,
+                }
+            )
+            run.integrations.append(
+                EntryIntegration.from_artifact(entry_id, artifact, resumed=True)
+            )
+            run.reused += 1
+            run.retry_exhausted += 1
+            continue
+        if decision.reuse and decision.checkpoint is not None and decision.checkpoint.result:
+            run.integrations.append(
+                resumed_integration(entry_id, decision.checkpoint.result)
+            )
+            run.reused += 1
+            continue
+        if (
+            decision.reason != "retry"
+            and entry_id not in checkpointed
+            and entry_id in previous_manifest
+        ):
+            artifact = previous_manifest[entry_id]
+            if _manifest_matches(artifact, row, config):
+                run.integrations.append(
+                    resumed_integration(entry_id, artifact, reason="manifest_resume")
+                )
+                run.manifest_reused += 1
+                run.reused += 1
+                continue
+
+        try:
+            attempt = resume.with_retries(
+                lambda: integrate_entry(
+                    row,
+                    acquisition,
+                    commit=commit,
+                    config=config,
+                    endpoints=endpoints,
+                    journal=journal,
+                    post=post,
+                ),
+                policy=policy,
+                retryable=lambda result: result.retryable,
+                **({"sleep": sleep} if sleep is not None else {}),
+            )
+        except Exception as exc:  # per-entry isolation: one bad entry never stops the run
+            run.unhandled += 1
+            integration = EntryIntegration(
+                entry_id=entry_id,
+                status="failed",
+                reason_code="integration_error",
+                detail=type(exc).__name__,
+            )
+            run.integrations.append(integration)
+            if checkpoint is not None:
+                checkpoint.record_result(
+                    entry_id,
+                    digest,
+                    status=integration.status,
+                    reason_code=integration.reason_code,
+                    retryable=False,
+                    attempts=1,
+                    detail=integration.detail,
+                    result=integration.to_artifact(),
+                )
+            continue
+
+        attempts = attempt.attempts
+        prior = decision.checkpoint.attempts if decision.checkpoint else 0
+        integration = EntryIntegration(
+            entry_id=attempt.value.entry_id,
+            status=attempt.value.status,
+            reason_code=attempt.value.reason_code,
+            detail=attempt.value.detail,
+            retryable=attempt.value.retryable,
+            metadata=attempt.value.metadata,
+            record_outcomes=attempt.value.record_outcomes,
+            files=attempt.value.files,
+            records_total=attempt.value.records_total,
+            shards=attempt.value.shards,
+            chunks=attempt.value.chunks,
+            vectors=attempt.value.vectors,
+            truncated=attempt.value.truncated,
+            tombstoned=attempt.value.tombstoned,
+            attempts=prior + attempts,
+        )
+        run.integrations.append(integration)
+        run.attempted += 1
+        run.attempts_total += attempts
+        if attempt.retried:
+            run.retried += 1
+        if checkpoint is not None:
+            checkpoint.record_result(
+                entry_id,
+                digest,
+                status=integration.status,
+                reason_code=integration.reason_code,
+                retryable=integration.retryable,
+                attempts=attempts,
+                prior_attempts=prior,
+                detail=integration.detail,
+                result=integration.to_artifact(),
+            )
+    return run
+
+
+def checkpoint_log(config: Config, *, enabled: bool = True) -> resume.CheckpointLog:
+    return resume.CheckpointLog(
+        resume.checkpoint_root(config), INTEGRATE_STAGE, enabled=enabled
+    )
+
+
+def retry_policy(config: Config) -> resume.RetryPolicy:
+    return resume.RetryPolicy(
+        max_attempts=config.resume_max_attempts,
+        base_delay_seconds=config.resume_base_delay_seconds,
+        max_delay_seconds=config.resume_max_delay_seconds,
+        max_total_attempts=config.resume_max_total_attempts,
+    )
+
+
+def resume_artifact(run: IntegrationRun, *, checkpoint: resume.CheckpointLog | None) -> dict[str, object]:
+    stats = checkpoint.stats() if checkpoint is not None else {
+        "enabled": False,
+        "stage": INTEGRATE_STAGE,
+        "entries": 0,
+        "by_status": {},
+        "ignored_lines": 0,
+        "appended": 0,
+    }
+    return run.to_artifact(checkpoint=stats)
+
+
+# ---------------------------------------------------------------------------
 # Manifest, outcomes and accounting
 # ---------------------------------------------------------------------------
 
@@ -442,7 +829,7 @@ def integration_outcome_rows(
                     "etag": None,
                     "last_modified": None,
                     "retrieved_at": retrieved_at,
-                    "attempts": 1,
+                    "attempts": max(1, int(artifact.get("attempts") or 1)),
                     "retryable": reason_code in RETRYABLE_REASONS,
                     "next_retry_at": None,
                     "knowledge_source_id": record.get("source_id"),
