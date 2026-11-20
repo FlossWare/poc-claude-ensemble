@@ -61,7 +61,38 @@ def gateway_settings():
     return env["ANTHROPIC_BASE_URL"].rstrip("/"), env["ANTHROPIC_API_KEY"]
 
 
+_OLLAMA_CLIENT = None
+
+
+def _ollama_call(model, prompt):
+    """Local Ollama model through the canonical provider routing ($0 cost).
+
+    Reasoning is disabled for local review workers: the ledger already shows
+    reasoning models spending the whole output budget before producing review
+    text, and a review needs the final answer, not the scratchpad.
+    """
+    global _OLLAMA_CLIENT
+    if SERVICES not in sys.path:
+        sys.path.insert(0, SERVICES)
+    if _OLLAMA_CLIENT is None:
+        from arbitration.api_client import MultiModelClient
+        from providers.ollama import OllamaProvider
+        from providers.registry import ProviderRegistry
+
+        _OLLAMA_CLIENT = MultiModelClient(
+            registry=ProviderRegistry({"ollama": OllamaProvider(think=False, num_ctx=8192)}),
+            task_name="multi_model_review")
+    response = _OLLAMA_CLIENT.call_model_response(
+        model=model, prompt=prompt, temperature=0.7, max_tokens=MAX_TOKENS,
+    )
+    return {"model": model, "text": response.text, "latency_ms": round(response.latency_ms or 0),
+            "stop_reason": "stop", "input_tokens": response.input_tokens,
+            "output_tokens": response.output_tokens, "cost_usd": 0.0}
+
+
 def call(model, prompt):
+    if isinstance(model, str) and model.startswith("ollama/"):
+        return _ollama_call(model, prompt)
     base, key = gateway_settings()
     # Reasoning is disabled for the EnMaaS worker models: with it on, they spent the whole
     # output budget on reasoning and returned no text. The ledger keeps those failed runs as
@@ -96,6 +127,8 @@ def load_pricing():
 
 
 def cost_usd(model, input_tokens, output_tokens):
+    if isinstance(model, str) and model.startswith("ollama/"):
+        return 0.0  # local model: no metered cost
     try:
         return round(load_pricing().calculate_cost(model, input_tokens, output_tokens), 6)
     except Exception:

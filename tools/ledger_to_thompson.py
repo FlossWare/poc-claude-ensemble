@@ -45,6 +45,17 @@ MODEL_ALIASES = {
     "claude-haiku-5-5": "haiku",
 }
 
+# Local Ollama arms use the same label as the Thompson arm name.  Kept in sync
+# with crew_select.OLLAMA_ARMS / ARM_MODEL_IDS; the crew-select test asserts
+# every crew arm maps back to itself here, so drift fails the suite.
+for _ollama_model in (
+    "ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b", "ollama/qwen3:4b",
+    "ollama/qwen3:1.7b", "ollama/qwen3.5:2b", "ollama/gemma4:e2b",
+    "ollama/gemma3:4b", "ollama/phi4-mini", "ollama/llama3.2:3b",
+    "ollama/granite3.2-vision:2b",
+):
+    MODEL_ALIASES.setdefault(_ollama_model, _ollama_model)
+
 VERDICTS = ("approve with fixes", "approve", "reject")
 
 # Event-driven GA trigger: once this many *new* outcome rows are recorded, a

@@ -60,7 +60,8 @@ credited once a later review of the same subject cannot overturn it.
 Usage
 -----
     crew_select.py [DESCRIPTION] [--task-type TYPE] [--workers N] [--learn-size]
-                   [--arbiter MODEL] [--exclude ARM] [--json] [--no-record]
+                   [--arbiter MODEL] [--exclude ARM] [--register-ollama-arms]
+                   [--json] [--no-record]
 
     crew_select.py "review the ingest retry path" --task-type code-review
 """
@@ -104,10 +105,11 @@ MAX_DRAWS_PER_SLOT = 25
 # available so the snapshot's Beta parameters match the service's draws.
 DEFAULT_PRIOR_STRENGTH = 1.0
 
-# Thompson arm name -> callable gateway model ID.  The arm names are the keys in
-# the live thompson-sampling-state.json; the IDs are what the gateway accepts.
-# Keep in sync with MODEL_ALIASES in tools/ledger_to_thompson.py, which maps the
-# worker ledger's model IDs back to these same arm names.
+# Thompson arm name -> callable model ID.  The arm names are the keys in the
+# live thompson-sampling-state.json; the IDs are what the gateway (or, for
+# ``ollama/`` labels, the local Ollama provider) accepts.  Keep in sync with
+# MODEL_ALIASES in tools/ledger_to_thompson.py, which maps the worker ledger's
+# model IDs back to these same arm names.
 ARM_MODEL_IDS: Dict[str, str] = {
     "deepseek-v4.1-flash": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
     "glm-5-3": "rits/zai-org/glm-5-3",
@@ -116,6 +118,27 @@ ARM_MODEL_IDS: Dict[str, str] = {
     "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-5-5",
 }
+
+# Local Ollama models.  The arm name and the callable model ID are the same
+# ``ollama/<name>`` label; services/providers/registry.py strips the prefix and
+# sends ``<name>`` to Ollama.  These cost $0.00 per call, so they are eligible
+# under any max_cost and, once their posterior is competitive, the Thompson
+# draw starts preferring them on cost-weighted policies.
+OLLAMA_ARMS: List[str] = [
+    "ollama/qwen2.5-coder:3b",
+    "ollama/deepseek-r1:7b",
+    "ollama/qwen3:4b",
+    "ollama/qwen3:1.7b",
+    "ollama/qwen3.5:2b",
+    "ollama/gemma4:e2b",
+    "ollama/gemma3:4b",
+    "ollama/phi4-mini",          # Ollama resolves the bare name to :latest
+    "ollama/llama3.2:3b",
+    "ollama/granite3.2-vision:2b",
+]
+
+for _ollama_arm in OLLAMA_ARMS:
+    ARM_MODEL_IDS.setdefault(_ollama_arm, _ollama_arm)
 
 # Extra ledger spellings seen in the review ledger for the same arms.
 _MODEL_TO_ARM: Dict[str, str] = {model: arm for arm, model in ARM_MODEL_IDS.items()}
@@ -160,6 +183,28 @@ def arm_of(value: str) -> str:
 def model_of(arm: str) -> str:
     """Gateway model ID for an arm; unknown arms pass through unchanged."""
     return ARM_MODEL_IDS.get(arm, arm)
+
+
+def register_ollama_arms(client: Optional[ThompsonClient] = None,
+                         arms: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Register the local Ollama models as zero-call Thompson arms.
+
+    Registration is idempotent and records no outcome: each new arm starts at
+    Beta(1, 1) and must earn its posterior from real calls.  If the live
+    Thompson service predates the ``ensure_arms`` action, this reports the
+    failure instead of falling back to fabricated bootstrap outcomes.
+    """
+    active = client if client is not None else ThompsonClient()
+    names = list(arms if arms is not None else OLLAMA_ARMS)
+    response = active.ensure_arms(names)
+    if not response:
+        LOG.warning("Ollama arm registration failed (service unavailable or does not "
+                    "support ensure_arms); arms remain ineligible until registered")
+        return {"ok": False, "created": [], "models": names}
+    created = list(response.get("created") or [])
+    LOG.info("registered %d new Ollama arm(s); %d already present",
+             len(created), len(names) - len(created))
+    return {"ok": True, "created": created, "models": names}
 
 
 # learning.train task types -> this module's Thompson task types. ``other`` and
@@ -349,7 +394,9 @@ def _worker_row(slot: int, arm: str, source: str, draws: int) -> Dict[str, Any]:
         "slot": slot,
         "arm": arm,
         "model": model,
-        "mapped": model != arm,
+        # Known arms (including Ollama arms, whose label is also the callable
+        # model ID) are mapped; an unknown arm passes through but is flagged.
+        "mapped": arm in ARM_MODEL_IDS,
         "source": source,
         "draws": draws,
     }
@@ -633,6 +680,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="max average cost passed to Thompson (default: unlimited)")
     parser.add_argument("--max-draws-per-slot", type=int, default=MAX_DRAWS_PER_SLOT,
                         help=f"rejection-sampling budget per slot (default {MAX_DRAWS_PER_SLOT})")
+    parser.add_argument("--register-ollama-arms", action="store_true",
+                        help="register the local Ollama models as zero-call Thompson arms "
+                             "before drawing (idempotent; records no outcomes)")
     parser.add_argument("--json", action="store_true", help="print the full ledger row as JSON")
     parser.add_argument("--no-record", action="store_true",
                         help="do not write the exposure row to the crews ledger")
@@ -651,6 +701,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     task_type = args.task_type or infer_task_type(args.description)
     if args.learn_size and args.workers is not None:
         LOG.warning("--workers is ignored when --learn-size draws the crew size")
+    registration = None
+    if args.register_ollama_arms:
+        registration = register_ollama_arms()
     count = args.workers if args.workers is not None else DEFAULT_CREW_SIZE
     record = select_crew(
         task_type,
@@ -664,6 +717,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         record_selection=not args.no_record,
         learn_size=args.learn_size,
     )
+    if registration is not None:
+        record["ollama_registration"] = registration
     print(json.dumps(record, indent=2) if args.json else _format_record(record))
     return 0
 

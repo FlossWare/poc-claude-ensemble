@@ -1,8 +1,9 @@
-"""Single-runtime model routing for Claude Ensemble.
+"""Model routing for Claude Ensemble.
 
-All model work runs through the installed Claude Code CLI. Direct Anthropic and
-Google API adapters have been removed from this branch; the prior implementation
-is preserved on the archive branch.
+Hosted model work runs through the installed Claude Code CLI.  Local models run
+through Ollama (``ollama/<name>`` labels).  Direct Anthropic and Google API
+adapters have been removed from this branch; the prior implementation is
+preserved on the archive branch.
 """
 
 from __future__ import annotations
@@ -12,10 +13,16 @@ from collections.abc import Mapping
 
 from .claude_code import ClaudeCodeProvider
 from .model_provider import ModelProvider
+from .ollama import OllamaProvider
+
+CLAUDE_CODE_RUNTIME = "claude-code"
+OLLAMA_RUNTIME = "ollama"
+OLLAMA_PREFIX = "ollama/"
+SUPPORTED_RUNTIMES = frozenset({CLAUDE_CODE_RUNTIME, OLLAMA_RUNTIME})
 
 
 class ProviderRegistry:
-    """Compatibility facade that routes every model request through Claude Code."""
+    """Routes Claude labels to Claude Code and ``ollama/*`` labels to Ollama."""
 
     def __init__(
         self,
@@ -26,9 +33,10 @@ class ProviderRegistry:
         # runtimes instead of silently allowing multi-provider dispatch.
         self.providers: dict[str, ModelProvider] = {}
         for name, provider in (providers or {}).items():
-            if name != "claude-code":
+            if name not in SUPPORTED_RUNTIMES:
                 raise ValueError(
-                    f"Only the 'claude-code' runtime is supported; got {name!r}"
+                    f"Only the 'claude-code' runtime is supported (plus local "
+                    f"'ollama'); got {name!r}"
                 )
             self.providers[name] = provider
         self._configured_provider = os.environ.get(
@@ -40,32 +48,52 @@ class ProviderRegistry:
             )
 
     def _provider(self) -> ModelProvider:
-        if "claude-code" not in self.providers:
-            self.providers["claude-code"] = ClaudeCodeProvider(
+        if CLAUDE_CODE_RUNTIME not in self.providers:
+            self.providers[CLAUDE_CODE_RUNTIME] = ClaudeCodeProvider(
                 expected_provider=self._configured_provider
             )
-        return self.providers["claude-code"]
+        return self.providers[CLAUDE_CODE_RUNTIME]
+
+    def _ollama_provider(self) -> ModelProvider:
+        if OLLAMA_RUNTIME not in self.providers:
+            self.providers[OLLAMA_RUNTIME] = OllamaProvider()
+        return self.providers[OLLAMA_RUNTIME]
 
     def register(self, name: str, provider: ModelProvider) -> None:
-        if name != "claude-code":
+        if name not in SUPPORTED_RUNTIMES:
             raise ValueError(
-                f"Only the 'claude-code' runtime is supported; got {name!r}"
+                f"Only the 'claude-code' runtime is supported (plus local "
+                f"'ollama'); got {name!r}"
             )
         self.providers[name] = provider
 
     def resolve(self, model: str) -> ModelProvider:
-        self.resolve_model(model)
+        runtime, _ = self.resolve_model(model)
+        if runtime == OLLAMA_RUNTIME:
+            return self._ollama_provider()
         return self._provider()
 
     def resolve_model(self, model: str) -> tuple[str, str]:
-        """Preserve Claude model names and reject unsupported provider labels.
+        """Map a model label to ``(runtime, canonical model name)``.
 
-        Never silently substitute another model for an unsupported request.
+        ``ollama/<name>`` strips the prefix and returns ``("ollama", "<name>")``.
+        Claude labels are preserved and rejected provider labels raise.  Never
+        silently substitute another model for an unsupported request.
         """
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model must be a non-empty string")
         normalized = model.strip()
         lowered = normalized.lower()
+
+        if lowered == OLLAMA_RUNTIME or lowered.startswith(OLLAMA_PREFIX):
+            ollama_model = normalized[len(OLLAMA_PREFIX):].strip()
+            if not ollama_model:
+                raise ValueError(
+                    "ollama model label must include a model name, e.g. "
+                    "'ollama/qwen2.5-coder:3b'"
+                )
+            self._ollama_provider()
+            return OLLAMA_RUNTIME, ollama_model
 
         aliases = {"haiku", "sonnet", "opus"}
         if lowered in aliases:
@@ -76,7 +104,7 @@ class ProviderRegistry:
             raise ValueError(f"Unsupported model label: {normalized!r}")
 
         self._provider()
-        return "claude-code", canonical
+        return CLAUDE_CODE_RUNTIME, canonical
 
     def credential_status(self, provider: str) -> list[dict[str, object]]:
         """Return no API-key accounts; Claude Code owns authentication."""

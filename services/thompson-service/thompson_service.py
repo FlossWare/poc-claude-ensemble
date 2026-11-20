@@ -164,6 +164,23 @@ class ThompsonState:
             self.models[model_name] = ModelStats(model_name)
         return self.models[model_name]
 
+    def ensure_arms(self, model_names: list[str]) -> list[str]:
+        """Create zero-call arms without recording a fabricated outcome.
+
+        Registration is not evidence: an arm enters with Beta(1, 1) and is
+        explored by the normal Thompson draw. Outcomes arrive later from real
+        calls. Returns the names that were newly created.
+        """
+        created: list[str] = []
+        for model_name in model_names:
+            if model_name not in self.models:
+                self.models[model_name] = ModelStats(model_name)
+                created.append(model_name)
+        if created:
+            self.save()
+            logger.info(f"Registered {len(created)} new arm(s): {created}")
+        return created
+
     def select_model(self, task_type: str, required_capability: float = 0.5, max_cost: float = float('inf')) -> str:
         """
         Select best model using Thompson Sampling.
@@ -343,6 +360,13 @@ class ThompsonService:
                 logger.info(f"{ctx} Resetting model: {model}")
                 ok = self.state.reset(model)
                 return json.dumps({'ok': ok, 'request_id': ctx.request_id})
+
+            elif action == 'ensure_arms':
+                models = req_data.get('models') or []
+                created = self.state.ensure_arms(models)
+                logger.info(f"{ctx} Registered arms (new: {len(created)})")
+                return json.dumps({'ok': True, 'created': created,
+                                   'models': models, 'request_id': ctx.request_id})
 
             elif action == 'ping':
                 return json.dumps({'ok': True, 'message': 'pong', 'request_id': ctx.request_id})
