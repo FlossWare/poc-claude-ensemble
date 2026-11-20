@@ -40,6 +40,12 @@ os.environ["POC_CLAUDE_ENSEMBLE_GA_DIR"] = os.path.join(_TEST_ROOT, "learning", 
 # learning.train artifacts are read lazily by tools/ledger_to_thompson.py; keep
 # tests away from any operator-trained model.
 os.environ["POC_CLAUDE_ENSEMBLE_TRAIN_DIR"] = os.path.join(_TEST_ROOT, "learning", "train")
+# External-source caches and the prior registry must never touch the operator's
+# real ~/.FlossWare cache or seed the live Thompson state during tests.
+os.environ["POC_CLAUDE_ENSEMBLE_EXTERNAL_DIR"] = os.path.join(_TEST_ROOT, "learning", "external")
+os.environ["POC_CLAUDE_ENSEMBLE_PREDICTOR_DIR"] = os.path.join(
+    _TEST_ROOT, "learning", "predictors"
+)
 # The corpus allowlist must include the redirected ledger/policy roots.
 os.environ["POC_CLAUDE_ENSEMBLE_GA_ALLOWED_ROOTS"] = _TEST_ROOT
 os.environ.setdefault("POC_CLAUDE_ENSEMBLE_DEPLOYED_SERVICES_DIR", os.path.join(_TEST_ROOT, "deployed-services"))

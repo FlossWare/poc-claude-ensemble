@@ -105,7 +105,8 @@ def _describe_data(model_name: str, info: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def status(as_json: bool = False) -> int:
+def collect_status() -> dict[str, Any]:
+    """The status report without printing; shared by the CLI and tools/learn.py."""
     report: dict[str, Any] = {"artifact_dir": str(paths.train_dir()), "models": {}}
     for name in MODELS:
         path = paths.artifact_path(name)
@@ -131,6 +132,11 @@ def status(as_json: bool = False) -> int:
         except Exception as error:
             entry["data_error"] = f"{type(error).__name__}: {error}"
         report["models"][name] = entry
+    return report
+
+
+def status(as_json: bool = False) -> int:
+    report = collect_status()
 
     if as_json:
         print(json.dumps(report, indent=2, sort_keys=True, default=str))

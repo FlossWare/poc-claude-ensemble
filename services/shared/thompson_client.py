@@ -352,6 +352,37 @@ class ThompsonClient:
 
         return True
 
+    def seed_prior(
+        self,
+        model: str,
+        alpha: float,
+        beta: float,
+        *,
+        prior_strength: float = 1.0,
+        source: str = "external",
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Initialise an untested arm with an external Beta prior.
+
+        Returns True only when the service reports it actually seeded the arm.
+        An old daemon that does not know ``seed_prior`` answers
+        ``{"ok": false, "error": "Unknown action: seed_prior"}`` and this
+        returns False so the caller can fall back to the state file.
+        """
+        response = self._send_request({
+            'action': 'seed_prior',
+            'model': model,
+            'alpha': float(alpha),
+            'beta': float(beta),
+            'prior_strength': float(prior_strength),
+            'source': source,
+            'detail': dict(detail or {}),
+        })
+        if not response.get('ok'):
+            logger.warning(f"Failed to seed prior for {model}: {response.get('error')}")
+            return False
+        return bool(response.get('seeded'))
+
     def ping(self) -> bool:
         """Check if service is running"""
         response = self._send_request({'action': 'ping'})

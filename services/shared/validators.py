@@ -87,6 +87,32 @@ class Validators:
                 if req_data['tokens'] < 0:
                     return False, "field 'tokens': must be >= 0"
 
+        elif action == 'seed_prior':
+            if 'model' not in req_data:
+                return False, "missing field 'model': expected string"
+            if not isinstance(req_data['model'], str):
+                return False, "field 'model': expected string, got {}".format(
+                    type(req_data['model']).__name__)
+            for field in ('alpha', 'beta'):
+                if field not in req_data:
+                    return False, f"missing field '{field}': expected positive number"
+                value = req_data[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    return False, "field '{}': expected number, got {}".format(
+                        field, type(value).__name__)
+                if not (value > 0):
+                    return False, f"field '{field}': must be > 0"
+            if 'prior_strength' in req_data:
+                value = req_data['prior_strength']
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                    return False, "field 'prior_strength': must be a positive number"
+            if 'source' in req_data and not isinstance(req_data['source'], str):
+                return False, "field 'source': expected string, got {}".format(
+                    type(req_data['source']).__name__)
+            if 'detail' in req_data and not isinstance(req_data['detail'], dict):
+                return False, "field 'detail': expected object, got {}".format(
+                    type(req_data['detail']).__name__)
+
         elif action == 'reset':
             if 'model' not in req_data:
                 return False, "missing field 'model': expected string"
