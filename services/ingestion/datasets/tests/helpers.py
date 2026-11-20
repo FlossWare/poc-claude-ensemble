@@ -339,3 +339,139 @@ def memory_server():
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+class FakeIntegrationBackend:
+    """In-memory stand-in for Knowledge, Index and the retrieval services.
+
+    Records requests exactly like the real services understand them, so a test
+    can assert the integration sequence without a socket.
+    """
+
+    WINDOW = 1800
+    OVERLAP = 200
+
+    def __init__(self) -> None:
+        self.index: dict[str, dict[str, object]] = {}
+        self.knowledge: dict[str, dict[str, object]] = {}
+        self.chunks: dict[str, dict[str, object]] = {}
+        self.vectors: dict[str, dict[str, object]] = {}
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.fail_paths: set[str] = set()
+
+    # -- service doubles ---------------------------------------------------
+    def state(self, base, source_id, timeout=10):
+        current = self.index.get(source_id)
+        if current is None:
+            return None
+        return dict(current, source_id=source_id)
+
+    def post(self, base, path, payload, timeout=60):
+        self.calls.append((path, payload))
+        for prefix in self.fail_paths:
+            if path.startswith(prefix):
+                from ingestion.datasets.indexing import IndexingError
+
+                raise IndexingError("a required ingestion capability is unavailable", 503, "dependency_unavailable")
+        if path == "/records":
+            return self._records(payload)
+        if path.endswith("/tombstone"):
+            from urllib.parse import unquote
+
+            source_id = unquote(path[len("/records/") : -len("/tombstone")])
+            current = self.index.get(source_id)
+            sequence = int(payload.get("revision_sequence") or 1)
+            if current is None:
+                self.index[source_id] = {
+                    "high_sequence": sequence,
+                    "revision_id": "tombstone",
+                    "tombstoned": True,
+                }
+                return {"ok": True, "decision": "tombstoned"}
+            if sequence >= int(current["high_sequence"]):
+                current["tombstoned"] = True
+                current["high_sequence"] = max(sequence, int(current["high_sequence"]))
+                return {"ok": True, "decision": "tombstoned"}
+            return {"ok": True, "decision": "superseded"}
+        if path == "/chunk":
+            return {"ok": True, "chunks": self._chunk(payload)}
+        if path == "/embeddings":
+            texts = payload.get("texts") or []
+            return {"ok": True, "embeddings": [[float(len(text) % 11), 0.5, 0.25, 0.125] for text in texts]}
+        if path == "/knowledge/documents":
+            for row in payload.get("chunks") or []:
+                self.chunks.setdefault(row["chunk_id"], row)
+            return {"ok": True, "inserted": len(payload.get("chunks") or [])}
+        if path == "/collections/knowledge_chunks/upsert":
+            for vector_id, meta in zip(payload.get("ids") or [], payload.get("metadatas") or []):
+                self.vectors[vector_id] = meta
+            return {"ok": True, "upserted": len(payload.get("ids") or [])}
+        if path == "/collections/knowledge_chunks/delete-superseded":
+            keep = payload.get("keep_sha256")
+            url = payload.get("url")
+            stale = [
+                vector_id
+                for vector_id, meta in self.vectors.items()
+                if meta.get("url") == url and meta.get("content_sha256") != keep
+            ]
+            for vector_id in stale:
+                del self.vectors[vector_id]
+            return {"ok": True, "deleted": len(stale)}
+        return {"ok": True}
+
+    # -- behaviour ---------------------------------------------------------
+    def _records(self, payload):
+        source_id = payload["source_id"]
+        sequence = int(payload["revision_sequence"])
+        revision_id = payload["revision_id"]
+        current = self.index.get(source_id)
+        if current is not None and current.get("tombstoned"):
+            return {"ok": True, "decision": "tombstoned", "stored": False}
+        if current is None:
+            self.index[source_id] = {
+                "high_sequence": sequence,
+                "revision_id": revision_id,
+                "tombstoned": False,
+            }
+            self.knowledge[source_id] = dict(payload)
+            return {"ok": True, "decision": "accepted", "stored": True}
+        if sequence < int(current["high_sequence"]):
+            return {"ok": True, "decision": "superseded", "stored": False}
+        if sequence == int(current["high_sequence"]):
+            if current["revision_id"] == revision_id:
+                return {"ok": True, "decision": "duplicate", "stored": False}
+            return {"ok": True, "decision": "conflict", "stored": False}
+        current["high_sequence"] = sequence
+        current["revision_id"] = revision_id
+        self.knowledge[source_id] = dict(payload)
+        return {"ok": True, "decision": "accepted", "stored": True}
+
+    def _chunk(self, payload):
+        text = str(payload.get("text") or "")
+        source_id = str(payload.get("source_id") or "")
+        profile = str(payload.get("profile") or "window-v1")
+        spans = []
+        start = 0
+        while start < len(text):
+            end = min(start + self.WINDOW, len(text))
+            spans.append((start, end))
+            if end >= len(text):
+                break
+            start += self.WINDOW - self.OVERLAP
+        chunks = []
+        for index, (start, end) in enumerate(spans):
+            key = f"{profile}|1|{source_id}|{start}|{end}"
+            chunks.append(
+                {
+                    "chunk_id": __import__("hashlib").sha256(key.encode()).hexdigest(),
+                    "index": index,
+                    "start": start,
+                    "end": end,
+                    "header": "",
+                    "text": text[start:end],
+                }
+            )
+        return chunks
+
+    def paths(self) -> list[str]:
+        return [path for path, _ in self.calls]

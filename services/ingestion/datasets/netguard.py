@@ -461,6 +461,20 @@ class Transport:
             except OSError:
                 pass
 
+    # -- convenience ----------------------------------------------------
+    def head(self, url: str) -> NetResponse:
+        return self.request(url, method="HEAD")
+
+    def get_range_probe(self, url: str) -> NetResponse:
+        return self.request(url, method="GET", headers={"Range": "bytes=0-0"})
+
+    def fetch_bytes(self, url: str, *, max_bytes: int) -> tuple[bytes, NetResponse]:
+        response = self.request(url, method="GET", max_bytes=max_bytes, store_body=True)
+        if response.status < 200 or response.status >= 300:
+            raise status_error(response.status, response.final_url, response.redirect_chain)
+        return response.body or b"", response
+
+
 class StreamResponse:
     """A live, unbuffered response body handed out by :meth:`Transport.open_stream`."""
 
@@ -498,20 +512,6 @@ class StreamResponse:
             raise NetguardError("tls_failure", "TLS failure while reading the response", retryable=True) from exc
         except (http.client.HTTPException, OSError) as exc:
             raise NetguardError("connection_failed", "connection failed while reading the response", retryable=True) from exc
-
-    # -- convenience ----------------------------------------------------
-    def head(self, url: str) -> NetResponse:
-        return self.request(url, method="HEAD")
-
-    def get_range_probe(self, url: str) -> NetResponse:
-        return self.request(url, method="GET", headers={"Range": "bytes=0-0"})
-
-    def fetch_bytes(self, url: str, *, max_bytes: int) -> tuple[bytes, NetResponse]:
-        response = self.request(url, method="GET", max_bytes=max_bytes, store_body=True)
-        if response.status < 200 or response.status >= 300:
-            raise status_error(response.status, response.final_url, response.redirect_chain)
-        return response.body or b"", response
-
 
 def status_error(status: int, final_url: str, redirect_chain: list[str]) -> NetguardError:
     if status == 401:

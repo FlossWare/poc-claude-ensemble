@@ -7,14 +7,16 @@ loop is capped by configuration (records, fields, cell size, line length, JSON
 depth, XML depth).
 
 PR 4 owns the text projection, sharding and indexing.  This module stops at
-"normalized records", which is why :func:`parse_file` returns counts plus a
-small bounded sample rather than materialising a 100,000-row table in memory.
+"normalized records".  :func:`parse_file` returns counts plus a small bounded
+sample; :func:`iter_records` streams every record lazily, so normalization can
+consume a 100,000-row table without materialising it in memory.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 from ..config import Config
 from ..model import sanitize_nested
@@ -180,45 +182,113 @@ def _bounded_lines(handle, max_line_chars: int):
 
 
 @dataclass
-class _Collector:
-    """Accumulates counts, observed fields and a bounded sample."""
+class StreamSummary:
+    """Mutable facts an adapter reports while streaming records.
 
-    max_sample: int
-    sample: list[Record] = field(default_factory=list)
-    count: int = 0
+    ``parse_file`` and the PR 4 normalizer both consume :func:`iter_records`;
+    this holder lets an adapter report fields, encoding and warnings without
+    buffering the records themselves.
+    """
+
+    adapter: str | None = None
+    fields: tuple[str, ...] = ()
+    encoding: str | None = None
     truncated: bool = False
+    count: int = 0
+    warnings: list[str] = field(default_factory=list)
 
-    def add(self, record: Record) -> None:
-        self.count += 1
-        if len(self.sample) < self.max_sample:
-            self.sample.append(record)
+    def warn(self, *values: str) -> None:
+        self.warnings.extend(values)
 
 
-def _summary(
-    adapter: str,
-    collector: _Collector,
+def _iter_csv(path, *, name, media_type, config, kind, summary):
+    from . import csv_adapter
+
+    return csv_adapter.iter_records(path, config=config, kind=kind, summary=summary)
+
+
+def _iter_json(path, *, name, media_type, config, kind, summary):
+    from . import json_adapter
+
+    return json_adapter.iter_records(path, config=config, kind=kind, summary=summary)
+
+
+def _iter_xml(path, *, name, media_type, config, kind, summary):
+    from . import xml_adapter
+
+    return xml_adapter.iter_records(path, config=config, summary=summary)
+
+
+def _iter_text(path, *, name, media_type, config, kind, summary):
+    from . import text_adapter
+
+    return text_adapter.iter_records(path, config=config, kind=kind, summary=summary)
+
+
+def _iter_parquet(path, *, name, media_type, config, kind, summary):
+    from . import parquet_adapter
+
+    return parquet_adapter.iter_records(path, config=config, summary=summary)
+
+
+_ADAPTER_ITERATORS = {
+    "csv": _iter_csv,
+    "tsv": _iter_csv,
+    "json": _iter_json,
+    "jsonl": _iter_json,
+    "xml": _iter_xml,
+    "text": _iter_text,
+    "markdown": _iter_text,
+    "parquet": _iter_parquet,
+}
+
+
+def iter_records(
+    path: Path,
     *,
-    fields: tuple[str, ...],
-    warnings: tuple[str, ...],
-    encoding: str | None,
-    bytes_read: int,
-    media_kind: str,
-) -> ParseResult:
-    return ParseResult(
-        adapter=adapter,
-        status="parsed",
-        record_count=collector.count,
-        truncated=collector.truncated,
-        fields=fields,
-        sample=tuple(
-            Record(record.index, record.kind, sanitize_nested(record.data))
-            for record in collector.sample
-        ),
-        warnings=warnings,
-        encoding=encoding,
-        bytes_read=bytes_read,
-        media_kind=media_kind,
-    )
+    name: str | None,
+    media_type: str | None,
+    config: Config,
+    kind: str | None = None,
+    summary: StreamSummary | None = None,
+) -> Iterator[Record]:
+    """Stream every normalized record from one file.
+
+    Records are produced lazily and URL query strings are stripped on the way
+    out.  Adapter limits raise :class:`AdapterError`; an empty file raises
+    ``empty_content`` after yielding nothing.  The caller owns ``summary`` so
+    fields and warnings survive an exception.
+    """
+    path = Path(path)
+    holder = summary if summary is not None else StreamSummary()
+    resolved = kind
+    if resolved is None:
+        try:
+            prefix = _read_prefix(path, config.acquire_sniff_prefix_bytes)
+        except OSError as exc:
+            raise AdapterError(
+                "parse_error", f"file could not be opened: {type(exc).__name__}"
+            ) from exc
+        resolved = normalize_kind(name, media_type, prefix)
+    if resolved is None or resolved == "archive":
+        raise AdapterError(
+            "unsupported_format", f"no adapter for {name or media_type or 'unknown content'}"
+        )
+    if resolved == "pdf":
+        raise AdapterError("adapter_unavailable", "PDF extraction is disabled for datasets")
+    if resolved == "parquet" and not config.parquet_enabled:
+        raise AdapterError("adapter_unavailable", "pyarrow is not installed")
+    iterator = _ADAPTER_ITERATORS.get(resolved)
+    if iterator is None:
+        raise AdapterError("unsupported_format", f"no adapter for {resolved}")
+    holder.adapter = resolved
+    try:
+        for record in iterator(
+            path, name=name, media_type=media_type, config=config, kind=resolved, summary=holder
+        ):
+            yield Record(record.index, record.kind, sanitize_nested(record.data))
+    finally:
+        holder.warnings = sorted(set(holder.warnings))
 
 
 def parse_file(
@@ -229,7 +299,7 @@ def parse_file(
     config: Config,
     kind: str | None = None,
 ) -> ParseResult:
-    """Parse one file into a bounded summary of normalized records."""
+    """Parse one file into counts, observed fields and a bounded record sample."""
     path = Path(path)
     try:
         prefix = _read_prefix(path, config.acquire_sniff_prefix_bytes)
@@ -261,43 +331,57 @@ def parse_file(
             detail="pyarrow is not installed",
             media_kind=resolved,
         )
+    summary = StreamSummary()
+    sample: list[Record] = []
     try:
-        # Imported lazily so an unrelated adapter failure cannot cascade.
-        from . import csv_adapter, json_adapter, text_adapter, xml_adapter
-
-        if resolved in {"csv", "tsv"}:
-            return csv_adapter.parse(
-                path,
-                name=name,
-                media_type=media_type,
-                config=config,
-                kind=resolved,
-            )
-        if resolved in {"json", "jsonl"}:
-            return json_adapter.parse(
-                path,
-                name=name,
-                media_type=media_type,
-                config=config,
-                kind=resolved,
-            )
-        if resolved == "xml":
-            return xml_adapter.parse(path, config=config)
-        if resolved in {"text", "markdown"}:
-            return text_adapter.parse(path, config=config, kind=resolved)
-        if resolved == "parquet":
-            from . import parquet_adapter
-
-            return parquet_adapter.parse(path, config=config)
+        for record in iter_records(
+            path,
+            name=name,
+            media_type=media_type,
+            config=config,
+            kind=resolved,
+            summary=summary,
+        ):
+            if len(sample) < config.adapter_max_sample_records:
+                sample.append(record)
     except AdapterError as exc:
+        if exc.code == "empty_content":
+            return ParseResult(
+                adapter=resolved,
+                status="skipped",
+                reason_code="empty_content",
+                detail=exc.detail,
+                fields=summary.fields,
+                warnings=summary.warnings,
+                encoding=summary.encoding,
+                bytes_read=_file_size(path),
+                media_kind=resolved,
+            )
         return _failed(resolved, exc.code, exc.detail)
     except (ValueError, UnicodeError, OSError, EOFError) as exc:
         return _failed(resolved, "parse_error", type(exc).__name__)
+    if summary.count == 0:
+        return ParseResult(
+            adapter=resolved,
+            status="skipped",
+            reason_code="empty_content",
+            detail="file contains no records",
+            fields=summary.fields,
+            warnings=summary.warnings,
+            encoding=summary.encoding,
+            bytes_read=_file_size(path),
+            media_kind=resolved,
+        )
     return ParseResult(
-        adapter=None,
-        status="skipped",
-        reason_code="unsupported_format",
-        detail=f"no adapter for {resolved}",
+        adapter=resolved,
+        status="parsed",
+        record_count=summary.count,
+        truncated=summary.truncated,
+        fields=summary.fields,
+        sample=tuple(sample),
+        warnings=summary.warnings,
+        encoding=summary.encoding,
+        bytes_read=_file_size(path),
         media_kind=resolved,
     )
 
@@ -329,6 +413,8 @@ __all__ = [
     "AdapterError",
     "ParseResult",
     "Record",
+    "StreamSummary",
+    "iter_records",
     "normalize_kind",
     "parse_file",
     "sniff_kind",

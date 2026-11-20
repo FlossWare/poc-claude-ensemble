@@ -8,17 +8,10 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from typing import Iterator
 
 from ..config import Config
-from . import (
-    AdapterError,
-    ParseResult,
-    Record,
-    _Collector,
-    _decode_probe,
-    _file_size,
-    _summary,
-)
+from . import AdapterError, Record, StreamSummary, _decode_probe
 
 #: Header cells that mean "this column has no name".
 _EMPTY_HEADERS = ("", "-", "—")
@@ -72,21 +65,14 @@ def _row_fields(
     return fields, warnings
 
 
-def parse(
-    path: Path,
-    *,
-    name: str | None,
-    media_type: str | None,
-    config: Config,
-    kind: str,
-) -> ParseResult:
+def iter_records(
+    path: Path, *, config: Config, kind: str, summary: StreamSummary
+) -> Iterator[Record]:
     delimiter = "\t" if kind == "tsv" else ","
     encoding, warnings = _decode_probe(path, config)
-    collector = _Collector(max_sample=config.adapter_max_sample_records)
-    truncated = False
+    summary.encoding = encoding
+    summary.warn(*warnings)
     header: list[str] | None = None
-    field_names: tuple[str, ...] = ()
-    warning_set: set[str] = set(warnings)
     try:
         with path.open("r", encoding=encoding, newline="", errors="strict") as handle:
             reader = csv.reader(handle, delimiter=delimiter, strict=True)
@@ -95,13 +81,13 @@ def parse(
                     continue
                 if header is None:
                     header, header_warnings = _unique_header(row, config.max_fields)
-                    field_names = tuple(header)
-                    warning_set.update(header_warnings)
+                    summary.fields = tuple(header)
+                    summary.warn(*header_warnings)
                     continue
                 # The cap counts data records, never the header row.
-                if collector.count >= config.max_records_per_file:
-                    truncated = True
-                    break
+                if summary.count >= config.max_records_per_file:
+                    summary.truncated = True
+                    return
                 if sum(len(cell) for cell in row) > config.max_line_chars:
                     raise AdapterError(
                         "limits_exceeded",
@@ -110,8 +96,9 @@ def parse(
                 fields, row_warnings = _row_fields(
                     row, header, config.max_fields, config.max_cell_chars
                 )
-                warning_set.update(row_warnings)
-                collector.add(Record(collector.count, "row", fields))
+                summary.warn(*row_warnings)
+                yield Record(summary.count, "row", fields)
+                summary.count += 1
     except AdapterError:
         raise
     except csv.Error as exc:
@@ -120,34 +107,6 @@ def parse(
         raise AdapterError("encoding_error", "delimited text is not valid in its encoding") from exc
 
     if header is None:
-        return ParseResult(
-            adapter=kind,
-            status="skipped",
-            reason_code="empty_content",
-            detail="delimited file has no header row",
-            encoding=encoding,
-            bytes_read=_file_size(path),
-            media_kind=kind,
-        )
-    if collector.count == 0:
-        return ParseResult(
-            adapter=kind,
-            status="skipped",
-            reason_code="empty_content",
-            detail="delimited file has a header but no rows",
-            fields=field_names,
-            warnings=tuple(sorted(warning_set)),
-            encoding=encoding,
-            bytes_read=_file_size(path),
-            media_kind=kind,
-        )
-    collector.truncated = truncated
-    return _summary(
-        kind,
-        collector,
-        fields=field_names,
-        warnings=tuple(sorted(warning_set)),
-        encoding=encoding,
-        bytes_read=_file_size(path),
-        media_kind=kind,
-    )
+        raise AdapterError("empty_content", "delimited file has no header row")
+    if summary.count == 0:
+        raise AdapterError("empty_content", "delimited file has a header but no rows")

@@ -688,11 +688,286 @@ def render_acquisition_markdown(report: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def build_integration_report(
+    rows: list[dict[str, object]],
+    integrations: list[object],
+    *,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    accounting: object,
+    generated_at: str,
+    duration_ms: int,
+    exit_code: int,
+    manifest_path: str,
+    manifest_changed: bool,
+    outcomes_added: int,
+    ledger_result: dict[str, object],
+    integrate_version: int,
+    normalize_version: int,
+    indexing_version: int,
+    adapter_version: int,
+    sample: int | None,
+    limit: int | None,
+    truncated: bool,
+    include_metadata_only: bool,
+    journal: dict[str, object],
+) -> dict[str, object]:
+    by_entry = {item.entry_id: item for item in integrations}  # type: ignore[attr-defined]
+    status_counts = dict(accounting.status_counts)  # type: ignore[attr-defined]
+    entries: list[dict[str, object]] = []
+    adapter_totals: Counter[str] = Counter()
+    record_kinds: Counter[str] = Counter()
+    decisions: Counter[str] = Counter()
+    knowledge_records = 0
+    for row in sorted(rows, key=lambda item: str(item.get("entry_id"))):
+        entry_id = str(row.get("entry_id") or "")
+        integration = by_entry.get(entry_id)
+        if integration is None:
+            continue
+        artifact = integration.to_artifact()  # type: ignore[attr-defined]
+        metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else None
+        content = artifact.get("content") if isinstance(artifact.get("content"), dict) else {}
+        assert isinstance(content, dict)
+        for item in [metadata, *list(content.get("records") or [])]:
+            if not isinstance(item, dict):
+                continue
+            record_kinds[str(item.get("kind"))] += 1
+            decision = item.get("knowledge_decision")
+            if decision:
+                decisions[str(decision)] += 1
+            if item.get("status") in {"indexed", "unchanged"}:
+                knowledge_records += 1
+        for file_outcome in artifact.get("files") or []:
+            if isinstance(file_outcome, dict) and file_outcome.get("adapter"):
+                adapter_totals[str(file_outcome["adapter"])] += 1
+        entries.append(
+            {
+                "entry_id": entry_id,
+                "title": row.get("title"),
+                "category": row.get("category"),
+                "license_policy": _license_policy(row),
+                "status": artifact.get("status"),
+                "reason_code": artifact.get("reason_code"),
+                "detail": artifact.get("detail"),
+                "retryable": artifact.get("retryable"),
+                "records_total": artifact.get("records_total"),
+                "shards": artifact.get("shards"),
+                "chunks": artifact.get("chunks"),
+                "vectors": artifact.get("vectors"),
+                "truncated": artifact.get("truncated"),
+                "metadata": metadata,
+                "content": {
+                    "shards": content.get("shards"),
+                    "indexed": content.get("indexed"),
+                    "unchanged": content.get("unchanged"),
+                    "skipped": content.get("skipped"),
+                    "failed": content.get("failed"),
+                    "records": list(content.get("records") or []),
+                },
+                "files": list(artifact.get("files") or []),
+                "tombstoned": list(artifact.get("tombstoned") or []),
+            }
+        )
+    counts = {
+        "status": status_counts,
+        "reason": _count(entries, lambda entry: entry.get("reason_code")),
+        "license_policy": _count(entries, lambda entry: entry.get("license_policy")),
+        "category": _count(entries, lambda entry: entry.get("category")),
+        "adapter": dict(sorted(adapter_totals.items())),
+        "record_kind": dict(sorted(record_kinds.items())),
+        "knowledge_decision": dict(sorted(decisions.items())),
+    }
+    content_records = [
+        item
+        for entry in entries
+        for item in (entry.get("content") or {}).get("records") or []
+        if isinstance(item, dict)
+    ]
+    funnel = {
+        "discovered": accounting.discovered,  # type: ignore[attr-defined]
+        "integrated": sum(
+            1
+            for entry in entries
+            if entry.get("status") in {"indexed", "metadata_indexed", "unchanged"}
+        ),
+        "normalized": sum(1 for entry in entries if entry.get("metadata") is not None),
+        "indexed": status_counts.get("indexed", 0),
+        "metadata_indexed": status_counts.get("metadata_indexed", 0),
+        "unchanged": status_counts.get("unchanged", 0),
+        "skipped": status_counts.get("skipped", 0),
+        "failed": status_counts.get("failed", 0),
+        "deferred": status_counts.get("deferred", 0),
+        "records": sum(int(entry.get("records_total") or 0) for entry in entries),
+        "shards": len(content_records),
+        "knowledge_records": knowledge_records,
+        "indexed_records": sum(
+            1 for item in content_records if item.get("status") == "indexed"
+        ),
+        "unchanged_records": sum(
+            1 for item in content_records if item.get("status") == "unchanged"
+        ),
+        "failed_records": sum(
+            1 for item in content_records if item.get("status") == "failed"
+        ),
+        "chunks": sum(int(entry.get("chunks") or 0) for entry in entries),
+        "vectors": sum(int(entry.get("vectors") or 0) for entry in entries),
+    }
+    return {
+        "schema_version": 1,
+        "report_type": "integration",
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "sample": sample,
+        "limit": limit,
+        "truncated": truncated,
+        "include_metadata_only": include_metadata_only,
+        "integrate_version": integrate_version,
+        "normalize_version": normalize_version,
+        "indexing_version": indexing_version,
+        "adapter_version": adapter_version,
+        "catalog": {
+            "repo": snapshot.repo,
+            "commit": snapshot.commit,
+            "snapshot_sha256": snapshot.snapshot_sha256,
+            "mode": snapshot.mode,
+            "entries": len(entries),
+            "discovered_files": len(snapshot.files),
+            "warnings": snapshot.warnings,
+        },
+        "counts": {"discovered": accounting.discovered, **counts},  # type: ignore[attr-defined]
+        "funnel": funnel,
+        "invariant": {
+            "ok": accounting.ok,  # type: ignore[attr-defined]
+            "discovered": accounting.discovered,  # type: ignore[attr-defined]
+            "status_total": accounting.status_total,  # type: ignore[attr-defined]
+            "missing_reason": accounting.missing_reason[:100],  # type: ignore[attr-defined]
+            "problems": accounting.problems,  # type: ignore[attr-defined]
+        },
+        "manifest": {"path": manifest_path, "changed": manifest_changed},
+        "outcomes_added": outcomes_added,
+        "journal": journal,
+        "ledger": ledger_result,
+        "entries": entries,
+    }
+
+
+def render_integration_markdown(report: dict[str, object]) -> str:
+    catalog = report.get("catalog") or {}
+    counts = report.get("counts") or {}
+    funnel = report.get("funnel") or {}
+    invariant = report.get("invariant") or {}
+    journal = report.get("journal") or {}
+    assert isinstance(catalog, dict)
+    assert isinstance(counts, dict)
+    assert isinstance(funnel, dict)
+    assert isinstance(invariant, dict)
+    assert isinstance(journal, dict)
+    lines: list[str] = [
+        "# Dataset normalization and indexing report",
+        "",
+        f"- Run: `{report.get('run_id')}`",
+        f"- Generated: {report.get('generated_at')}",
+        f"- Catalog: `{catalog.get('repo')}` @ `{catalog.get('commit')}`",
+        f"- Versions: integrate {report.get('integrate_version')}, normalize "
+        f"{report.get('normalize_version')}, indexing {report.get('indexing_version')}, "
+        f"adapter {report.get('adapter_version')}",
+        f"- Sample: {report.get('sample')} / Limit: {report.get('limit')}",
+        f"- Include metadata-only entries: {report.get('include_metadata_only')}",
+        f"- Exit code: {report.get('exit_code')}",
+        f"- Completion journal: {journal.get('entries')} revision(s), enabled "
+        f"{journal.get('enabled')}",
+        "",
+        "## Accounting invariant",
+        "",
+        f"- Holds: **{invariant.get('ok')}**",
+        f"- Discovered: {invariant.get('discovered')}",
+        f"- Current statuses: {invariant.get('status_total')}",
+        f"- Missing reason codes: {len(invariant.get('missing_reason') or [])}",
+    ]
+    problems = invariant.get("problems") or []
+    if problems:
+        lines.append(f"- Problems: {', '.join(_md(item) for item in problems)}")
+    lines.extend(["", "## Funnel", "", "| Stage | Count |", "|---|---:|"])
+    for key, value in funnel.items():
+        lines.append(f"| {_md(key)} | {value} |")
+    lines.append("")
+    for key in (
+        "status",
+        "reason",
+        "license_policy",
+        "knowledge_decision",
+        "record_kind",
+        "adapter",
+        "category",
+    ):
+        lines.extend(_table(key.replace("_", " ").title(), counts.get(key) or {}))
+    ledger = report.get("ledger") or {}
+    lines.extend(
+        [
+            "## Ledger",
+            "",
+            f"- Enabled: {ledger.get('enabled')}",
+            f"- Posted: {ledger.get('posted')}",
+            f"- Duplicate (append-once): {ledger.get('duplicate')}",
+            "",
+            "## Per-entry outcomes",
+            "",
+            "| Entry | Status | Reason | Records | Shards | Chunks | Vectors |",
+            "|---|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    for entry in report.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        lines.append(
+            "| {entry} | {status} | {reason} | {records} | {shards} | {chunks} | {vectors} |".format(
+                entry=_md(entry.get("entry_id")),
+                status=_md(entry.get("status")),
+                reason=_md(entry.get("reason_code") or "(none)"),
+                records=entry.get("records_total"),
+                shards=entry.get("shards"),
+                chunks=entry.get("chunks"),
+                vectors=entry.get("vectors"),
+            )
+        )
+    failed = [
+        (entry, record)
+        for entry in report.get("entries") or []
+        if isinstance(entry, dict)
+        for record in (entry.get("content") or {}).get("records") or []
+        if isinstance(record, dict) and record.get("status") not in {"indexed", "unchanged"}
+    ]
+    lines.extend(
+        [
+            "",
+            "## Non-indexed records",
+            "",
+            "| Entry | Record | Status | Reason |",
+            "|---|---|---|---|",
+        ]
+    )
+    for entry, record in failed:
+        lines.append(
+            "| {entry} | {record} | {status} | {reason} |".format(
+                entry=_md(entry.get("entry_id")),
+                record=_md(record.get("source_id")),
+                status=_md(record.get("status")),
+                reason=_md(record.get("reason_code") or "(none)"),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_markdown(report: dict[str, object]) -> str:
     if report.get("report_type") == "resolution":
         return render_resolution_markdown(report)
     if report.get("report_type") == "acquisition":
         return render_acquisition_markdown(report)
+    if report.get("report_type") == "integration":
+        return render_integration_markdown(report)
     catalog = report.get("catalog") or {}
     counts = report.get("counts") or {}
     funnel = report.get("funnel") or {}

@@ -9,17 +9,10 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
+from typing import Iterator
 
 from ..config import Config
-from . import (
-    AdapterError,
-    ParseResult,
-    Record,
-    _Collector,
-    _decode_probe,
-    _file_size,
-    _summary,
-)
+from . import AdapterError, Record, StreamSummary, _decode_probe, _file_size
 
 _FORBIDDEN = (b"<!doctype", b"<!entity")
 
@@ -72,13 +65,17 @@ def _depth(root: ElementTree.Element, max_depth: int) -> None:
             stack.append((child, depth + 1))
 
 
-def parse(path: Path, *, config: Config) -> ParseResult:
+def iter_records(
+    path: Path, *, config: Config, summary: StreamSummary
+) -> Iterator[Record]:
     size = _file_size(path)
     if size > config.max_file_bytes:
         raise AdapterError(
             "limits_exceeded", f"XML document exceeds {config.max_file_bytes} bytes"
         )
     encoding, warnings = _decode_probe(path, config)
+    summary.encoding = encoding
+    summary.warn(*warnings)
     try:
         payload = path.read_bytes()
     except OSError as exc:
@@ -94,44 +91,26 @@ def parse(path: Path, *, config: Config) -> ParseResult:
         raise AdapterError("parse_error", f"invalid XML: {exc}") from exc
     _depth(root, config.max_xml_depth)
 
-    collector = _Collector(max_sample=config.adapter_max_sample_records)
     children = list(root)
     if children:
+        summary.fields = ("tag",) + tuple(
+            str(child.tag) for child in children[: config.max_fields]
+        )
         for index, child in enumerate(children):
             if index >= config.max_records_per_file:
-                collector.truncated = True
-                break
-            collector.add(
-                Record(
-                    index,
-                    "object",
-                    {"tag": str(child.tag), **_element_fields(child, config.max_fields)},
-                )
+                summary.truncated = True
+                return
+            yield Record(
+                index,
+                "object",
+                {"tag": str(child.tag), **_element_fields(child, config.max_fields)},
             )
-        fields = ("tag",) + tuple(str(child.tag) for child in children[: config.max_fields])
+            summary.count += 1
     else:
-        collector.add(
-            Record(0, "object", {"tag": str(root.tag), **_element_fields(root, config.max_fields)})
+        summary.fields = ("tag",) + tuple(str(child.tag) for child in list(root))
+        yield Record(
+            0, "object", {"tag": str(root.tag), **_element_fields(root, config.max_fields)}
         )
-        fields = ("tag",) + tuple(str(child.tag) for child in list(root))
-    if collector.count == 0:
-        return ParseResult(
-            adapter="xml",
-            status="skipped",
-            reason_code="empty_content",
-            detail="XML document contains no records",
-            fields=fields,
-            warnings=warnings,
-            encoding=encoding,
-            bytes_read=size,
-            media_kind="xml",
-        )
-    return _summary(
-        "xml",
-        collector,
-        fields=fields,
-        warnings=warnings,
-        encoding=encoding,
-        bytes_read=size,
-        media_kind="xml",
-    )
+        summary.count += 1
+    if summary.count == 0:
+        raise AdapterError("empty_content", "XML document contains no records")

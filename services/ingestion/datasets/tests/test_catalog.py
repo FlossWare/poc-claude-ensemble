@@ -237,3 +237,38 @@ def test_real_pinned_snapshot(tmp_path):
         for row in build.rows
         if row["license"]["dataset"]["family"] == "unknown"
     ) == 644
+
+
+def test_transport_exposes_bounded_fetch_helpers(tmp_path, monkeypatch):
+    """Remote catalog loading depends on Transport.fetch_bytes, not StreamResponse."""
+    from ingestion.datasets.netguard import NetguardError, NetResponse, StreamResponse, Transport
+
+    config = make_config(tmp_path)
+    transport = Transport(config)
+    calls: dict[str, object] = {}
+
+    def fake_request(url, *, method="GET", headers=None, max_bytes=0, store_body=False):
+        calls.update(
+            url=url, method=method, max_bytes=max_bytes, store_body=store_body
+        )
+        return NetResponse(status=200, headers={}, final_url=url, body=b"payload")
+
+    monkeypatch.setattr(transport, "request", fake_request)
+    body, response = transport.fetch_bytes("https://example.org/catalog.json", max_bytes=123)
+    assert body == b"payload"
+    assert response.status == 200
+    assert calls == {
+        "url": "https://example.org/catalog.json",
+        "method": "GET",
+        "max_bytes": 123,
+        "store_body": True,
+    }
+
+    def not_found(url, *, method="GET", headers=None, max_bytes=0, store_body=False):
+        return NetResponse(status=404, headers={}, final_url=url, body=b"")
+
+    monkeypatch.setattr(transport, "request", not_found)
+    with pytest.raises(NetguardError) as caught:
+        transport.fetch_bytes("https://example.org/missing", max_bytes=10)
+    assert caught.value.code == "not_found"
+    assert not hasattr(StreamResponse, "fetch_bytes")

@@ -1,8 +1,8 @@
-# Dataset inventory, classification, resolution and acquisition (PR 1 + PR 2 + PR 3)
+# Dataset inventory, classification, resolution, acquisition and indexing (PR 1 + PR 2 + PR 3 + PR 4)
 
-This package implements sections 5 (PR 1), the resolution stage (PR 2) and the
-acquisition/archive/adapter stage (PR 3) of the arbitrated Awesome Public
-Datasets ingestion design:
+This package implements sections 5 (PR 1), the resolution stage (PR 2), the
+acquisition/archive/adapter stage (PR 3) and the normalization/integration
+stage (PR 4) of the arbitrated Awesome Public Datasets ingestion design:
 
 - **PR 1**: full-catalog inventory, license/format/scheme classification, an
   optional bounded accessibility probe, a manifest, a report and one summary
@@ -14,10 +14,14 @@ Datasets ingestion design:
   entries whose license permits it, into a content-addressed store; hostile
   archive inspection and member-by-member extraction; and format adapters for
   CSV/TSV, JSON, JSONL/NDJSON, XML, text/Markdown and (optionally) Parquet.
+- **PR 4**: deterministic normalization into the canonical record envelope,
+  bounded text projection and sharding, submission to Knowledge, chunking,
+  embedding, lexical/vector indexing, per-record outcomes and content-hash
+  idempotency.
 
-Out of scope for PR 3 (and deliberately not built here): normalization and
-text projection, Knowledge/Index/Lexical/Vector writes, Graph writes, retry
-hardening beyond the recorded `next_retry_at`, and nested archive expansion.
+Out of scope for PR 4 (and deliberately not built here): Graph writes and the
+resume/retry hardening campaign (PR 5), nested archive expansion, and
+historical content retention beyond the revision high-water mark.
 
 ## Commands
 
@@ -31,11 +35,23 @@ PYTHONPATH=services python3 -m ingestion.dataset_ingest acquire \
     [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N] \
     [--dry-run] [--max-files N] [--max-bytes N] \
     [--no-resume] [--no-reuse] [--no-resolve] [--no-ledger]
+PYTHONPATH=services python3 -m ingestion.dataset_ingest normalize \
+    [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N | --entry ID] \
+    [--include-metadata-only] [--dry-run] [--no-journal] [--no-ledger]
 PYTHONPATH=services python3 -m ingestion.dataset_ingest report [--format md|json]
 ```
 
-`report` renders the newest run (inventory, resolution or acquisition) from
-`runs/`.
+`report` renders the newest run (inventory, resolution, acquisition or
+integration) from `runs/`.
+
+For `normalize`, the default selection is every entry PR 3 acquired
+(`acquired`/`unchanged`). `--include-metadata-only` also integrates a metadata
+record for license-unknown entries whose policy is `metadata_only_review`, so
+they become discoverable without indexing their content. `--dry-run` prints
+the full record plan (metadata record, content shards, files and reasons) and
+makes no service calls and no writes. Every discovered entry still appears in
+the accounting: entries outside the selection are `deferred` /
+`not_selected`.
 
 For `acquire`, only entries whose `disposition` is `index_content` and whose
 license policy allows content indexing are candidates. `--sample N` is a
@@ -224,6 +240,110 @@ For an archive, `parse` is `null` and `archive` carries the inspection
 
 A re-run on the same snapshot produces a byte-identical manifest and appends
 no duplicate outcome or ledger events.
+
+### Canonical record and integration (PR 4)
+
+Every record carries the design's canonical envelope: `source_id`, `title`,
+`content`, `content_sha256`, `origin`, `locator` and `revision_id` (the
+Knowledge `revision` value). Two families exist:
+
+| Family | `source_id` | Content |
+|---|---|---|
+| `metadata` | `<entry_id>` | deterministic text projection of the manifest row |
+| `content` | `<entry_id>/src/<sha256(source_url)[:16]>/shard/<nnnn>` | one shard of one acquired file or archive member |
+
+`metadata` records exist for every integrated entry, including
+license-unknown ones. `content` records exist only when the license policy is
+`index_content` and PR 3 stored the bytes. `origin` is
+`apd-core@<commit>`; `locator` is the sanitized upstream URL (never a
+query-string-bearing one). Long entry ids keep the 512-character service limit
+by hashing the entry id in the shard prefix.
+
+Text projection is deterministic and inert: tabular rows become `field: value`
+lines in header order, JSON objects/scalars become canonical JSON (objects as
+`field: value`), text lines stay verbatim, and every shard starts with a
+`[title] filename` header. Shards are bounded by `MAX_SHARD_CHARS`
+(3,500,000 characters, under Knowledge's 4,000,000 cap) and `MAX_SHARD_BYTES`
+(3,500,000 UTF-8 bytes, under the 8 MiB request-body cap). A single oversized
+record is split deterministically.
+
+Each record is submitted with the index-derived sequence:
+
+```
+state = GET index /sources/{source_id}
+state.revision_id == desired  -> unchanged (no writes)
+otherwise                     -> POST knowledge /records with high_sequence + 1
+accepted                      -> POST chunking /chunk (window-v1)
+                              -> POST embedding /embeddings (64 texts per call)
+                              -> POST lexical /knowledge/documents
+                              -> POST vector /collections/knowledge_chunks/upsert
+                              -> POST vector .../delete-superseded (only when this
+                                 revision replaces an older one)
+```
+
+`revision_id` is a hash of the record's `source_id`, content hash, normalized
+file hash, adapter version, license policy and profile versions, so any change
+in content, metadata, adapter or profile produces a new revision, and an
+unchanged record is a no-op. A re-run of an indexed entry makes **no** service
+call.
+
+Partial failure has an explicit recovery path. If Knowledge accepted a
+revision but a downstream stage failed, the next run sees the same
+`revision_id` and re-runs only chunk/embed/index (Knowledge would call a second
+submission a duplicate). A small rebuildable completion journal at
+`cache/integrations/<revision_id>.json` records which revisions finished, so a
+healthy re-run is still a pure no-op.
+
+#### Integration statuses and reason codes
+
+Entry statuses are `indexed`, `metadata_indexed`, `unchanged`, `deferred`,
+`skipped` and `failed`. Every status other than `indexed`/`metadata_indexed`
+carries a `reason_code`. Record-level outcomes are `indexed`, `unchanged`,
+`skipped` or `failed`; every non-indexed/unchanged record carries its own
+reason (`parse_error`, `adapter_unavailable`, `license_unknown_metadata_only`,
+`source_tombstoned`, `knowledge_rejected`, `index_conflict`,
+`dependency_unavailable`, `payload_too_large`, ...). The report's
+"Non-indexed records" table lists them explicitly.
+
+A retryable downstream failure leaves the entry `deferred`, not `failed`, so
+the next run heals it without a second Knowledge revision.
+
+### Integration manifest row (PR 4)
+
+`manifest/<commit>.integration.jsonl` has one row per discovered entry:
+
+```json
+{
+  "schema_version": 1,
+  "entry_id": "apd:Test/example.yml",
+  "catalog": {"repo": "...", "commit": "...", "path": "...", "meta_url": "..."},
+  "category": "Test", "title": "Example", "license_policy": "index_content",
+  "metadata_sha256": "…",
+  "integration": {
+    "integrate_version": 1, "normalize_version": 1, "indexing_version": 1,
+    "adapter_version": 2,
+    "status": "indexed", "reason_code": null, "retryable": false,
+    "records_total": 40, "shards": 1, "chunks": 3, "vectors": 3,
+    "metadata": {"source_id": "...", "kind": "metadata", "status": "indexed",
+                 "revision_id": "…", "revision_sequence": 1,
+                 "knowledge_decision": "accepted", "chunks": 1, "vectors": 1},
+    "content": {"shards": 1, "indexed": 1, "unchanged": 0, "skipped": 0,
+                "failed": 0, "records": [{"source_id": ".../shard/0000",
+                "kind": "content", "status": "indexed", "revision_id": "…",
+                "content_sha256": "…", "revision_sequence": 1,
+                "knowledge_decision": "accepted", "chunks": 2, "vectors": 2}]},
+    "files": [{"uri": "https://…", "member": null, "status": "parsed",
+               "adapter": "csv", "records": 40, "shards": 1}],
+    "tombstoned": []
+  }
+}
+```
+
+`outcomes.jsonl` gains one `stage: "integrate"` row per record (plus one for a
+record-less entry) with the design's provenance fields:
+`knowledge_source_id`, `revision_id`, `revision_sequence`,
+`knowledge_decision`, `chunks`, `vectors`. The `event_id` is deterministic, so
+a repeated run appends nothing new.
 
 ### Resolution manifest row (PR 2)
 

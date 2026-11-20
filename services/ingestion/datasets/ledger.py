@@ -341,3 +341,107 @@ def post_summary(
         "duplicate": duplicate,
         "status": status,
     }
+
+
+def integration_event_id(
+    config: Config,
+    snapshot: CatalogSnapshot,
+    *,
+    integrate_version: int,
+    selection_hash: str,
+    sample: int | None,
+    limit: int | None,
+    include_metadata_only: bool,
+) -> str:
+    return sha256_hex(
+        canonical_json(
+            {
+                "entry_id": "apd:catalog",
+                "stage": "integrate",
+                "input_hash": sha256_hex(
+                    canonical_json(
+                        {
+                            "schema_version": config.schema_version,
+                            "catalog_repo": snapshot.repo,
+                            "catalog_commit": snapshot.commit,
+                            "snapshot_sha256": snapshot.snapshot_sha256,
+                            "integrate_version": integrate_version,
+                            "selection_hash": selection_hash,
+                            "sample": sample,
+                            "limit": limit,
+                            "include_metadata_only": bool(include_metadata_only),
+                        }
+                    )
+                ),
+                "outcome_code": "integration_complete",
+                "attempt": 1,
+            }
+        )
+    )
+
+
+def build_integration_entry(
+    *,
+    event_id: str,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    report: dict[str, object],
+    exit_code: int,
+    duration_ms: int,
+    manifest_changed: bool,
+    outcomes_added: int,
+    integrate_version: int,
+    normalize_version: int,
+    indexing_version: int,
+    adapter_version: int,
+) -> dict[str, object]:
+    """Numeric and enum projections only: no URLs, content, hashes or query strings."""
+    counts = report.get("counts") or {}
+    assert isinstance(counts, dict)
+    funnel = report.get("funnel") or {}
+    assert isinstance(funnel, dict)
+    decisions = counts.get("knowledge_decision") if isinstance(counts.get("knowledge_decision"), dict) else {}
+    record_kinds = counts.get("record_kind") if isinstance(counts.get("record_kind"), dict) else {}
+    return {
+        "event_id": event_id,
+        "event_type": "dataset_integration",
+        "event_name": "dataset.integrate.completed",
+        "source": "poc-dataset-ingest",
+        "producer": "poc-claude-ensemble",
+        "timestamp": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "correlation_id": run_id,
+        "execution_id": run_id,
+        "schema_version": 1,
+        "integrate_version": int(integrate_version),
+        "normalize_version": int(normalize_version),
+        "indexing_version": int(indexing_version),
+        "adapter_version": int(adapter_version),
+        "catalog_commit": snapshot.commit,
+        "snapshot_sha256": snapshot.snapshot_sha256,
+        "discovered": int(counts.get("discovered") or 0),
+        "status_counts": _int_map(counts.get("status")),
+        "reason_counts": _int_map(counts.get("reason")),
+        "knowledge_decision_counts": _int_map(decisions),
+        "record_kind_counts": _int_map(record_kinds),
+        "indexed": int(funnel.get("indexed") or 0),
+        "metadata_indexed": int(funnel.get("metadata_indexed") or 0),
+        "unchanged": int(funnel.get("unchanged") or 0),
+        "skipped": int(funnel.get("skipped") or 0),
+        "deferred": int(funnel.get("deferred") or 0),
+        "failed": int(funnel.get("failed") or 0),
+        "records": int(funnel.get("records") or 0),
+        "shards": int(funnel.get("shards") or 0),
+        "knowledge_records": int(funnel.get("knowledge_records") or 0),
+        "chunks": int(funnel.get("chunks") or 0),
+        "vectors": int(funnel.get("vectors") or 0),
+        "sample": report.get("sample"),
+        "limit": report.get("limit"),
+        "invariant_ok": bool((report.get("invariant") or {}).get("ok")),
+        "exit_code": int(exit_code),
+        "duration_ms": int(duration_ms),
+        "manifest_changed": bool(manifest_changed),
+        "outcomes_added": int(outcomes_added),
+    }
