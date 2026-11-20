@@ -29,6 +29,7 @@ from ingestion.datasets import archive as archive_module
 from ingestion.datasets import catalog as catalog_module
 from ingestion.datasets import (
     classify,
+    graph as graph_module,
     indexing,
     integrate,
     ledger as ledger_module,
@@ -37,6 +38,7 @@ from ingestion.datasets import (
     probe,
     report,
     resolver,
+    verify as verify_module,
 )
 from ingestion.datasets.config import Config
 
@@ -559,6 +561,8 @@ def _normalize(args: argparse.Namespace) -> int:
         readme_path=args.readme,
         ledger_enabled=False if args.no_ledger else None,
         data_root=args.data_root,
+        resume_checkpoints_enabled=False if args.no_checkpoints else None,
+        resume_max_attempts=args.max_attempts,
     ).replace(integration_metadata_only=bool(args.include_metadata_only))
     if args.limit is not None:
         config = config.replace(limit=args.limit)
@@ -653,48 +657,35 @@ def _normalize(args: argparse.Namespace) -> int:
         config.data_root / "cache" / "integrations",
         enabled=config.integration_journal_enabled and not args.no_journal,
     )
-
-    integrations: list[integrate.EntryIntegration] = []
-    for row in build.rows:
-        entry_id = str(row.get("entry_id") or "")
-        if entry_id not in selected:
-            integrations.append(
-                integrate.EntryIntegration(
-                    entry_id=entry_id,
-                    status="deferred",
-                    reason_code="not_selected",
-                    detail="entry was outside the bounded selection for this run",
-                    retryable=True,
-                )
-            )
-            continue
-        try:
-            integrations.append(
-                integrate.integrate_entry(
-                    row,
-                    acquisitions.get(entry_id),
-                    commit=snapshot.commit,
-                    config=config,
-                    endpoints=endpoints,
-                    journal=journal,
-                )
-            )
-        except Exception as exc:  # per-entry isolation: one bad entry never stops the run
-            integrations.append(
-                integrate.EntryIntegration(
-                    entry_id=entry_id,
-                    status="failed",
-                    reason_code="integration_error",
-                    detail=type(exc).__name__,
-                )
-            )
+    checkpoints = integrate.checkpoint_log(
+        config,
+        enabled=config.resume_checkpoints_enabled and not args.no_checkpoints,
+    )
+    manifest_path = config.data_root / "manifest" / (
+        _manifest_name(snapshot).replace(".jsonl", ".integration.jsonl")
+    )
+    # Two resume sources: the checkpoint log (exact input fingerprints) and the
+    # previous manifest (stage versions and metadata hash only).  Both are read
+    # before the run so an interruption never costs completed work.
+    previous_manifest = integrate.load_integration_manifest(manifest_path)
+    integration_run = integrate.integrate_entries(
+        build.rows,
+        acquisitions,
+        selected,
+        commit=snapshot.commit,
+        config=config,
+        endpoints=endpoints,
+        journal=journal,
+        checkpoint=checkpoints,
+        previous_manifest=previous_manifest,
+        policy=integrate.retry_policy(config),
+    )
+    integrations = integration_run.integrations
+    resume_state = integrate.resume_artifact(integration_run, checkpoint=checkpoints)
 
     accounting = integrate.check_accounting(build.rows, integrations, build.discovered)
     run_id = integrate.run_id_for(
         config, snapshot.commit, snapshot.snapshot_sha256, selected
-    )
-    manifest_path = config.data_root / "manifest" / (
-        _manifest_name(snapshot).replace(".jsonl", ".integration.jsonl")
     )
     integrations_by_entry = {item.entry_id: item for item in integrations}
     artifact_rows = [
@@ -718,6 +709,8 @@ def _normalize(args: argparse.Namespace) -> int:
 
     if not accounting.ok:
         exit_code = 2
+    elif integration_run.unhandled > 0:
+        exit_code = 1
     elif truncated:
         exit_code = 3
     else:
@@ -747,6 +740,7 @@ def _normalize(args: argparse.Namespace) -> int:
         truncated=truncated,
         include_metadata_only=config.integration_metadata_only,
         journal=journal_state,
+        resume_state=resume_state,
     )
     event_id = ledger_module.integration_event_id(
         config,
@@ -780,14 +774,16 @@ def _normalize(args: argparse.Namespace) -> int:
     funnel = report_payload["funnel"]
     print(
         "normalize: discovered={discovered} statuses={statuses} records={records} "
-        "shards={shards} chunks={chunks} vectors={vectors} invariant={invariant} "
-        "exit={exit_code}".format(
+        "shards={shards} chunks={chunks} vectors={vectors} resumed={resumed} "
+        "retried={retried} invariant={invariant} exit={exit_code}".format(
             discovered=accounting.discovered,
             statuses=accounting.status_counts,
             records=funnel["records"],
             shards=funnel["shards"],
             chunks=funnel["chunks"],
             vectors=funnel["vectors"],
+            resumed=funnel["resumed"],
+            retried=funnel["retried"],
             invariant="ok" if accounting.ok else "violated",
             exit_code=exit_code,
         )
@@ -797,19 +793,522 @@ def _normalize(args: argparse.Namespace) -> int:
             continue
         print(
             "  {status} {entry} records={records} shards={shards} chunks={chunks} "
-            "vectors={vectors} reason={reason}".format(
+            "vectors={vectors} attempts={attempts} resumed={resumed} reason={reason}".format(
                 status=entry.get("status"),
                 entry=entry.get("entry_id"),
                 records=entry.get("records_total"),
                 shards=entry.get("shards"),
                 chunks=entry.get("chunks"),
                 vectors=entry.get("vectors"),
+                attempts=entry.get("attempts"),
+                resumed=entry.get("resumed"),
                 reason=entry.get("reason_code") or "-",
             )
         )
     print(f"manifest: {manifest_path}")
     print(f"report: {report_path}")
     return exit_code
+
+
+def _load_jsonl(path: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    try:
+        handle = path.open("r", encoding="utf-8")
+    except OSError:
+        return rows
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _latest_manifest(data_root: Path, suffix: str) -> Path | None:
+    directory = data_root / "manifest"
+    try:
+        candidates = sorted(
+            directory.glob(f"*{suffix}"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return None
+    return candidates[0] if candidates else None
+
+
+def _tombstoned_from_index(config: Config, selected: set[str]) -> tuple[set[str], int]:
+    """Ask the Index service which selected entries are tombstoned.
+
+    Opt-in and bounded by the selection: one GET per selected entry, errors
+    ignored (a tombstone check must never fail the projection).
+    """
+    tombstoned: set[str] = set()
+    checked = 0
+    for entry_id in sorted(selected):
+        try:
+            state = indexing.source_state(config.index_url, entry_id)
+        except indexing.IndexingError:
+            continue
+        checked += 1
+        if state is not None and state.get("tombstoned"):
+            tombstoned.add(entry_id)
+    return tombstoned, checked
+
+
+def _graph(args: argparse.Namespace) -> int:
+    if args.entry and (args.limit is not None or args.sample is not None):
+        print("--entry cannot be combined with --limit/--sample", file=sys.stderr)
+        return 1
+    if args.limit is not None and args.sample is not None:
+        print("--limit and --sample are mutually exclusive", file=sys.stderr)
+        return 1
+    if (args.limit is not None and args.limit < 0) or (
+        args.sample is not None and args.sample < 0
+    ):
+        print("--limit/--sample must be non-negative", file=sys.stderr)
+        return 1
+    if args.apply and not args.prune_tombstoned:
+        print("--apply only applies to --prune-tombstoned", file=sys.stderr)
+        return 1
+
+    config = Config.load(
+        catalog_dir=args.catalog_dir,
+        catalog_ref=args.catalog_ref,
+        readme_path=args.readme,
+        ledger_enabled=False if args.no_ledger else None,
+        data_root=args.data_root,
+        resume_checkpoints_enabled=False if args.no_checkpoints else None,
+        resume_max_attempts=args.max_attempts,
+        graph_check_tombstones=True if args.check_tombstones else None,
+    ).replace(sample=args.sample, limit=args.limit)
+
+    started = time.monotonic()
+    generated_at = _utcnow()
+    snapshot = catalog_module.load_catalog(config)
+    # Resume from the persisted inventory when it still describes this
+    # snapshot; otherwise rebuild the same rows from the catalog.
+    inventory_path = config.data_root / "manifest" / _manifest_name(snapshot)
+    persisted = manifest.load_rows(inventory_path)
+    if persisted is not None and manifest.rows_match_snapshot(persisted, snapshot):
+        build = manifest.BuildResult(
+            rows=persisted, discovered=len(persisted), unhandled=0, truncated=False
+        )
+        inventory_source = "manifest"
+    else:
+        build = manifest.build_rows(snapshot, config, limit=None)
+        inventory_source = "catalog"
+    selected, unknown, truncated = graph_module.select_entries(
+        build.rows, entries=args.entry, sample=config.sample, limit=config.limit
+    )
+    for entry_id in unknown:
+        print(f"not an acquirable entry id: {entry_id}", file=sys.stderr)
+
+    integration_path = config.data_root / "manifest" / (
+        _manifest_name(snapshot).replace(".jsonl", ".integration.jsonl")
+    )
+    tombstones = graph_module.tombstones_from_manifest(
+        integrate.load_integration_manifest(integration_path)
+    )
+    tombstones_checked = 0
+    if config.graph_check_tombstones and selected:
+        from_index, tombstones_checked = _tombstoned_from_index(config, selected)
+        tombstones |= from_index
+    tombstoned_selected = tombstones & selected
+
+    client = graph_module.graph_client(config)
+    checkpoints = graph_module.checkpoint_log(
+        config,
+        enabled=config.resume_checkpoints_enabled and not args.no_checkpoints,
+    )
+    results, context = graph_module.project_entries(
+        build.rows,
+        commit=snapshot.commit,
+        config=config,
+        client=client,
+        selected=selected,
+        journal=checkpoints,
+        policy=graph_module.retry_policy(config),
+        tombstoned=tombstones,
+        dry_run=args.dry_run,
+    )
+    accounting = graph_module.check_accounting(build.rows, results, build.discovered)
+    run_id = graph_module.run_id_for(
+        snapshot.commit, snapshot.snapshot_sha256, selected
+    )
+
+    result_by_entry = {item.entry_id: item for item in results}
+    artifact_rows = [
+        graph_module.manifest_row(row, result_by_entry[str(row.get("entry_id"))])
+        for row in build.rows
+        if str(row.get("entry_id")) in result_by_entry
+    ]
+    manifest_path = graph_module.graph_manifest_path(config, _manifest_name(snapshot))
+    if args.dry_run:
+        changed = False
+    else:
+        changed, manifest_path = graph_module.write_graph_manifest(
+            artifact_rows, manifest_path
+        )
+    outcomes_added = 0
+    if not args.dry_run:
+        outcomes_added = manifest.append_outcome_rows(
+            graph_module.outcome_rows(
+                build.rows,
+                results,
+                run_id=run_id,
+                catalog_commit=snapshot.commit,
+                retrieved_at=generated_at,
+            ),
+            config.data_root / "outcomes.jsonl",
+        )
+
+    prune = None
+    if args.prune_tombstoned and not config.graph_prune_enabled:
+        print(
+            "prune: disabled by GRAPH_PRUNE_ENABLED; skipping",
+            file=sys.stderr,
+        )
+    elif args.prune_tombstoned:
+        prune = graph_module.prune_tombstoned(
+            client,
+            sorted(tombstones),
+            # ``--dry-run`` wins over ``--apply``: a dry run never prunes.
+            dry_run=args.dry_run or not args.apply,
+        )
+
+    successful = [
+        item for item in results if item.entry_id in selected and item.status in {"indexed", "unchanged"}
+    ]
+    if not accounting.ok:
+        exit_code = 2
+    elif context.graph_errors and not successful:
+        # Every selected entry failed against the graph: that is a run failure,
+        # not a budget cap.
+        exit_code = 1
+    elif truncated:
+        exit_code = 3
+    else:
+        exit_code = 0
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    resume_state = graph_module.resume_stats(results, checkpoints)
+    graph_state = {
+        "url": config.graph_url,
+        "prefetch_mode": context.snapshot.mode,
+        "prefetch_calls": context.snapshot.prefetch_calls,
+        "prefetch_error": context.snapshot.error,
+        "inventory_source": inventory_source,
+        "tombstoned": len(tombstoned_selected),
+        "tombstones_checked": tombstones_checked,
+        "graph_errors": context.graph_errors,
+        # Exact unique ids this run created; per-entry counts can undercount
+        # when an entry was retried after a partial write.
+        "nodes_created_unique": len(context.created_node_ids),
+        "edges_created_unique": len(context.created_edge_ids),
+    }
+    report_payload = report.build_graph_report(
+        build.rows,
+        results,
+        run_id=run_id,
+        snapshot=snapshot,
+        accounting=accounting,
+        generated_at=generated_at,
+        duration_ms=duration_ms,
+        exit_code=exit_code,
+        manifest_path=str(manifest_path),
+        manifest_changed=changed,
+        outcomes_added=outcomes_added,
+        ledger_result={"enabled": config.ledger_enabled, "posted": False},
+        graph_version=graph_module.GRAPH_VERSION,
+        sample=config.sample,
+        limit=config.limit,
+        truncated=truncated,
+        dry_run=args.dry_run,
+        resume_state=resume_state,
+        graph_state=graph_state,
+        prune=prune,
+    )
+    event_id = ledger_module.graph_event_id(
+        config,
+        snapshot,
+        graph_version=graph_module.GRAPH_VERSION,
+        selection_hash=resolver.selection_hash(selected),
+        sample=config.sample,
+        limit=config.limit,
+        dry_run=args.dry_run,
+    )
+    event_entry = ledger_module.build_graph_entry(
+        event_id=event_id,
+        run_id=run_id,
+        snapshot=snapshot,
+        report=report_payload,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        graph_version=graph_module.GRAPH_VERSION,
+        outcomes_added=outcomes_added,
+        dry_run=args.dry_run,
+    )
+    report_path: Path | None = None
+    if args.dry_run:
+        # A dry run mutates nothing, including the run-report directory: it
+        # prints the plan and leaves the "latest run" pointer alone.
+        report_payload["ledger"] = {"enabled": config.ledger_enabled, "posted": False}
+    else:
+        report_payload["ledger"] = ledger_module.post_summary(
+            config, event_id=event_id, entry=event_entry
+        )
+        report_path = manifest.write_run_report(
+            report_payload, config.data_root, run_id
+        )
+    if args.out:
+        text = (
+            report.render_json(report_payload)
+            if args.format == "json"
+            else report.render_graph_markdown(report_payload)
+        )
+        manifest.atomic_write(Path(args.out), text.encode("utf-8"))
+
+    funnel = report_payload["funnel"]
+    print(
+        "graph: discovered={discovered} statuses={statuses} nodes={nodes} edges={edges} "
+        "tombstoned={tombstoned} prefetch={prefetch} dry_run={dry_run} "
+        "invariant={invariant} exit={exit_code}".format(
+            discovered=accounting.discovered,
+            statuses=accounting.status_counts,
+            nodes=(
+                f"{graph_state['nodes_created_unique']}"
+                f"/{funnel['nodes_present']}"
+            ),
+            edges=(
+                f"{graph_state['edges_created_unique']}"
+                f"/{funnel['edges_present']}"
+            ),
+            tombstoned=len(tombstoned_selected),
+            prefetch=context.snapshot.mode,
+            dry_run=args.dry_run,
+            invariant="ok" if accounting.ok else "violated",
+            exit_code=exit_code,
+        )
+    )
+    if prune is not None:
+        print(
+            "prune: dry_run={dry_run} requested={requested} would_remove={would} "
+            "removed={removed} failures={failures}".format(
+                dry_run=prune["dry_run"],
+                requested=prune["requested"],
+                would=prune["would_remove"],
+                removed=prune["removed"],
+                failures=len(prune["failures"]),
+            )
+        )
+    for entry in report_payload["entries"]:
+        if entry.get("status") == "deferred" and entry.get("reason_code") == "not_selected":
+            continue
+        print(
+            "  {status} {entry} nodes=+{nc}/{np} edges=+{ec}/{ep} attempts={attempts} "
+            "resumed={resumed} reason={reason}".format(
+                status=entry.get("status"),
+                entry=entry.get("entry_id"),
+                nc=entry.get("nodes_created"),
+                np=entry.get("nodes_present"),
+                ec=entry.get("edges_created"),
+                ep=entry.get("edges_present"),
+                attempts=entry.get("attempts"),
+                resumed=entry.get("resumed"),
+                reason=entry.get("reason_code") or "-",
+            )
+        )
+    if args.dry_run:
+        print("dry-run: no graph writes, no manifest, no ledger event")
+        return exit_code
+    print(f"manifest: {manifest_path}")
+    print(f"report: {report_path}")
+    return exit_code
+
+
+def _verify(args: argparse.Namespace) -> int:
+    config = Config.load(data_root=args.data_root, ledger_enabled=False if args.no_ledger else None)
+    if args.top_k is not None:
+        if args.top_k < 1:
+            print("--top-k must be positive", file=sys.stderr)
+            return 1
+        config = config.replace(verify_top_k=args.top_k)
+
+    started = time.monotonic()
+    generated_at = _utcnow()
+    manifest_path = (
+        Path(args.manifest)
+        if args.manifest
+        else _latest_manifest(config.data_root, ".integration.jsonl")
+    )
+    if manifest_path is None:
+        print(
+            "no integration manifest found; run the normalize stage first",
+            file=sys.stderr,
+        )
+        return 1
+    rows = _load_jsonl(manifest_path)
+    if not rows:
+        print(f"integration manifest is empty: {manifest_path}", file=sys.stderr)
+        return 1
+    catalog_block = rows[0].get("catalog") if isinstance(rows[0].get("catalog"), dict) else {}
+    assert isinstance(catalog_block, dict)
+    catalog_commit = str(catalog_block.get("commit") or "unknown")
+
+    if args.query:
+        specs = [
+            verify_module.QuerySpec(
+                name=f"q{index + 1}", text=text, entry_id="", expected_sources=()
+            )
+            for index, text in enumerate(args.query)
+        ]
+    else:
+        specs = verify_module.build_queries(
+            rows, limit=config.verify_queries, categories=args.category
+        )
+    if not specs and args.no_graph:
+        print(
+            "no indexed content to verify in "
+            f"{manifest_path}; integrate at least one entry first",
+            file=sys.stderr,
+        )
+        return 1
+    if not specs:
+        print(
+            f"no indexed content in {manifest_path}; verifying graph traversal only",
+            file=sys.stderr,
+        )
+
+    results = (
+        verify_module.run_queries(specs, config, top_k=config.verify_top_k)
+        if specs
+        else []
+    )
+    vector_health = verify_module.vector_store_health(config)
+    graph_results: list[dict[str, object]] = []
+    graph_categories: list[str] = []
+    if not args.no_graph:
+        client = graph_module.graph_client(config)
+        graph_categories = verify_module.graph_queries(
+            rows, limit=3, categories=args.category
+        )
+        graph_results = verify_module.verify_graph(
+            client, graph_categories, max_depth=2
+        )
+    summary = verify_module.summarize(
+        results,
+        vector_health=vector_health,
+        graph_results=graph_results,
+        retrieval_checked=bool(specs),
+    )
+    exit_code = 0 if summary["ok"] else 2
+    duration_ms = int((time.monotonic() - started) * 1000)
+    run_id = verify_module.verification_run_id(
+        catalog_commit, specs, graph_categories=graph_categories
+    )
+    payload = verify_module.verification_report(
+        queries=specs,
+        results=results,
+        vector_health=vector_health,
+        graph_results=graph_results,
+        run_id=run_id,
+        generated_at=generated_at,
+        duration_ms=duration_ms,
+        top_k=config.verify_top_k,
+        exit_code=exit_code,
+        retrieval_checked=bool(specs),
+    )
+    payload["catalog"] = {"commit": catalog_commit, "entries": len(rows)}
+    payload["manifest"] = {"path": str(manifest_path)}
+    payload["ledger"] = {"enabled": config.ledger_enabled, "posted": False}
+    event_id = ledger_module.verification_event_id(
+        config,
+        catalog_commit=catalog_commit,
+        verify_version=verify_module.VERIFY_VERSION,
+        query_hash=model_hash(
+            [spec.text for spec in specs]
+            + [f"graph:{name}" for name in graph_categories]
+        ),
+        top_k=config.verify_top_k,
+    )
+    event_entry = ledger_module.build_verification_entry(
+        event_id=event_id,
+        run_id=run_id,
+        catalog_commit=catalog_commit,
+        report=payload,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        verify_version=verify_module.VERIFY_VERSION,
+    )
+    payload["ledger"] = ledger_module.post_summary(
+        config, event_id=event_id, entry=event_entry
+    )
+    report_path = manifest.write_run_report(payload, config.data_root, run_id)
+    text = (
+        verify_module.render_json(payload)
+        if args.format == "json"
+        else verify_module.render_markdown(payload)
+    )
+    if args.out:
+        manifest.atomic_write(Path(args.out), text.encode("utf-8"))
+
+    legs = summary["legs"]
+    print(
+        "verify: queries={queries} lexical={lexical} vector={vector} hybrid={hybrid} "
+        "vector_store={functional} graph={graph} result={result} exit={exit_code}".format(
+            queries=len(specs),
+            lexical=f"{legs['lexical']['status']}({legs['lexical']['matched']}/{legs['lexical']['queries']})",
+            vector=f"{legs['vector']['status']}({legs['vector']['matched']}/{legs['vector']['queries']})",
+            hybrid=f"{legs['hybrid']['status']}({legs['hybrid']['matched']}/{legs['hybrid']['queries']})",
+            functional=vector_health["functional"],
+            graph=summary["graph"]["verified"],
+            result="pass" if summary["ok"] else "fail",
+            exit_code=exit_code,
+        )
+    )
+    for query in payload["queries"]:
+        print(
+            "  {name} query={query!r} entry={entry} lexical={l} vector={v} hybrid={h}".format(
+                name=query["name"],
+                query=query["query"],
+                entry=query["entry_id"] or "-",
+                l=query["lexical"]["matched"],
+                v=query["vector"]["matched"],
+                h=query["hybrid"]["matched"],
+            )
+        )
+    for item in graph_results:
+        print(
+            "  graph {category}: datasets={datasets} orgs={orgs} formats={formats} "
+            "licenses={licenses} status={status}".format(
+                category=item.get("category"),
+                datasets=item.get("datasets"),
+                orgs=item.get("related_organizations"),
+                formats=item.get("related_formats"),
+                licenses=item.get("related_licenses"),
+                status=item.get("status"),
+            )
+        )
+    for problem in summary["problems"]:
+        print(f"  problem: {problem}", file=sys.stderr)
+    print(f"report: {report_path}")
+    return exit_code
+
+
+def model_hash(values: list[str]) -> str:
+    """Stable hash of the query set for the verification ledger event."""
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -936,9 +1435,96 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not read or write the local indexing-completion journal",
     )
+    integrate_parser.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="ignore the resume checkpoints for this stage",
+    )
+    integrate_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        help="per-entry attempt budget for retryable failures (default: 3)",
+    )
     integrate_parser.add_argument("--no-ledger", action="store_true", help="do not post the summary event")
     integrate_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
     integrate_parser.add_argument("--data-root", help="override the dataset data root")
+
+    graph_parser = subparsers.add_parser(
+        "graph", help="project catalog relationships into the Graph service (PR 5)"
+    )
+    graph_source = graph_parser.add_mutually_exclusive_group()
+    graph_source.add_argument("--catalog-ref", help="catalog git ref to fetch (default: master)")
+    graph_source.add_argument("--catalog-dir", help="local catalog checkout to read")
+    graph_parser.add_argument("--sample", type=int, help="project a deterministic sample of N entries")
+    graph_parser.add_argument("--limit", type=int, help="project at most N entries")
+    graph_parser.add_argument(
+        "--entry",
+        action="append",
+        help="project one specific entry id (repeatable; overrides --sample/--limit)",
+    )
+    graph_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be written; no graph writes, no manifest",
+    )
+    graph_parser.add_argument(
+        "--check-tombstones",
+        action="store_true",
+        help="also ask the Index service which selected entries are tombstoned",
+    )
+    graph_parser.add_argument(
+        "--prune-tombstoned",
+        action="store_true",
+        help="remove graph nodes for tombstoned entries (dry run unless --apply)",
+    )
+    graph_parser.add_argument(
+        "--apply", action="store_true", help="perform the tombstone prune instead of previewing it"
+    )
+    graph_parser.add_argument(
+        "--no-checkpoints",
+        action="store_true",
+        help="ignore the resume checkpoints for the graph stage",
+    )
+    graph_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        help="per-entry attempt budget for retryable failures (default: 3)",
+    )
+    graph_parser.add_argument(
+        "--format", choices=("md", "json"), default="md", help="format for --out"
+    )
+    graph_parser.add_argument("--out", help="write the report to a file")
+    graph_parser.add_argument("--no-ledger", action="store_true", help="do not post the summary event")
+    graph_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
+    graph_parser.add_argument("--data-root", help="override the dataset data root")
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="verify ingested content is searchable (PR 5)"
+    )
+    verify_parser.add_argument(
+        "--manifest",
+        help="integration manifest to verify (default: the most recent one)",
+    )
+    verify_parser.add_argument(
+        "--query",
+        action="append",
+        help="ad-hoc query text (repeatable; informational, no expectation)",
+    )
+    verify_parser.add_argument(
+        "--category",
+        action="append",
+        help="restrict derived queries and graph traversal to a category (repeatable)",
+    )
+    verify_parser.add_argument("--top-k", type=int, help="results per query (default: 5)")
+    verify_parser.add_argument(
+        "--no-graph", action="store_true", help="skip graph traversal verification"
+    )
+    verify_parser.add_argument(
+        "--format", choices=("md", "json"), default="md", help="format for --out"
+    )
+    verify_parser.add_argument("--out", help="write the report to a file")
+    verify_parser.add_argument("--no-ledger", action="store_true", help="do not post the summary event")
+    verify_parser.add_argument("--data-root", help="override the dataset data root")
 
     report_parser = subparsers.add_parser("report", help="render the latest inventory or resolution report")
     report_parser.add_argument("--format", choices=("md", "json"), default="md")
@@ -959,6 +1545,10 @@ def main(argv: list[str] | None = None) -> int:
             return _acquire(args)
         if args.command == "normalize":
             return _normalize(args)
+        if args.command == "graph":
+            return _graph(args)
+        if args.command == "verify":
+            return _verify(args)
         if args.command == "report":
             return _report(args)
         parser.print_help(sys.stderr)

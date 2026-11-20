@@ -711,6 +711,7 @@ def build_integration_report(
     truncated: bool,
     include_metadata_only: bool,
     journal: dict[str, object],
+    resume_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
     by_entry = {item.entry_id: item for item in integrations}  # type: ignore[attr-defined]
     status_counts = dict(accounting.status_counts)  # type: ignore[attr-defined]
@@ -811,6 +812,8 @@ def build_integration_report(
         ),
         "chunks": sum(int(entry.get("chunks") or 0) for entry in entries),
         "vectors": sum(int(entry.get("vectors") or 0) for entry in entries),
+        "resumed": sum(1 for entry in entries if entry.get("resumed")),
+        "retried": int((resume_state or {}).get("retried") or 0),
     }
     return {
         "schema_version": 1,
@@ -848,6 +851,7 @@ def build_integration_report(
         "manifest": {"path": manifest_path, "changed": manifest_changed},
         "outcomes_added": outcomes_added,
         "journal": journal,
+        "resume": resume_state or {"checkpoint": {"enabled": False}},
         "ledger": ledger_result,
         "entries": entries,
     }
@@ -1061,3 +1065,226 @@ def render_markdown(report: dict[str, object]) -> str:
 
 def render_json(report: dict[str, object]) -> str:
     return json.dumps(report, indent=2, sort_keys=True, ensure_ascii=True)
+
+
+# ---------------------------------------------------------------------------
+# PR 5: graph projection report
+# ---------------------------------------------------------------------------
+
+
+def build_graph_report(
+    rows: list[dict[str, object]],
+    results: list[object],
+    *,
+    run_id: str,
+    snapshot: CatalogSnapshot,
+    accounting: object,
+    generated_at: str,
+    duration_ms: int,
+    exit_code: int,
+    manifest_path: str,
+    manifest_changed: bool,
+    outcomes_added: int,
+    ledger_result: dict[str, object],
+    graph_version: int,
+    sample: int | None,
+    limit: int | None,
+    truncated: bool,
+    dry_run: bool,
+    resume_state: dict[str, object],
+    graph_state: dict[str, object],
+    prune: dict[str, object] | None,
+) -> dict[str, object]:
+    result_by_entry = {item.entry_id: item for item in results}  # type: ignore[attr-defined]
+    entries: list[dict[str, object]] = []
+    for row in sorted(rows, key=lambda item: str(item.get("entry_id"))):
+        entry_id = str(row.get("entry_id") or "")
+        result = result_by_entry.get(entry_id)
+        if result is None:
+            continue
+        artifact = result.to_artifact()  # type: ignore[attr-defined]
+        entries.append(
+            {
+                "entry_id": entry_id,
+                "title": row.get("title"),
+                "category": row.get("category"),
+                "metadata_sha256": row.get("metadata_sha256"),
+                **artifact,
+            }
+        )
+    status_counts = dict(accounting.status_counts)  # type: ignore[attr-defined]
+    funnel = {
+        "discovered": accounting.discovered,  # type: ignore[attr-defined]
+        "projected": sum(
+            1 for entry in entries if entry.get("status") in {"indexed", "unchanged"}
+        ),
+        "created": status_counts.get("indexed", 0),
+        "unchanged": status_counts.get("unchanged", 0),
+        "skipped": status_counts.get("skipped", 0),
+        "failed": status_counts.get("failed", 0),
+        "deferred": status_counts.get("deferred", 0),
+        "resumed": sum(1 for entry in entries if entry.get("resumed")),
+        "nodes_created": sum(int(entry.get("nodes_created") or 0) for entry in entries),
+        "nodes_present": sum(int(entry.get("nodes_present") or 0) for entry in entries),
+        "edges_created": sum(int(entry.get("edges_created") or 0) for entry in entries),
+        "edges_present": sum(int(entry.get("edges_present") or 0) for entry in entries),
+        "attempts": sum(int(entry.get("attempts") or 1) for entry in entries),
+    }
+    return {
+        "schema_version": 1,
+        "report_type": "graph",
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "graph_version": graph_version,
+        "sample": sample,
+        "limit": limit,
+        "truncated": truncated,
+        "dry_run": dry_run,
+        "catalog": {
+            "repo": snapshot.repo,
+            "commit": snapshot.commit,
+            "snapshot_sha256": snapshot.snapshot_sha256,
+            "mode": snapshot.mode,
+            "entries": len(entries),
+            "discovered_files": len(snapshot.files),
+            "warnings": snapshot.warnings,
+        },
+        "counts": {
+            "discovered": accounting.discovered,  # type: ignore[attr-defined]
+            "status": status_counts,
+            "reason": _count(entries, lambda entry: entry.get("reason_code")),
+            "category": _count(entries, lambda entry: entry.get("category")),
+        },
+        "funnel": funnel,
+        "invariant": {
+            "ok": accounting.ok,  # type: ignore[attr-defined]
+            "discovered": accounting.discovered,  # type: ignore[attr-defined]
+            "status_total": accounting.status_total,  # type: ignore[attr-defined]
+            "missing_reason": accounting.missing_reason[:100],  # type: ignore[attr-defined]
+            "problems": accounting.problems,  # type: ignore[attr-defined]
+        },
+        "manifest": {"path": manifest_path, "changed": manifest_changed},
+        "outcomes_added": outcomes_added,
+        "resume": resume_state,
+        "graph": graph_state,
+        "prune": prune,
+        "ledger": ledger_result,
+        "entries": entries,
+    }
+
+
+def render_graph_markdown(report: dict[str, object]) -> str:
+    catalog = report.get("catalog") if isinstance(report.get("catalog"), dict) else {}
+    counts = report.get("counts") if isinstance(report.get("counts"), dict) else {}
+    funnel = report.get("funnel") if isinstance(report.get("funnel"), dict) else {}
+    invariant = report.get("invariant") if isinstance(report.get("invariant"), dict) else {}
+    resume_state = report.get("resume") if isinstance(report.get("resume"), dict) else {}
+    graph_state = report.get("graph") if isinstance(report.get("graph"), dict) else {}
+    assert isinstance(catalog, dict)
+    assert isinstance(counts, dict)
+    assert isinstance(funnel, dict)
+    assert isinstance(invariant, dict)
+    assert isinstance(resume_state, dict)
+    assert isinstance(graph_state, dict)
+    lines: list[str] = [
+        "# Dataset graph projection report",
+        "",
+        f"- Run: `{report.get('run_id')}`",
+        f"- Catalog: `{catalog.get('repo')}@{catalog.get('commit')}` ({catalog.get('entries')} entries)",
+        f"- Graph version: {report.get('graph_version')}",
+        f"- Dry run: {bool(report.get('dry_run'))}",
+        f"- Exit: {report.get('exit_code')}",
+        "",
+        "## Funnel",
+        "",
+    ]
+    for key in (
+        "discovered",
+        "projected",
+        "created",
+        "unchanged",
+        "skipped",
+        "deferred",
+        "failed",
+        "resumed",
+        "nodes_created",
+        "nodes_present",
+        "edges_created",
+        "edges_present",
+    ):
+        lines.append(f"- {key}: {funnel.get(key, 0)}")
+    lines += [
+        "",
+        "## Invariant",
+        "",
+        f"- Holds: {bool(invariant.get('ok'))}",
+        f"- Discovered: {invariant.get('discovered')}",
+        f"- Status total: {invariant.get('status_total')}",
+        f"- Problems: {', '.join(str(item) for item in invariant.get('problems') or []) or '-'}",
+        "",
+        "## Resume",
+        "",
+        f"- Checkpoints: {json.dumps(resume_state.get('checkpoint') or {}, sort_keys=True)}",
+        f"- Reused: {resume_state.get('reused')} "
+        f"(manifest: {resume_state.get('manifest_reused')})",
+        f"- Attempted: {resume_state.get('attempted')}",
+        f"- Retried: {resume_state.get('retried')}",
+        f"- Retry budget exhausted: {resume_state.get('retry_exhausted')}",
+        "",
+        "## Graph",
+        "",
+        f"- Prefetch mode: {graph_state.get('prefetch_mode')}",
+        f"- Prefetch calls: {graph_state.get('prefetch_calls')}",
+        f"- Prefetch error: {graph_state.get('prefetch_error') or '-'}",
+        f"- Tombstoned entries: {graph_state.get('tombstoned')}",
+    ]
+    prune = report.get("prune")
+    if isinstance(prune, dict):
+        lines += [
+            "",
+            "## Prune",
+            "",
+            f"- Dry run: {bool(prune.get('dry_run'))}",
+            f"- Requested: {prune.get('requested')}",
+            f"- Would remove: {prune.get('would_remove')}",
+            f"- Removed: {prune.get('removed')}",
+            f"- Failures: {len(prune.get('failures') or [])}",
+        ]
+    lines += [
+        "",
+        "## Status counts",
+        "",
+        "| Status | Count |",
+        "|---|---|",
+    ]
+    status_counts = counts.get("status") if isinstance(counts.get("status"), dict) else {}
+    assert isinstance(status_counts, dict)
+    for status, value in sorted(status_counts.items()):
+        lines.append(f"| {_md(status)} | {value} |")
+    reason_counts = counts.get("reason") if isinstance(counts.get("reason"), dict) else {}
+    assert isinstance(reason_counts, dict)
+    if reason_counts:
+        lines += ["", "| Reason | Count |", "|---|---|"]
+        for reason, value in sorted(reason_counts.items()):
+            lines.append(f"| {_md(reason)} | {value} |")
+    lines += [
+        "",
+        "## Entries",
+        "",
+        "| Entry | Category | Status | Reason | Nodes | Edges | Resumed |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for entry in report.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        nodes = int(entry.get("nodes_created") or 0) + int(entry.get("nodes_present") or 0)
+        edges = int(entry.get("edges_created") or 0) + int(entry.get("edges_present") or 0)
+        lines.append(
+            f"| {_md(entry.get('entry_id'))} | {_md(entry.get('category'))} | "
+            f"{_md(entry.get('status'))} | {_md(entry.get('reason_code'))} | {nodes} | "
+            f"{edges} | {bool(entry.get('resumed'))} |"
+        )
+    lines.append("")
+    return "\n".join(lines)

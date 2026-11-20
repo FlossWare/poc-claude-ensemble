@@ -1,8 +1,10 @@
-# Dataset inventory, classification, resolution, acquisition and indexing (PR 1 + PR 2 + PR 3 + PR 4)
+# Dataset ingestion: inventory, resolution, acquisition, indexing, graph and verification (PR 1–PR 5)
 
 This package implements sections 5 (PR 1), the resolution stage (PR 2), the
-acquisition/archive/adapter stage (PR 3) and the normalization/integration
-stage (PR 4) of the arbitrated Awesome Public Datasets ingestion design:
+acquisition/archive/adapter stage (PR 3), the normalization/integration
+stage (PR 4) and the graph projection, resume/retry hardening and retrieval
+verification stage (PR 5) of the arbitrated Awesome Public Datasets ingestion
+design:
 
 - **PR 1**: full-catalog inventory, license/format/scheme classification, an
   optional bounded accessibility probe, a manifest, a report and one summary
@@ -18,10 +20,16 @@ stage (PR 4) of the arbitrated Awesome Public Datasets ingestion design:
   bounded text projection and sharding, submission to Knowledge, chunking,
   embedding, lexical/vector indexing, per-record outcomes and content-hash
   idempotency.
+- **PR 5**: versioned graph projection of the catalog's relationships
+  (datasets, categories, organizations, source repositories, formats,
+  licenses) into the Graph service; crash-safe per-entry checkpoints with
+  bounded retries; and verification that ingested content is retrievable
+  through the lexical and vector services and that graph traversal answers a
+  category query.
 
-Out of scope for PR 4 (and deliberately not built here): Graph writes and the
-resume/retry hardening campaign (PR 5), nested archive expansion, and
-historical content retention beyond the revision high-water mark.
+Still out of scope (and deliberately not built here): nested archive
+expansion, historical content retention beyond the revision high-water mark,
+and entity extraction into the graph.
 
 ## Commands
 
@@ -38,11 +46,18 @@ PYTHONPATH=services python3 -m ingestion.dataset_ingest acquire \
 PYTHONPATH=services python3 -m ingestion.dataset_ingest normalize \
     [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N | --entry ID] \
     [--include-metadata-only] [--dry-run] [--no-journal] [--no-ledger]
+PYTHONPATH=services python3 -m ingestion.dataset_ingest graph \
+    [--catalog-ref master | --catalog-dir PATH] [--sample N | --limit N | --entry ID] \
+    [--dry-run] [--check-tombstones] [--prune-tombstoned [--apply]] \
+    [--no-checkpoints] [--max-attempts N] [--format md|json] [--out FILE] [--no-ledger]
+PYTHONPATH=services python3 -m ingestion.dataset_ingest verify \
+    [--manifest PATH] [--query TEXT]... [--category NAME]... [--top-k N] \
+    [--no-graph] [--format md|json] [--out FILE] [--no-ledger]
 PYTHONPATH=services python3 -m ingestion.dataset_ingest report [--format md|json]
 ```
 
-`report` renders the newest run (inventory, resolution, acquisition or
-integration) from `runs/`.
+`report` renders the newest run (inventory, resolution, acquisition,
+integration, graph or verification) from `runs/`.
 
 For `normalize`, the default selection is every entry PR 3 acquired
 (`acquired`/`unchanged`). `--include-metadata-only` also integrates a metadata
@@ -87,6 +102,111 @@ first `N` processable entries by `entry_id`. Rows outside the sample are still
 written with `deferred` / `run_budget_exhausted`, and catalog-level failures
 keep their own reason, so `discovered == count(resolution statuses)` always
 holds. `--no-cache` disables both cache reads and writes.
+
+## Graph projection (PR 5)
+
+`graph` derives relationships from the PR 1 inventory rows and asserts them in
+the Graph service over its documented REST surface (`/graph/add-node`,
+`/graph/add-edge`, `/graph/query`, `/graph/traverse`, `/graph/remove-nodes`).
+It writes nothing that is not derived from the pinned catalog commit, and it is
+a projection: deleting the graph and re-running the command rebuilds it.
+
+Because the Graph service never mutates a node, the model is versioned:
+
+| Node | Id |
+|---|---|
+| `Dataset` | `dataset:{sha256(entry_id)[:32]}` |
+| `DatasetVersion` | `dataset_version:{metadata_sha256}` |
+| `Category` | `category:{slug}-{sha256(name)[:8]}` |
+| `Organization` | `organization:{slug}-{hash}` |
+| `Repository` | `repository:{host}/{owner}/{repo}` |
+| `Format` | `format:{slug}-{hash}` |
+| `License` | `license:{family}` |
+
+Edges (`has_version`, `in_category`, `published_by`, `hosted_at`,
+`has_format`, `licensed_under`) originate at the `Dataset` node for stable,
+path-derived facts and at the `DatasetVersion` node for metadata-derived facts.
+**Node properties contain only values intrinsic to their identity**; every edge
+carries the provenance of the assertion (`origin`, `catalog_commit`,
+`locator`, `entry_id`, `metadata_sha256`). A new commit therefore produces new
+edge ids, and re-running the same commit produces identical ids that the
+service returns as a no-op.
+
+Idempotency is the composition of three things:
+
+1. Deterministic node and edge ids, so a retry can never duplicate a record.
+2. A prefetched snapshot of the existing graph, so writes that are already
+   present are skipped and counted instead of re-sent. The snapshot is also
+   compared, so an existing record with *different* content is reported as
+   `graph_conflict` rather than silently accepted.
+3. A per-entry checkpoint (see below), so a resumed run does not even look at
+   entries that already finished.
+
+Tombstones are honoured in both directions: an entry a previous integration run
+recorded as tombstoned is never projected (`skipped` / `source_tombstoned`), and
+`--prune-tombstoned` removes the `Dataset` node and its `DatasetVersion` nodes
+through `/graph/remove-nodes` — a dry run unless `--apply` is given.
+`--check-tombstones` additionally asks the Index service, one bounded GET per
+selected entry.
+
+`--dry-run` builds the projection, reads the existing graph and prints exactly
+what would be created; it writes no nodes, no manifest, no run report and no
+ledger event.
+
+## Resume and retries (PR 5)
+
+Every stage writes its result at the end of the run, so a process killed
+mid-run used to lose the per-entry progress it had already made. PR 5 adds
+`cache/checkpoints/<stage>.jsonl`: an append-only, fsynced line per completed
+entry, written the moment the entry reaches a terminal state.
+
+- Each line carries a **fingerprint** of the inputs that produced it (stage
+  versions, catalog commit, metadata hash, license policy, acquisition
+  evidence). A checkpoint is reused only when the fingerprint still matches;
+  changed inputs re-process the entry instead of replaying a stale result.
+- A reused success is reported as `unchanged` with reason `checkpoint_resume`,
+  because nothing was written in the current run. Recorded failures keep their
+  original status. The previous stage manifest is a second resume source (with
+  weaker evidence: stage versions and the metadata hash only), which is what
+  lets work done before checkpoints existed still be reused.
+- `--max-attempts N` bounds attempts **per run** for outcomes flagged
+  retryable, with exponential backoff (`RESUME_BASE_DELAY_SECONDS`,
+  `RESUME_MAX_DELAY_SECONDS`). A lifetime budget (`RESUME_MAX_TOTAL_ATTEMPTS`,
+  default 12) stops an entry that fails identically across runs; it is then
+  `deferred` / `retry_budget_exhausted`.
+- Retried operations are idempotent by construction: Knowledge is a revision
+  gate, the vector/lexical ids are content-derived, and graph ids are
+  deterministic. A retry therefore never creates a second revision, chunk or
+  edge.
+- `--no-checkpoints` disables the stage's checkpoint (reads and writes).
+
+## Verification (PR 5)
+
+`verify` reads the newest integration manifest, derives one query per indexed
+entry (the title without its parenthetical aside) and asks the **actual**
+retrieval services:
+
+- lexical: `POST {lexical}/knowledge/search`
+- vector: `POST {embedding}/embeddings` then
+  `POST {vector}/collections/knowledge_chunks/query`
+- hybrid: `POST {hybrid}/knowledge/search` (reported, not required)
+- graph: `POST {graph}/traverse` from each of the three busiest categories of
+  integrated entries, direction `in`, which must return the related datasets
+  and their organizations, formats and licenses.
+
+A read-only leg is retried once when a dependency is transiently unavailable
+(`VERIFY_ATTEMPTS`, default 2); a genuine *miss* is never retried. A leg that
+cannot run is reported `unavailable` with the service's own reason
+(for example the hybrid service answering `{"ok": false, "error": {"code":
+"service_unavailable", "message": "embedding: connection refused"}}`), never
+counted as a pass. The vector leg is only *required* when the store is
+functional (a non-empty `knowledge_chunks` collection); a functional store that
+does not return the expected source fails the run. `--query TEXT` runs an
+ad-hoc query with no known expected source; those results are reported as
+`informational` and do not change the verdict.
+
+Exit codes are 0 when every required leg verifies, 1 when there is nothing
+ingested to verify, and 2 when a required leg fails.
 
 ## Resolution order (PR 2)
 
@@ -164,6 +284,13 @@ cache/partial/<sha[:2]>/<sha>.part
 cache/partial/<sha[:2]>/<sha>.json
                               # in-progress download plus its URL/validator sidecar
 tmp/archive-*/                # 0700 extraction roots, removed after parsing
+manifest/<commit>.integration.jsonl
+                              # integration: one row per discovered entry
+manifest/<commit>.graph.jsonl # graph: one row per discovered entry (PR 5)
+cache/checkpoints/<stage>.jsonl
+                              # append-only, fsynced per-entry completion (PR 5)
+cache/integrations/<revision>.json
+                              # downstream-indexing completion journal (PR 4)
 runs/<run_id>.json            # latest run report
 ```
 
@@ -427,8 +554,21 @@ override environment variables. The PR 1-relevant knobs are:
 | `RESOLVE_RETRY_BACKOFF_SECONDS` | 3600 |
 | `RESOLVE_CACHE_ENABLED` | true |
 | `GITHUB_TOKEN` | unset (sent only to `api.github.com`) |
+| `GRAPH_TIMEOUT` | 30 s |
+| `GRAPH_CHECK_TOMBSTONES` | false (also asks Index; `--check-tombstones`) |
+| `GRAPH_PRUNE_ENABLED` | true |
+| `VERIFY_TOP_K` / `VERIFY_QUERIES` / `VERIFY_TIMEOUT` | 5 / 5 / 30 s |
+| `RESUME_CHECKPOINTS_ENABLED` | true (`--no-checkpoints` disables) |
+| `RESUME_MAX_ATTEMPTS` | 3 per run (`--max-attempts`) |
+| `RESUME_MAX_TOTAL_ATTEMPTS` | 12 across runs |
+| `RESUME_BASE_DELAY_SECONDS` / `RESUME_MAX_DELAY_SECONDS` | 0.25 s / 4 s |
 
-The full table (including limits reserved for PR 2+) lives in `config.py`.
+Service URLs are never hard-coded: they come from the existing
+`POC_CLAUDE_ENSEMBLE_{GRAPH,KNOWLEDGE,CHUNKING,EMBEDDING,LEXICAL,VECTOR,INDEX,HYBRID}_URL`
+variables, defaulting to the loopback ports the services already use.
+
+The full table (including limits reserved for earlier stages) lives in
+`config.py`.
 
 ## Security posture
 
@@ -538,6 +678,76 @@ Format coverage of the real sample was CSV (including CSV inside a gzip), JSON
 catalog declares **no** TSV entries at all, and every JSONL-declaring entry in
 this sample either resolved to a repository or failed before download, so TSV
 and JSONL parsing are covered by offline tests rather than by this run.
+
+## Measured PR 5 graph, resume and verification (2026-11-19)
+
+Catalog: `awesomedata/apd-core@92d1b210bfba28055f672e6331eb5e5fa27227c5`,
+1,142 metadata files, 36 categories.
+
+**Full projection.** `graph` over the whole inventory, against a throwaway
+instance of the same Graph service (port 18766, empty store):
+
+| Node | Count |
+|---|---|
+| `Dataset` | 1,142 |
+| `DatasetVersion` | 1,142 |
+| `Category` | 36 |
+| `Organization` | 333 |
+| `Repository` | 1,114 |
+| `Format` | 15 |
+| `License` | 17 |
+
+- 3,799 unique nodes and 5,149 unique edges created; all 1,142 entries
+  `indexed`; `discovered == 1,142 == status_total`; no failures.
+- Wall clock ≈ 27 minutes. The cost is the Graph service's design: every
+  `/graph/add-node` and `/graph/add-edge` re-serialises and fsyncs the whole
+  store, so write time grows with the graph.
+
+**Live shared graph.** The same command against the live service (port 8766,
+an existing 11k-node, 19 MiB store) projects 40 entries:
+
+- `SIGKILL` after 6 entries: the checkpoint held all 6 completed entries.
+- Restart of the same command: `reused=6` (`unchanged` /
+  `checkpoint_resume`), `attempted=34`, 147 nodes and 186 edges created, 68
+  shared nodes already present, `graph_errors=0` (no conflict, no duplicate).
+- Third run: 40 `unchanged`, zero writes, 1.8 s versus ~10 minutes for the
+  incremental run.
+
+**Traversal.** `verify --category ...` against the full projection, direction
+`in`, edge `in_category`, depth 2:
+
+| Category | Datasets | Organizations\* | Formats\* | Licenses\* |
+|---|---|---|---|---|
+| Government | 209 | 3 | 1 | 1 |
+| SocialSciences | 66 | 3 | 2 | 6 |
+| Healthcare | 50 | 7 | 6 | 6 |
+| Biology | 50 | 1 | 0 | 3 |
+| Finance | 18 | 4 | 8 | 5 |
+| Education | 17 | 3 | 0 | 9 |
+
+**Retrieval.** Five queries derived from the integrated entries, `top_k=5`,
+against the live services:
+
+| Query | Lexical hits | Vector hits | Top vector score |
+|---|---|---|---|
+| Furrow Farmland Price Index | 5 (match) | 5 (match) | 0.848 |
+| India Agri Export Price Index | 5 (match) | 5 (match) | 0.822 |
+| Indoor Light for Houseplants | 5 (match) | 5 (match) | 0.769 |
+| Robot Lawn Mower Specs | 5 (match) | 5 (match) | 0.798 |
+| Turkish Olive Production Data | 5 (match) | 5 (match) | 0.869 |
+
+- Vector store functional: `chromadb`, `knowledge_chunks`, 627,554 vectors.
+- Earlier runs recorded one or two vector queries as `unavailable`
+  (`dependency_unavailable` from a transiently refused embedding call) rather
+  than as misses; the leg retry now absorbs that, and a run with the
+  embedding service healthy matches 5/5.
+- The hybrid leg was `unavailable` for every query in every run because the
+  deployed hybrid service reports `{"ok": false, "error": {"code":
+  "service_unavailable", "message": "embedding: <urlopen error [Errno 111]
+  Connection refused>"}}`. The report records that reason instead of counting
+  it as a pass or a failure.
+
+\* sampled over at most 10 datasets per category.
 
 ## Packaging note
 

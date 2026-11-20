@@ -90,13 +90,18 @@ def _encode(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _request(
+def request_json(
     url: str,
     *,
     method: str,
     payload: dict[str, Any] | None,
     timeout: float,
 ) -> tuple[int, dict[str, Any]]:
+    """One JSON request, preserving the HTTP status.
+
+    Public because the PR 5 graph client needs to tell an immutable-store
+    conflict (HTTP 400) apart from a transport failure.
+    """
     data = _encode(payload) if payload is not None else None
     if data is not None and len(data) > MAX_DOWNSTREAM_BODY_BYTES:
         raise IndexingError(
@@ -137,7 +142,9 @@ def _request(
 
 def post_json(base: str, path: str, payload: dict[str, Any], timeout: float = 60) -> dict[str, Any]:
     """POST JSON and require the services' ``{"ok": true, ...}`` envelope."""
-    status, result = _request(base.rstrip("/") + path, method="POST", payload=payload, timeout=timeout)
+    status, result = request_json(
+        base.rstrip("/") + path, method="POST", payload=payload, timeout=timeout
+    )
     if status >= 400:
         raise IndexingError(f"downstream service returned HTTP {status}", 502, "downstream_failure")
     if result.get("ok") is not True:
@@ -149,7 +156,7 @@ def post_json(base: str, path: str, payload: dict[str, Any], timeout: float = 60
 
 def get_json(base: str, path: str, timeout: float = 10) -> tuple[int, dict[str, Any]]:
     """GET JSON, preserving the status so a caller can treat 404 as "absent"."""
-    return _request(base.rstrip("/") + path, method="GET", payload=None, timeout=timeout)
+    return request_json(base.rstrip("/") + path, method="GET", payload=None, timeout=timeout)
 
 
 def source_state(index_base: str, source_id: str, *, timeout: float = 10) -> dict[str, Any] | None:
