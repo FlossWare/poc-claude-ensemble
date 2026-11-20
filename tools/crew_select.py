@@ -84,6 +84,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHARED = os.path.join(REPO, "services", "shared")
 if os.path.isdir(SHARED) and SHARED not in sys.path:
     sys.path.insert(0, SHARED)
+SERVICES = os.path.join(REPO, "services")
+if os.path.isdir(SERVICES) and SERVICES not in sys.path:
+    sys.path.insert(0, SERVICES)
 
 from thompson_client import ThompsonClient  # noqa: E402
 
@@ -327,6 +330,46 @@ def posterior_snapshot(state: Optional[Dict[str, Any]], task_type: str) -> Optio
             "arms": arms}
 
 
+def _prepare_external_priors(client: ThompsonClient, state: Dict[str, Any],
+                             task_type: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Seed registered external priors into untested arms before drawing.
+
+    Only registered priors whose arm is absent/untested are sent.  The service
+    is authoritative; if the running daemon predates the ``seed_prior`` action
+    the result is reported in the ledger and selection continues with the arms
+    it actually has.  Real observed calls always win over an external prior.
+    """
+    try:
+        from learning.external import registry
+    except Exception as exc:  # noqa: BLE001 - external priors are optional
+        LOG.warning("external priors unavailable (%s); continuing without them", exc)
+        return {"requested": 0, "error": f"{type(exc).__name__}: {exc}"}, state
+
+    records = registry.list_priors()
+    pending = registry.unapplied(records, state)
+    summary: Dict[str, Any] = {
+        "registered": len(records),
+        "pending": [record.arm for record in pending],
+        "seeded": [],
+        "skipped": [],
+        "errors": [],
+    }
+    if not pending:
+        return summary, state
+
+    outcome = registry.apply_priors_via_client(client, pending, task_type=task_type)
+    summary["seeded"] = [entry["arm"] for entry in outcome.get("applied", [])]
+    summary["skipped"] = outcome.get("skipped", [])
+    summary["errors"] = outcome.get("errors", [])
+    if summary["seeded"]:
+        refreshed = client.get_state()
+        if isinstance(refreshed, dict) and isinstance(refreshed.get("models"), dict):
+            state = refreshed
+    if summary["errors"]:
+        LOG.warning("external prior seeding had errors: %s", summary["errors"])
+    return summary, state
+
+
 def _client_degraded(client: ThompsonClient) -> bool:
     """True when the last client request failed (the client falls back silently).
 
@@ -435,6 +478,7 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
                 record_selection: bool = True,
                 correlation_id: Optional[str] = None,
                 learn_size: bool = False,
+                use_external_priors: bool = False,
                 learner: Optional[Any] = None) -> Dict[str, Any]:
     """Draw a distinct-arm worker crew from Thompson, excluding the arbiter.
 
@@ -453,6 +497,9 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
         correlation_id: Optional review/task id recorded for later joins.
         learn_size: Draw the crew size from the meta-learning ``crew_size``
             domain instead of using ``count``.
+        use_external_priors: Seed registered external priors (Arena ELO /
+            benchmark proxies) into Thompson arms that are absent or untested
+            before drawing.  Never overwrites an arm with observed calls.
         learner: MetaLearner override (tests); default constructs one.
 
     Returns:
@@ -521,6 +568,7 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
         "draws": {"total": 0, "collisions": 0, "per_slot": []},
         "fill_used": False,
         "posterior": None,
+        "external_priors": None,
     }
 
     client = client if client is not None else ThompsonClient()
@@ -546,6 +594,10 @@ def select_crew(task_type: str = DEFAULT_TASK_TYPE, *, description: Optional[str
                          count=count, excluded=excluded, task_type=task_type,
                          state=None, ledger_dir=ledger_dir,
                          record_selection=record_selection)
+
+    if use_external_priors:
+        summary, state = _prepare_external_priors(client, state, task_type)
+        record["external_priors"] = summary
 
     record["posterior"] = posterior_snapshot(state, task_type)
     eligible = [arm for arm in sorted(state["models"]) if arm not in excluded]
@@ -636,6 +688,17 @@ def _format_record(record: Dict[str, Any]) -> str:
                      f"posterior mean {learned.get('posterior_mean')})")
     if record.get("excluded"):
         lines.append("excluded: " + ", ".join(record["excluded"]))
+    external = record.get("external_priors")
+    if isinstance(external, dict):
+        lines.append("external priors: "
+                     f"registered={external.get('registered', 0)} "
+                     f"pending={len(external.get('pending') or [])} "
+                     f"seeded={len(external.get('seeded') or [])} "
+                     f"errors={len(external.get('errors') or [])}")
+        if external.get("seeded"):
+            lines.append("  seeded: " + ", ".join(external["seeded"]))
+        for error in external.get("errors") or []:
+            lines.append(f"  ERROR {error.get('arm')}: {error.get('error')}")
     lines.append("crew:")
     posterior = (record.get("posterior") or {}).get("arms") or {}
     for worker in record["workers"]:
@@ -670,6 +733,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              f"meta-learning draw with --learn-size)")
     parser.add_argument("--learn-size", action="store_true",
                         help="let the meta-learning crew_size domain decide the worker count")
+    parser.add_argument("--use-external-priors", action="store_true",
+                        help="seed registered Arena/benchmark priors into new arms before drawing")
     parser.add_argument("--arbiter", default=DEFAULT_ARBITER,
                         help=f"arbiter model/arm never placed in the crew (default {DEFAULT_ARBITER})")
     parser.add_argument("--exclude", action="append", default=[], metavar="MODEL",
@@ -716,6 +781,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         max_draws_per_slot=args.max_draws_per_slot,
         record_selection=not args.no_record,
         learn_size=args.learn_size,
+        use_external_priors=args.use_external_priors,
     )
     if registration is not None:
         record["ollama_registration"] = registration

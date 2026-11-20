@@ -213,6 +213,14 @@ def last_apply() -> Optional[Dict[str, Any]]:
     return None
 
 
+def latest_entry(kind: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Newest journal entry, optionally filtered by ``kind``."""
+    for entry in reversed(read_entries()):
+        if kind is None or entry.get("kind") == kind:
+            return entry
+    return None
+
+
 def find_change(change: str) -> Optional[Dict[str, Any]]:
     for entry in read_entries():
         if entry.get("change_id") == change:
@@ -335,6 +343,7 @@ __all__ = [
     "ga_root",
     "journal_path",
     "last_apply",
+    "latest_entry",
     "locks_dir",
     "prune_runs",
     "project_entry",

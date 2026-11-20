@@ -942,6 +942,11 @@ __all__ = [
 # auto-revert guard: death of bad promotions
 # ---------------------------------------------------------------------------
 
+def _load_adapter(target: str):
+    """Target adapter by name (kept separate so the guard is testable)."""
+    return get_target(target)
+
+
 def check_auto_revert() -> RunResult:
     """If the newest promoted policy is underperforming since promotion, revert it.
 
@@ -952,22 +957,41 @@ def check_auto_revert() -> RunResult:
     stored prior parameters. The check is conservative: it only fires when
     there is strictly more post-promotion evidence than at promotion time.
     """
-    entry = journal_mod.latest_entry(kind="promoted")
+    entry = journal_mod.latest_entry(kind="apply")
     if entry is None:
         return RunResult("no_promoted_policy", EXIT_OK, message="nothing to guard")
-    # Re-evaluate is delegated to the normal run pipeline: the next run's
-    # baseline comparison against the promoted policy IS the guard. What this
-    # adds is the automatic rollback path when that comparison regresses.
-    target = entry.get("target", "thompson_policy")
+    target = entry.get("target", TARGET_THOMPSON_POLICY)
     adapter = _load_adapter(target)
-    corpus = corpus_mod.load(adapter.corpus_spec())
     incumbent = entry.get("old_params", {})
     candidate = entry.get("new_params", {})
     if not incumbent or not candidate:
         return RunResult("config_error", EXIT_CONFIG,
                          message="journal entry lacks params; manual rollback available")
-    base_fit = adapter.evaluate(incumbent, corpus.holdout)
-    cand_fit = adapter.evaluate(candidate, corpus.holdout)
+
+    try:
+        corpora = adapter.load_corpora()
+        promoted_rows = int((entry.get("corpus") or {}).get("turn", {}).get("accepted", 0) or 0)
+        current_rows = len(corpora["turn"].rows)
+        if current_rows <= promoted_rows:
+            return RunResult(
+                "guard_passed", EXIT_OK,
+                message=(f"no new turn evidence since promotion ({current_rows} <= "
+                         f"{promoted_rows} accepted rows); guard holds"),
+            )
+        corpora_fingerprint = _fingerprint(corpora)
+        seed = derive_seed(corpora_fingerprint, target, _utc_date())
+        default_task = getattr(adapter, "TASK_DEFAULT", "default")
+        review_task = getattr(adapter, "TASK_CODE_REVIEW", "code-review")
+        incumbent_policies = {default_task: incumbent, review_task: incumbent}
+        candidate_policies = {default_task: candidate, review_task: candidate}
+        baseline = adapter.evaluate_policies(incumbent_policies, corpora, "holdout", seed)
+        promoted = adapter.evaluate_policies(candidate_policies, corpora, "holdout", seed)
+    except Exception as exc:  # noqa: BLE001 - the guard must never break a GA run
+        return RunResult("error", EXIT_INFRA,
+                         message=f"auto-revert evaluation failed: {type(exc).__name__}: {exc}")
+
+    base_fit = float(baseline["turn"].fitness)
+    cand_fit = float(promoted["turn"].fitness)
     if cand_fit < base_fit:
         revert = execute_rollback(entry.get("change_id"), last=False,
                                   applied_by="auto-revert-guard")
