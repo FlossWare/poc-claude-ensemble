@@ -440,3 +440,80 @@ request cannot read unbounded data. The gateway reads the store through a
 `mode=ro` SQLite connection and never creates or migrates its schema. See
 [`services/docs/CORPUS_EXPORT_API.md`](services/docs/CORPUS_EXPORT_API.md) for
 the full contract, configuration, and curl examples.
+
+## Learning System
+
+The learning stack uses Thompson sampling and genetic algorithms to optimize model selection and system parameters from real task outcomes.
+
+### Quick Start
+
+```bash
+# One CLI for the entire learning system
+python3 tools/learn.py status        # everything at a glance
+python3 tools/learn.py models       # Thompson arms with posteriors
+python3 tools/learn.py crew --task code-review --workers 3  # draw a crew
+python3 tools/learn.py tune         # run the GA
+python3 tools/learn.py journal      # what changed and why
+python3 tools/learn.py dashboard    # full learning stack view
+```
+
+### Components
+
+- **Thompson crew selection** (`tools/crew_select.py`): draws workers and arbiters from measured performance (16 arms: 6 EnMaaS + 10 Ollama local models)
+- **GA framework** (`services/learning/ga/`): evolves the Thompson selection policy with auto-apply and auto-revert (gates prevent premature promotion)
+- **ML predictors** (`services/learning/train/`): quality, cost, failure, latency, anomaly detection — trained on real review outcomes
+- **Meta-learning** (`services/learning/meta/`): 8 decision domains (crew size, review depth, batch size, RAG scope, etc.)
+- **External priors** (`services/learning/external/`): LMSYS ELO → Thompson priors for cold-start
+- **Replay tool** (`tools/replay_new_model.py`): test new models against past reviews
+- **User satisfaction signal**: classifies next-message patterns (satisfied/correction) and feeds Thompson
+
+### Dataset Pipeline (issue #43)
+
+```bash
+PYTHONPATH=services python3 -m ingestion.dataset_ingest inventory    # catalog + classification
+PYTHONPATH=services python3 -m ingestion.dataset_ingest resolve      # resolve to sources
+PYTHONPATH=services python3 -m ingestion.dataset_ingest acquire      # download content
+PYTHONPATH=services python3 -m ingestion.dataset_ingest integrate    # normalize + index + graph
+PYTHONPATH=services python3 -m ingestion.dataset_ingest verify       # searchability check
+```
+
+### Bulk Ingestion
+
+```bash
+python3 tools/bulk_ingest.py <path> --source <name> [--format pdf] [--limit N]
+```
+
+Ingests scraped data (JSON or PDF) through the REST boundary. Idempotent by content hash.
+
+### Corpus Export
+
+```bash
+curl http://127.0.0.1:8080/api/v1/corpus/records?origin=books&limit=10
+curl http://127.0.0.1:8080/api/v1/corpus/origins
+```
+
+### MCP Server
+
+```bash
+claude mcp add claude-ensemble -- python3 -m mcp
+```
+
+Exposes search_knowledge, search_semantic, search_hybrid, graph_query, draw_crew, get_model_status as Claude Code tools.
+
+### Key Services
+
+| Service | Port | Function |
+|---------|------|----------|
+| Gateway | 8080 | REST boundary, routing, corpus export |
+| Memory | 8767 | Episodic memory, retrieval |
+| Graph | 8766 | Relationships, traversal |
+| Thompson | 8769 | Model selection |
+| Knowledge | 8781 | Durable records, provenance |
+| Chunking | 8775 | Deterministic chunking |
+| Embedding | 8770 | Vector generation (local model) |
+| Vector | 8771 | ChromaDB vector search |
+| Lexical | 8772 | BM25 lexical search |
+| Hybrid | 8773 | Combined retrieval |
+| Extraction | 8778 | Entity extraction |
+| Reranking | 8774 | Cross-encoder reranking |
+| Ingestion | 8782 | Dataset pipeline |
