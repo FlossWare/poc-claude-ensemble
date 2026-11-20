@@ -1,0 +1,36 @@
+[Unit]
+Description=Claude Ensemble Sumo search-metrics anomaly check
+Documentation=file://%REPO_PATH%/services/learning/train/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%REPO_PATH%
+# The wrapper runs `sumo_anomaly check --json --fail-on-anomaly` and appends a
+# row to the detection ledger on exit 3, so a detection is recorded rather than
+# only marking the unit failed. Operational errors still exit non-zero.
+ExecStart=/usr/bin/env python3 -m learning.train.anomaly_alert
+
+Environment="PYTHONPATH=%REPO_PATH%/services"
+Environment="PYTHONUNBUFFERED=1"
+# Refresh the Sumo series before scoring; an hourly check on a stale cache would
+# re-report the same window forever. Set to 0 to score the cached series only.
+Environment="POC_CLAUDE_ENSEMBLE_SUMO_ANOMALY_REFRESH=1"
+# Sumo API credentials (SUMO_ACCESS_ID / SUMO_ACCESS_KEY). The leading '-' makes
+# a missing file non-fatal; credentials may instead live in the env block of
+# ~/.claude/settings.json, which the detector reads as a fallback.
+EnvironmentFile=-%h/.config/claude-ensemble/sumo.env
+EnvironmentFile=-%h/.config/claude-ensemble/environment
+
+# Keep an hourly fetch from competing with the interactive services.
+MemoryMax=512M
+Nice=10
+IOSchedulingClass=idle
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-ensemble-sumo-anomaly
+
+[Install]
+WantedBy=default.target

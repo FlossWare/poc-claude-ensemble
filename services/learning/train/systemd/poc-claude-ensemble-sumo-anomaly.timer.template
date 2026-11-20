@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Sumo search-metrics anomaly check
+
+[Timer]
+# Hourly, with jitter so a fleet of hosts does not hit the Sumo API at once.
+# Persistent=true runs a missed check after downtime or a reboot.
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=poc-claude-ensemble-sumo-anomaly.service
+
+[Install]
+WantedBy=timers.target

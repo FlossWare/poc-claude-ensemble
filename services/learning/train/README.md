@@ -88,6 +88,27 @@ collapsing to near zero. Deviating metrics are named at 3σ (`--z-threshold`)
 even when the flag came from the forest. `--fail-on-anomaly` exits 3 when a
 recent anomaly exists.
 
+### Hourly schedule (systemd user units)
+
+`systemd/install.sh` renders and enables a timer that runs the check every hour:
+
+```bash
+bash services/learning/train/systemd/install.sh
+systemctl --user list-timers poc-claude-ensemble-sumo-anomaly.timer
+systemctl --user start poc-claude-ensemble-sumo-anomaly.service   # run once now
+```
+
+The timer is `Type=oneshot`, `OnCalendar=hourly`, `RandomizedDelaySec=5m`,
+`Persistent=true`. Sumo credentials are read from
+`~/.config/claude-ensemble/sumo.env` (or the shared `environment` file), with
+the `~/.claude/settings.json` fallback. The service runs `anomaly_alert`, which
+executes `check --json --fail-on-anomaly` and, on exit 3, appends one JSON
+object per detection (timestamp, window, model provenance, per-metric counts and
+the recent findings) to `~/.FlossWare/ledger/anomalies/detected.jsonl`. That
+append-only ledger is the hook a future notifier reads; a detection exits 0 so
+only genuine operational errors mark the timer run failed. `Linger=no` means the
+timer does not fire while logged out — the installer prints that caveat.
+
 ## Tests
 
 ```bash
