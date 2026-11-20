@@ -322,6 +322,78 @@ def test_arm_names_close_the_loop_with_ledger_to_thompson():
         assert crew_select.arm_of(model) == arm
 
 
+# ---------------------------------------------------------------------------
+# Ollama arms
+# ---------------------------------------------------------------------------
+
+def test_ollama_models_are_registered_as_callable_arms():
+    expected = {
+        "ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b", "ollama/qwen3:4b",
+        "ollama/qwen3:1.7b", "ollama/qwen3.5:2b", "ollama/gemma4:e2b",
+        "ollama/gemma3:4b", "ollama/phi4-mini", "ollama/llama3.2:3b",
+        "ollama/granite3.2-vision:2b",
+    }
+    assert set(crew_select.OLLAMA_ARMS) == expected
+    for arm in expected:
+        assert crew_select.ARM_MODEL_IDS[arm] == arm
+        assert crew_select.model_of(arm) == arm
+        assert crew_select.arm_of(arm) == arm
+
+
+def test_crew_can_draw_local_ollama_arms(make_fake, tmp_path):
+    state = json.loads(json.dumps(STATE))
+    for name in ("ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b"):
+        state["models"][name] = {"model_name": name, "successes": 8, "failures": 1,
+                                 "calls": 9, "total_cost": 0.0, "total_tokens": 1234}
+    fake = make_fake(["ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b", "glm-5-3"],
+                     state=state)
+
+    record = select(fake, tmp_path)
+
+    assert record["status"] == "thompson"
+    assert [worker["arm"] for worker in record["workers"]] == [
+        "ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b", "glm-5-3"]
+    assert record["models"][:2] == ["ollama/qwen2.5-coder:3b", "ollama/deepseek-r1:7b"]
+    assert all(worker["mapped"] for worker in record["workers"])
+    assert record["posterior"]["arms"]["ollama/deepseek-r1:7b"]["avg_cost"] == 0.0
+    assert "ollama/qwen2.5-coder:3b" in record["eligible"]
+
+
+def test_register_ollama_arms_is_idempotent_and_reports_created():
+    class FakeClient:
+        def __init__(self):
+            self.known = set()
+            self.calls = []
+
+        def ensure_arms(self, models):
+            self.calls.append(list(models))
+            created = [model for model in models if model not in self.known]
+            self.known.update(created)
+            return {"ok": True, "created": created}
+
+    client = FakeClient()
+    first = crew_select.register_ollama_arms(client)
+    assert first["ok"] is True
+    assert first["created"] == crew_select.OLLAMA_ARMS
+    assert client.calls == [crew_select.OLLAMA_ARMS]
+
+    absent = crew_select.register_ollama_arms(client)
+    assert absent == {"ok": True, "created": [], "models": crew_select.OLLAMA_ARMS}
+
+
+def test_register_ollama_arms_reports_unsupported_service(caplog):
+    class OldService:
+        def ensure_arms(self, models):
+            return None
+
+    caplog.set_level(logging.WARNING, logger="crew_select")
+    result = crew_select.register_ollama_arms(OldService())
+
+    assert result["ok"] is False
+    assert result["created"] == []
+    assert "ensure_arms" in " ".join(message.getMessage() for message in caplog.records)
+
+
 def test_ledger_failure_is_reported_not_swallowed(make_fake, tmp_path, monkeypatch):
     fake = make_fake(["muse-spark-open", "glm-5-3", "deepseek-v4.1-flash"])
     blocker = tmp_path / "blocker"

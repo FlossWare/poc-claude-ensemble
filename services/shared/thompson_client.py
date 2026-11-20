@@ -299,6 +299,23 @@ class ThompsonClient:
         logger.info(f"[{request_id}] Recorded outcome for {model}: success={success}, cost=${cost:.4f}")
         return True
 
+    def ensure_arms(self, models: Iterable[str]) -> Optional[Dict[str, Any]]:
+        """Register zero-call arms so Thompson can draw them.
+
+        Registration records no outcome, so a new arm starts at Beta(1, 1) and
+        is explored through the normal draw.  Returns the service response
+        (``{"ok": True, "created": [...]}``), or ``None`` when the service is
+        unavailable or predates the ``ensure_arms`` action.
+        """
+        names = [str(model) for model in models if isinstance(model, str) and model.strip()]
+        if not names:
+            return None
+        response = self._send_request({'action': 'ensure_arms', 'models': names})
+        if not response.get('ok'):
+            logger.warning(f"Failed to register arms: {response.get('error')}")
+            return None
+        return response
+
     def get_state(self) -> Optional[Dict[str, Any]]:
         """
         Get full state snapshot from service.

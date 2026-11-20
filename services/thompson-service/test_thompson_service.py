@@ -187,6 +187,34 @@ def test_request_format():
     print("\n✓ All request/response tests passed!")
 
 
+def test_ensure_arms_registers_zero_call_arms(tmp_path):
+    """Arm registration is not evidence: no successes/failures are fabricated."""
+    service = ThompsonService(SOCKET_PATH, tmp_path / "state.json")
+    ctx = RequestContext(caller="test", method="test_ensure_arms")
+    models = ["ollama/qwen3:4b", "ollama/deepseek-r1:7b"]
+
+    response = json.loads(service._process_request(
+        json.dumps({"action": "ensure_arms", "models": models}), ctx))
+
+    assert response["ok"] is True
+    assert sorted(response["created"]) == sorted(models)
+    state = service.state.get_state()["models"]
+    for model in models:
+        assert state[model]["calls"] == 0
+        assert state[model]["successes"] == 0
+        assert state[model]["failures"] == 0
+
+    # Idempotent: a second registration creates nothing and changes no stats.
+    again = json.loads(service._process_request(
+        json.dumps({"action": "ensure_arms", "models": models}), ctx))
+    assert again["ok"] is True
+    assert again["created"] == []
+
+    bad = json.loads(service._process_request(
+        json.dumps({"action": "ensure_arms", "models": "ollama/qwen3:4b"}), ctx))
+    assert bad["ok"] is False
+
+
 def test_policy_delegation(tmp_path, monkeypatch):
     """select_model delegates to shared.thompson_policy and reloads on mtime changes."""
     import json

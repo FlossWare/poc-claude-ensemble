@@ -94,6 +94,16 @@ class Validators:
                 return False, "field 'model': expected string, got {}".format(
                     type(req_data['model']).__name__)
 
+        elif action == 'ensure_arms':
+            models = req_data.get('models')
+            if not isinstance(models, list):
+                return False, "field 'models': expected list of strings"
+            if not models:
+                return False, "field 'models': must contain at least one model name"
+            for model in models:
+                if not isinstance(model, str) or not model.strip():
+                    return False, "field 'models': every entry must be a non-empty string"
+
         return True, None
 
     @staticmethod
