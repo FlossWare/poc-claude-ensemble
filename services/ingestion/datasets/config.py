@@ -66,6 +66,12 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _service_url(name: str, default: str) -> str:
+    """Read the existing ``POC_CLAUDE_ENSEMBLE_<NAME>_URL`` service variable."""
+    raw = os.environ.get(f"POC_CLAUDE_ENSEMBLE_{name}_URL")
+    return raw.strip() if raw and raw.strip() else default
+
+
 def _env_path(name: str, default: Path | None) -> Path | None:
     raw = _env(name)
     if raw is None or raw.strip() == "":
@@ -148,6 +154,10 @@ class Config:
     max_json_depth: int = 64
     max_xml_depth: int = 64
     max_shard_chars: int = 3_500_000
+    #: UTF-8 byte budget per shard.  Knowledge and Chunking both cap a request
+    #: body at 8 MiB; JSON escaping can double a quote-heavy shard, so the
+    #: budget stays well below the cap.
+    max_shard_bytes: int = 3_500_000
 
     embed_batch: int = 64
     lexical_batch: int = 128
@@ -186,6 +196,19 @@ class Config:
     # PR 3: adapters.
     adapter_max_sample_records: int = 5
     adapter_encoding_fallback: bool = True
+
+    # PR 4: integration.  Every URL comes from the same environment variables
+    # the existing services already use; nothing is hard-coded downstream.
+    knowledge_url: str = "http://127.0.0.1:8781"
+    chunking_url: str = "http://127.0.0.1:8775"
+    embedding_url: str = "http://127.0.0.1:8770"
+    lexical_url: str = "http://127.0.0.1:8772"
+    vector_url: str = "http://127.0.0.1:8771"
+    index_url: str = "http://127.0.0.1:8777"
+    integration_timeout: float = 120.0
+    integration_journal_enabled: bool = True
+    integration_journal_root: Path | None = None
+    integration_metadata_only: bool = False
 
     probe_enabled: bool = False
     limit: int | None = None
@@ -325,6 +348,7 @@ class Config:
             max_json_depth=_env_int("MAX_JSON_DEPTH", 64),
             max_xml_depth=_env_int("MAX_XML_DEPTH", 64),
             max_shard_chars=_env_int("MAX_SHARD_CHARS", 3_500_000),
+            max_shard_bytes=max(1024, _env_int("MAX_SHARD_BYTES", 3_500_000)),
             embed_batch=_env_int("EMBED_BATCH", 64),
             lexical_batch=_env_int("LEXICAL_BATCH", 128),
             vector_batch=_env_int("VECTOR_BATCH", 128),
@@ -361,6 +385,15 @@ class Config:
                 0, _env_int("ADAPTER_MAX_SAMPLE_RECORDS", 5)
             ),
             adapter_encoding_fallback=_env_bool("ADAPTER_ENCODING_FALLBACK", True),
+            knowledge_url=_service_url("KNOWLEDGE", "http://127.0.0.1:8781"),
+            chunking_url=_service_url("CHUNKING", "http://127.0.0.1:8775"),
+            embedding_url=_service_url("EMBEDDING", "http://127.0.0.1:8770"),
+            lexical_url=_service_url("LEXICAL", "http://127.0.0.1:8772"),
+            vector_url=_service_url("VECTOR", "http://127.0.0.1:8771"),
+            index_url=_service_url("INDEX", "http://127.0.0.1:8777"),
+            integration_timeout=max(1.0, _env_float("INTEGRATION_TIMEOUT", 120.0)),
+            integration_journal_enabled=_env_bool("INTEGRATION_JOURNAL_ENABLED", True),
+            integration_metadata_only=_env_bool("INTEGRATION_METADATA_ONLY", False),
             probe_enabled=probe,
             limit=limit,
             sample=sample,

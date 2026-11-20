@@ -7,29 +7,25 @@ with it; nothing is interpreted or executed.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Iterator
 
 from ..config import Config
-from . import (
-    AdapterError,
-    ParseResult,
-    Record,
-    _Collector,
-    _decode_probe,
-    _file_size,
-    _summary,
-)
+from . import AdapterError, Record, StreamSummary, _decode_probe
 
 
-def parse(path: Path, *, config: Config, kind: str) -> ParseResult:
+def iter_records(
+    path: Path, *, config: Config, kind: str, summary: StreamSummary
+) -> Iterator[Record]:
     encoding, warnings = _decode_probe(path, config)
-    collector = _Collector(max_sample=config.adapter_max_sample_records)
-    truncated = False
+    summary.encoding = encoding
+    summary.fields = ("line", "text")
+    summary.warn(*warnings)
     try:
         with path.open("r", encoding=encoding, newline="", errors="strict") as handle:
             for line_number, line in enumerate(handle):
-                if collector.count >= config.max_records_per_file:
-                    truncated = True
-                    break
+                if summary.count >= config.max_records_per_file:
+                    summary.truncated = True
+                    return
                 if len(line) > config.max_line_chars:
                     raise AdapterError(
                         "limits_exceeded",
@@ -38,29 +34,13 @@ def parse(path: Path, *, config: Config, kind: str) -> ParseResult:
                 text = line.rstrip("\r\n")
                 if not text.strip():
                     continue
-                collector.add(
-                    Record(collector.count, "text", {"line": line_number + 1, "text": text})
+                yield Record(
+                    summary.count,
+                    "text",
+                    {"line": line_number + 1, "text": text},
                 )
+                summary.count += 1
     except UnicodeDecodeError as exc:
         raise AdapterError("encoding_error", "text is not valid in its encoding") from exc
-    if collector.count == 0:
-        return ParseResult(
-            adapter=kind,
-            status="skipped",
-            reason_code="empty_content",
-            detail="file contains no non-empty lines",
-            warnings=warnings,
-            encoding=encoding,
-            bytes_read=_file_size(path),
-            media_kind=kind,
-        )
-    collector.truncated = truncated
-    return _summary(
-        kind,
-        collector,
-        fields=("line", "text"),
-        warnings=warnings,
-        encoding=encoding,
-        bytes_read=_file_size(path),
-        media_kind=kind,
-    )
+    if summary.count == 0:
+        raise AdapterError("empty_content", "file contains no non-empty lines")

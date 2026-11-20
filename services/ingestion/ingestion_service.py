@@ -19,6 +19,7 @@ import re
 import select
 import socket
 import ssl
+import sys
 import threading
 import subprocess
 import tempfile
@@ -33,6 +34,28 @@ from pathlib import PurePosixPath
 from urllib.parse import parse_qs, urlencode, urlsplit
 from typing import Any
 
+
+def _load_indexing():
+    """Import the shared PR 4 orchestration module.
+
+    The unit runs this file as a script (``python3 services/ingestion/
+    ingestion_service.py``), where only ``services/ingestion`` is on
+    ``sys.path``.  Adding ``services`` lets the same module be imported as
+    ``ingestion.datasets.indexing`` in both the service and the test suite.
+    """
+    try:
+        from ingestion.datasets import indexing as module
+        return module
+    except ImportError:
+        services_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if services_dir not in sys.path:
+            sys.path.insert(0, services_dir)
+        from ingestion.datasets import indexing as module
+        return module
+
+
+indexing = _load_indexing()
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8782
 MAX_BODY_BYTES = 12 * 1024 * 1024
@@ -40,13 +63,9 @@ MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 4_000_000
 FETCH_TIMEOUT = 15
 MAX_REDIRECTS = 3
-CHUNK_PROFILE = "window-v1"
-PROFILES = {
-    "chunking": "window-v1@1",
-    "embedding": "nomic-embed-text-v1.5@fp32",
-    "vector": "knowledge_chunks@1",
-}
-EMBED_BATCH = 64
+CHUNK_PROFILE = indexing.CHUNK_PROFILE
+PROFILES = indexing.PROFILES
+EMBED_BATCH = indexing.EMBED_BATCH
 
 PREVIEW_TTL_SECONDS = 600
 PREVIEW_CACHE_LIMIT = 16
@@ -344,20 +363,11 @@ def host_title(uri: str) -> str:
 
 
 def _post_json(base: str, path: str, payload: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(base.rstrip("/") + path, data=data,
-                                     headers={"Content-Type": "application/json"}, method="POST")
+    """Thin adapter over the shared client, preserving this service's error codes."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        exc.close()
-        raise IngestionError(f"downstream service returned HTTP {exc.code}", 502, "downstream_failure") from exc
-    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
-        raise IngestionError("a required ingestion capability is unavailable", 503, "dependency_unavailable") from exc
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        raise IngestionError("a downstream ingestion capability rejected the request", 502, "downstream_failure")
-    return result
+        return indexing.post_json(base, path, payload, timeout=timeout)
+    except indexing.IndexingError as exc:
+        raise IngestionError(str(exc), exc.status, exc.code) from exc
 
 
 def preview(body: dict[str, Any]) -> dict[str, Any]:
@@ -424,70 +434,66 @@ def ingest(body: dict[str, Any]) -> dict[str, Any]:
     _record_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
     content = source["text"]
     revision_id = source["content_sha256"]
+    endpoints = indexing.Endpoints(
+        knowledge=KNOWLEDGE_URL,
+        chunking=CHUNKING_URL,
+        embedding=EMBEDDING_URL,
+        lexical=LEXICAL_URL,
+        vector=VECTOR_URL,
+        index=os.environ.get("POC_CLAUDE_ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777"),
+    )
     try:
-        knowledge = _post_json(KNOWLEDGE_URL, "/records", {
-            "source_id": source["source_id"],
-            "revision_sequence": time.time_ns(),
-            "revision_id": revision_id,
-            "title": source["title"],
-            "content": content,
-            "provenance": {"origin": source["origin"], "locator": source["locator"]},
-            "profiles": PROFILES,
-        })
-        if knowledge.get("decision") not in {"accepted", "duplicate"}:
-            _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
-            _release_preview(preview_id, consume=True)
-            return {"ok": True, "status": "rejected", "ingestion_id": ingestion_id,
-                    "source_id": source["source_id"], "decision": knowledge.get("decision"),
-                    "chunks": 0, "vectors": 0}
-        chunked = _post_json(CHUNKING_URL, "/chunk", {
-            "profile": CHUNK_PROFILE, "source_id": source["source_id"],
-            "media_type": "text/plain", "text": content,
-        })
-        chunks = chunked.get("chunks")
-        if not isinstance(chunks, list):
-            raise IngestionError("chunking service returned an invalid result", 502, "invalid_downstream_response")
-        content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        stored = 0
-        for start in range(0, len(chunks), EMBED_BATCH):
-            batch = chunks[start:start + EMBED_BATCH]
-            texts = [item["text"] for item in batch]
-            embedded = _post_json(EMBEDDING_URL, "/embeddings", {"texts": texts, "mode": "document"})
-            vectors = embedded.get("embeddings")
-            if not isinstance(vectors, list) or len(vectors) != len(batch):
-                raise IngestionError("embedding service returned an invalid vector count", 502, "invalid_downstream_response")
-            rows = []
-            ids = []
-            metadatas = []
-            for item in batch:
-                chunk_id = item["chunk_id"]
-                vector_id = hashlib.sha256(f"{chunk_id}|{content_sha}".encode("utf-8")).hexdigest()
-                meta = {"kind": "knowledge_chunk", "source": source["origin"], "url": source["locator"],
-                        "title": source["title"], "chunk": item.get("index"),
-                        "chunks": len(chunks), "chunk_id": chunk_id, "content_sha256": content_sha}
-                ids.append(vector_id)
-                metadatas.append(meta)
-                rows.append({"chunk_id": chunk_id, "vector_id": vector_id, "url": source["locator"],
-                             "source": source["origin"], "title": source["title"], "text": item["text"],
-                             "chunk_index": item.get("index"), "chunk_count": len(chunks),
-                             "content_sha256": content_sha})
-            _post_json(LEXICAL_URL, "/knowledge/documents", {"chunks": rows})
-            _post_json(VECTOR_URL, "/collections/knowledge_chunks/upsert", {
-                "ids": ids, "embeddings": vectors, "documents": texts, "metadatas": metadatas,
-            })
-            stored += len(batch)
-        # Remove superseded vectors only after the new revision has been indexed successfully.
-        _post_json(VECTOR_URL, "/collections/knowledge_chunks/delete-superseded", {
-            "url": source["locator"], "keep_sha256": content_sha,
-        })
+        try:
+            knowledge = indexing.submit_record(
+                KNOWLEDGE_URL,
+                source_id=source["source_id"],
+                # Historical behaviour: a wall-clock sequence, kept byte-compatible.
+                revision_sequence=time.time_ns(),
+                revision_id=revision_id,
+                title=source["title"],
+                content=content,
+                origin=source["origin"],
+                locator=source["locator"],
+                profiles=PROFILES,
+                post=_post_json,
+            )
+            if knowledge.get("decision") not in {"accepted", "duplicate"}:
+                _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
+                _release_preview(preview_id, consume=True)
+                return {"ok": True, "status": "rejected", "ingestion_id": ingestion_id,
+                        "source_id": source["source_id"], "decision": knowledge.get("decision"),
+                        "chunks": 0, "vectors": 0}
+            indexed = indexing.index_text(
+                endpoints=endpoints,
+                source_id=source["source_id"],
+                title=source["title"],
+                origin=source["origin"],
+                url=source["locator"],
+                text=content,
+                profiles=PROFILES,
+                chunk_profile=CHUNK_PROFILE,
+                media_type="text/plain",
+                post=_post_json,
+            )
+            content_sha = indexed["content_sha256"]
+            # Remove superseded vectors only after the new revision has been indexed successfully.
+            indexing.delete_superseded(
+                VECTOR_URL,
+                url=source["locator"],
+                keep_sha256=content_sha,
+                post=_post_json,
+            )
+        except indexing.IndexingError as exc:
+            raise IngestionError(str(exc), exc.status, exc.code) from exc
         _record_ingestion_event(
             source, ingestion_id, "ingestion.completed", status="completed",
-            chunks=len(chunks), vectors=stored, content_sha256=content_sha,
+            chunks=indexed["chunks"], vectors=indexed["vectors"], content_sha256=content_sha,
         )
         _release_preview(preview_id, consume=True)
         return {"ok": True, "status": "completed", "ingestion_id": ingestion_id,
                 "source_id": source["source_id"], "decision": knowledge.get("decision"),
-                "chunks": len(chunks), "vectors": stored, "content_sha256": content_sha}
+                "chunks": indexed["chunks"], "vectors": indexed["vectors"],
+                "content_sha256": content_sha}
     except Exception as exc:
         _release_preview(preview_id, consume=False)
         _record_ingestion_event(

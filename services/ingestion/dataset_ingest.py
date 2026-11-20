@@ -29,8 +29,11 @@ from ingestion.datasets import archive as archive_module
 from ingestion.datasets import catalog as catalog_module
 from ingestion.datasets import (
     classify,
+    indexing,
+    integrate,
     ledger as ledger_module,
     manifest,
+    normalize,
     probe,
     report,
     resolver,
@@ -523,6 +526,292 @@ def _acquire(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _integration_row(
+    row: dict[str, object], integration: integrate.EntryIntegration
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "entry_id": row.get("entry_id"),
+        "catalog": row.get("catalog"),
+        "category": row.get("category"),
+        "title": row.get("title"),
+        "license_policy": normalize.license_policy(row),
+        "metadata_sha256": row.get("metadata_sha256"),
+        "integration": integration.to_artifact(),
+    }
+
+
+def _normalize(args: argparse.Namespace) -> int:
+    if args.entry and (args.limit is not None or args.sample is not None):
+        print("--entry cannot be combined with --limit/--sample", file=sys.stderr)
+        return 1
+    if args.limit is not None and args.sample is not None:
+        print("--limit and --sample are mutually exclusive", file=sys.stderr)
+        return 1
+    if (args.limit is not None and args.limit < 0) or (
+        args.sample is not None and args.sample < 0
+    ):
+        print("--limit/--sample must be non-negative", file=sys.stderr)
+        return 1
+    config = Config.load(
+        catalog_dir=args.catalog_dir,
+        catalog_ref=args.catalog_ref,
+        readme_path=args.readme,
+        ledger_enabled=False if args.no_ledger else None,
+        data_root=args.data_root,
+    ).replace(integration_metadata_only=bool(args.include_metadata_only))
+    if args.limit is not None:
+        config = config.replace(limit=args.limit)
+    if args.sample is not None:
+        config = config.replace(sample=args.sample)
+
+    started = time.monotonic()
+    generated_at = _utcnow()
+    snapshot = catalog_module.load_catalog(config)
+    build = manifest.build_rows(snapshot, config, limit=None)
+
+    acquisition_path = config.data_root / "manifest" / (
+        _manifest_name(snapshot).replace(".jsonl", ".acquisition.jsonl")
+    )
+    acquisitions, acquisition_commit = integrate.load_acquisitions(acquisition_path)
+    if not acquisitions:
+        print(
+            f"no acquisition manifest at {acquisition_path}; run the acquire stage first",
+            file=sys.stderr,
+        )
+        return 1
+    if acquisition_commit and acquisition_commit != snapshot.commit:
+        print(
+            f"acquisition manifest is for commit {acquisition_commit}, "
+            f"catalog resolves to {snapshot.commit}",
+            file=sys.stderr,
+        )
+        return 1
+
+    selected, unknown, truncated = integrate.select_entries(
+        build.rows,
+        acquisitions,
+        entries=args.entry,
+        sample=config.sample,
+        limit=config.limit,
+        include_metadata_only=config.integration_metadata_only,
+    )
+    for entry_id in unknown:
+        print(f"not an acquirable entry id: {entry_id}", file=sys.stderr)
+
+    if args.dry_run:
+        plan = []
+        for row in build.rows:
+            entry_id = str(row.get("entry_id") or "")
+            if entry_id not in selected:
+                continue
+            normalization = normalize.normalize_entry(
+                row,
+                acquisitions.get(entry_id),
+                commit=snapshot.commit,
+                profiles=indexing.PROFILES,
+                config=config,
+            )
+            plan.append(
+                {
+                    "entry_id": entry_id,
+                    "license_policy": normalize.license_policy(row),
+                    "metadata_record": normalization.metadata.to_artifact()
+                    if normalization.metadata
+                    else None,
+                    "content_records": [
+                        record.to_artifact() for record in normalization.records
+                    ],
+                    "files": [item.to_artifact() for item in normalization.files],
+                    "records_total": normalization.records_total,
+                    "content_reason": normalization.content_reason,
+                }
+            )
+        print(
+            json.dumps(
+                {
+                    "catalog": {
+                        "repo": snapshot.repo,
+                        "commit": snapshot.commit,
+                        "entries": len(build.rows),
+                    },
+                    "selection": {
+                        "selected": len(selected),
+                        "truncated": truncated,
+                        "include_metadata_only": config.integration_metadata_only,
+                    },
+                    "plan": plan,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    endpoints = indexing.Endpoints.from_config(config)
+    journal = indexing.CompletionJournal(
+        config.data_root / "cache" / "integrations",
+        enabled=config.integration_journal_enabled and not args.no_journal,
+    )
+
+    integrations: list[integrate.EntryIntegration] = []
+    for row in build.rows:
+        entry_id = str(row.get("entry_id") or "")
+        if entry_id not in selected:
+            integrations.append(
+                integrate.EntryIntegration(
+                    entry_id=entry_id,
+                    status="deferred",
+                    reason_code="not_selected",
+                    detail="entry was outside the bounded selection for this run",
+                    retryable=True,
+                )
+            )
+            continue
+        try:
+            integrations.append(
+                integrate.integrate_entry(
+                    row,
+                    acquisitions.get(entry_id),
+                    commit=snapshot.commit,
+                    config=config,
+                    endpoints=endpoints,
+                    journal=journal,
+                )
+            )
+        except Exception as exc:  # per-entry isolation: one bad entry never stops the run
+            integrations.append(
+                integrate.EntryIntegration(
+                    entry_id=entry_id,
+                    status="failed",
+                    reason_code="integration_error",
+                    detail=type(exc).__name__,
+                )
+            )
+
+    accounting = integrate.check_accounting(build.rows, integrations, build.discovered)
+    run_id = integrate.run_id_for(
+        config, snapshot.commit, snapshot.snapshot_sha256, selected
+    )
+    manifest_path = config.data_root / "manifest" / (
+        _manifest_name(snapshot).replace(".jsonl", ".integration.jsonl")
+    )
+    integrations_by_entry = {item.entry_id: item for item in integrations}
+    artifact_rows = [
+        _integration_row(row, integrations_by_entry[str(row.get("entry_id"))])
+        for row in build.rows
+        if str(row.get("entry_id")) in integrations_by_entry
+    ]
+    changed, manifest_path = integrate.write_integration_manifest(
+        artifact_rows, manifest_path
+    )
+    outcomes = integrate.integration_outcome_rows(
+        build.rows,
+        integrations,
+        run_id=run_id,
+        catalog_commit=snapshot.commit,
+        retrieved_at=generated_at,
+    )
+    outcomes_added = manifest.append_outcome_rows(
+        outcomes, config.data_root / "outcomes.jsonl"
+    )
+
+    if not accounting.ok:
+        exit_code = 2
+    elif truncated:
+        exit_code = 3
+    else:
+        exit_code = 0
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    journal_state = {"enabled": journal.enabled, "entries": journal.count()}
+    report_payload = report.build_integration_report(
+        build.rows,
+        integrations,
+        run_id=run_id,
+        snapshot=snapshot,
+        accounting=accounting,
+        generated_at=generated_at,
+        duration_ms=duration_ms,
+        exit_code=exit_code,
+        manifest_path=str(manifest_path),
+        manifest_changed=changed,
+        outcomes_added=outcomes_added,
+        ledger_result={"enabled": config.ledger_enabled, "posted": False},
+        integrate_version=integrate.INTEGRATE_VERSION,
+        normalize_version=normalize.NORMALIZE_VERSION,
+        indexing_version=indexing.INDEXING_VERSION,
+        adapter_version=adapter_module.ADAPTER_VERSION,
+        sample=config.sample,
+        limit=config.limit,
+        truncated=truncated,
+        include_metadata_only=config.integration_metadata_only,
+        journal=journal_state,
+    )
+    event_id = ledger_module.integration_event_id(
+        config,
+        snapshot,
+        integrate_version=integrate.INTEGRATE_VERSION,
+        selection_hash=resolver.selection_hash(selected),
+        sample=config.sample,
+        limit=config.limit,
+        include_metadata_only=config.integration_metadata_only,
+    )
+    event_entry = ledger_module.build_integration_entry(
+        event_id=event_id,
+        run_id=run_id,
+        snapshot=snapshot,
+        report=report_payload,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        manifest_changed=changed,
+        outcomes_added=outcomes_added,
+        integrate_version=integrate.INTEGRATE_VERSION,
+        normalize_version=normalize.NORMALIZE_VERSION,
+        indexing_version=indexing.INDEXING_VERSION,
+        adapter_version=adapter_module.ADAPTER_VERSION,
+    )
+    ledger_result = ledger_module.post_summary(
+        config, event_id=event_id, entry=event_entry
+    )
+    report_payload["ledger"] = ledger_result
+    report_path = manifest.write_run_report(report_payload, config.data_root, run_id)
+
+    funnel = report_payload["funnel"]
+    print(
+        "normalize: discovered={discovered} statuses={statuses} records={records} "
+        "shards={shards} chunks={chunks} vectors={vectors} invariant={invariant} "
+        "exit={exit_code}".format(
+            discovered=accounting.discovered,
+            statuses=accounting.status_counts,
+            records=funnel["records"],
+            shards=funnel["shards"],
+            chunks=funnel["chunks"],
+            vectors=funnel["vectors"],
+            invariant="ok" if accounting.ok else "violated",
+            exit_code=exit_code,
+        )
+    )
+    for entry in report_payload["entries"]:
+        if entry.get("status") in {"deferred"} and entry.get("reason_code") == "not_selected":
+            continue
+        print(
+            "  {status} {entry} records={records} shards={shards} chunks={chunks} "
+            "vectors={vectors} reason={reason}".format(
+                status=entry.get("status"),
+                entry=entry.get("entry_id"),
+                records=entry.get("records_total"),
+                shards=entry.get("shards"),
+                chunks=entry.get("chunks"),
+                vectors=entry.get("vectors"),
+                reason=entry.get("reason_code") or "-",
+            )
+        )
+    print(f"manifest: {manifest_path}")
+    print(f"report: {report_path}")
+    return exit_code
+
+
 def _report(args: argparse.Namespace) -> int:
     config = Config.load(data_root=args.data_root)
     payload = manifest.latest_run(config.data_root)
@@ -616,6 +905,41 @@ def build_parser() -> argparse.ArgumentParser:
     acquire_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
     acquire_parser.add_argument("--data-root", help="override the dataset data root")
 
+    integrate_parser = subparsers.add_parser(
+        "normalize",
+        help="normalize acquired content and index it in Knowledge and the retrieval stack (PR 4)",
+    )
+    integrate_source = integrate_parser.add_mutually_exclusive_group()
+    integrate_source.add_argument("--catalog-ref", help="catalog git ref to fetch (default: master)")
+    integrate_source.add_argument("--catalog-dir", help="local catalog checkout to read")
+    integrate_parser.add_argument(
+        "--sample", type=int, help="integrate a deterministic sample of N eligible entries"
+    )
+    integrate_parser.add_argument("--limit", type=int, help="integrate at most N entries")
+    integrate_parser.add_argument(
+        "--entry",
+        action="append",
+        help="integrate one specific entry id (repeatable; overrides --sample/--limit)",
+    )
+    integrate_parser.add_argument(
+        "--include-metadata-only",
+        action="store_true",
+        help="also integrate metadata records for license-unknown entries (no content)",
+    )
+    integrate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="normalize and print the record plan; no service calls, no writes",
+    )
+    integrate_parser.add_argument(
+        "--no-journal",
+        action="store_true",
+        help="do not read or write the local indexing-completion journal",
+    )
+    integrate_parser.add_argument("--no-ledger", action="store_true", help="do not post the summary event")
+    integrate_parser.add_argument("--readme", help="explicit README.rst path for OK/FIXME reconciliation")
+    integrate_parser.add_argument("--data-root", help="override the dataset data root")
+
     report_parser = subparsers.add_parser("report", help="render the latest inventory or resolution report")
     report_parser.add_argument("--format", choices=("md", "json"), default="md")
     report_parser.add_argument("--out", help="write the report to a file")
@@ -633,6 +957,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resolve(args)
         if args.command == "acquire":
             return _acquire(args)
+        if args.command == "normalize":
+            return _normalize(args)
         if args.command == "report":
             return _report(args)
         parser.print_help(sys.stderr)
