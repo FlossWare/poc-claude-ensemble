@@ -16,3 +16,6 @@ PyYAML==6.0.3
 # PDF text extraction for tools/bulk_ingest.py --format pdf (books adapter).
 # Imported lazily: the JSON ingestion paths do not require it.
 pypdf==6.1.1
+# Official Model Context Protocol SDK, used by the mcp/ server (python -m mcp).
+# Verified against the version already installed on this host.
+mcp==1.27.2
