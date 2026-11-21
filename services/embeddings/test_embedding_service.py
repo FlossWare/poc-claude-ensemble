@@ -348,5 +348,46 @@ class OpenVINOBackendTests(unittest.TestCase):
         self.assertTrue(np.all(similarities > 0.9999), similarities)
 
 
+class ModelDirResolutionTests(unittest.TestCase):
+    """The model store may be flattened from <snapshot>/<revision>/ to <snapshot>/."""
+
+    def test_flattened_store_falls_back_to_the_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "snapshot"
+            (snapshot / "onnx").mkdir(parents=True)
+            pinned = snapshot / "deadbeef"
+            pinned.mkdir()
+            with patch.object(embed_lib, "MODEL_DIR", str(pinned)):
+                self.assertEqual(embed_lib._resolve_model_dir(), snapshot)
+
+    def test_pinned_layout_wins_when_it_has_the_graphs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pinned = Path(tmp) / "snapshot" / "deadbeef"
+            (pinned / "onnx").mkdir(parents=True)
+            with patch.object(embed_lib, "MODEL_DIR", str(pinned)):
+                self.assertEqual(embed_lib._resolve_model_dir(), pinned)
+
+    def test_missing_store_returns_the_configured_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pinned = Path(tmp) / "snapshot" / "deadbeef"
+            with patch.object(embed_lib, "MODEL_DIR", str(pinned)):
+                self.assertEqual(embed_lib._resolve_model_dir(), pinned)
+
+
+class TelemetryHelperOrderingTests(unittest.TestCase):
+    """`_record_embedding` must exist before `main()` blocks in serve_forever."""
+
+    def test_record_embedding_is_defined_before_the_entrypoint(self):
+        source = Path(es.__file__).read_text()
+        definition = source.index("def _record_embedding(")
+        entrypoint = source.index('if __name__ == "__main__":')
+        self.assertLess(definition, entrypoint)
+        self.assertTrue(callable(getattr(es, "_record_embedding", None)))
+
+    def test_record_embedding_never_raises(self):
+        with patch.dict(sys.modules, {"shared.op_telemetry": None}):
+            es._record_embedding(3, "document", 200, 0.01)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -108,7 +108,11 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
         if self.path != "/embeddings":
             self._error(404, "not_found", "unknown path")
             return
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._error(400, "invalid_request", "Content-Length must be an integer")
+            return
         if length <= 0:
             self._error(400, "invalid_request", "request body is required")
             return
@@ -168,6 +172,16 @@ def create_server(host, port):
     return ThreadingHTTPServer((host, port), EmbeddingHandler)
 
 
+def _record_embedding(n_texts: int, mode: str, status: int, elapsed: float) -> None:
+    """Best-effort per-batch telemetry for future tuning (never raises)."""
+    try:
+        from shared.op_telemetry import record
+        record("embedding_batch", n_texts=int(n_texts), mode=mode, status=int(status),
+               latency_ms=round(elapsed * 1000, 1))
+    except Exception:  # noqa: BLE001 - telemetry must never break embedding
+        pass
+
+
 def main():
     host = os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_HOST", DEFAULT_HOST)
     port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_EMBED_PORT", str(DEFAULT_PORT)))
@@ -183,13 +197,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-def _record_embedding(n_texts: int, mode: str, status: int, elapsed: float) -> None:
-    """Best-effort per-batch telemetry for future tuning (never raises)."""
-    try:
-        from shared.op_telemetry import record
-        record("embedding_batch", n_texts=int(n_texts), mode=mode, status=int(status),
-               latency_ms=round(elapsed * 1000, 1))
-    except Exception:  # noqa: BLE001 - telemetry must never break embedding
-        pass
