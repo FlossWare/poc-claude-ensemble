@@ -29,6 +29,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -170,9 +171,16 @@ class LinearTS:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             # Corrupt or stale state must not take routing down: start fresh
             # and let the ledger refill the posteriors.  The bad file is
-            # preserved for diagnosis by the caller's next atomic write.
+            # moved aside (never overwritten) so it stays available for
+            # diagnosis or recovery -- the next save must not destroy it.
             self.arms = {}
             self.load_error = str(exc)
+            aside = self.state_path.with_name(
+                f"{self.state_path.name}.corrupt-{int(time.time())}")
+            try:
+                os.replace(self.state_path, aside)
+            except OSError:
+                pass  # unreadable/already moved; the fresh save will replace it
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)

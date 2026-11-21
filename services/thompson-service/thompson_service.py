@@ -189,12 +189,23 @@ class ThompsonState:
                 }
             }
 
-            # Atomic write: temp file + rename
-            with tempfile.NamedTemporaryFile(mode='w', dir=self.state_file.parent, delete=False) as tmp:
-                json.dump(data, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())  # Force to disk
-                os.replace(tmp.name, self.state_file)  # Atomic rename
+            # Atomic write: temp file + rename.  The temp file is unlinked
+            # on failure so a full disk does not litter the state directory.
+            tmp_name = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', dir=self.state_file.parent, delete=False) as tmp:
+                    tmp_name = tmp.name
+                    json.dump(data, tmp, indent=2)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())  # Force to disk
+                    os.replace(tmp.name, self.state_file)  # Atomic rename
+                    tmp_name = None  # replace succeeded; nothing to clean up
+            finally:
+                if tmp_name is not None:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
 
             logger.info(f"Saved state for {len(self.models)} models")
             return True
@@ -222,9 +233,13 @@ class ThompsonState:
                 created.append(model_name)
         if created:
             if not self.save():
-                logger.error("New arms registered in memory but NOT persisted")
-            else:
-                logger.info(f"Registered {len(created)} new arm(s): {created}")
+                # Roll back so a retry of the failed request cannot
+                # double-register, and the caller's ok:false is truthful.
+                for model_name in created:
+                    del self.models[model_name]
+                logger.error("New arms NOT persisted; registration rolled back")
+                return []
+            logger.info(f"Registered {len(created)} new arm(s): {created}")
         return created
 
     def select_model(self, task_type: str, required_capability: float = 0.5, max_cost: float = float('inf')) -> str:
@@ -306,7 +321,13 @@ class ThompsonState:
             True if recorded successfully
         """
         try:
+            existed = model_name in self.models
             stats = self.get_or_create_model(model_name)
+
+            # Snapshot for rollback: a failed save must leave in-memory state
+            # unmutated, or a client retry of the `ok: false` response would
+            # double-count the outcome when a later save succeeds.
+            snapshot = stats.to_dict()
 
             if success:
                 stats.successes += 1
@@ -328,10 +349,12 @@ class ThompsonState:
             stats.calls += 1
             stats.last_updated = datetime.now(timezone.utc).isoformat()
 
-            persisted = self.save()
-            if not persisted:
-                logger.error(
-                    f"Outcome for {model_name} recorded in memory but NOT persisted")
+            if not self.save():
+                if existed:
+                    self.models[model_name] = ModelStats.from_dict(snapshot)
+                else:
+                    del self.models[model_name]  # arm creation rolled back too
+                logger.error(f"Outcome for {model_name} NOT persisted; state rolled back")
                 return False
             logger.info(f"Recorded outcome for {model_name}: success={success}, cost={cost:.4f}")
             return True
@@ -343,9 +366,13 @@ class ThompsonState:
         """Reset history for a model"""
         try:
             if model_name in self.models:
+                snapshot = self.models[model_name].to_dict()
                 self.models[model_name] = ModelStats(model_name)
                 if not self.save():
-                    logger.error(f"Reset of {model_name} NOT persisted")
+                    # Undo: the reset did not persist, so memory must not
+                    # claim it happened.
+                    self.models[model_name] = ModelStats.from_dict(snapshot)
+                    logger.error(f"Reset of {model_name} NOT persisted; rolled back")
                     return False
                 logger.info(f"Reset model: {model_name}")
                 return True
