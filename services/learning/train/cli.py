@@ -14,6 +14,7 @@ from typing import Any, Callable
 from learning.train import paths
 from learning.train import quality_predictor, retrieval_relevance, task_classifier
 from learning.train.base import RetrainTrigger, TrainedModel, TrainingData, TrainingError
+from learning.train.predictors import cli as predictors_cli
 
 MODEL_QUALITY = "quality_predictor"
 MODEL_RETRIEVAL = "retrieval_relevance"
@@ -314,8 +315,15 @@ def main(argv: list[str] | None = None) -> int:
     predict_parser.add_argument("model", help="model name or alias")
     predict_parser.add_argument("features", help="JSON object, @file, or bare description")
 
+    # Routing predictors and the ops anomaly detector live in their own
+    # module but are part of this CLI's documented surface.
+    predictors_cli.register(subparsers)
+
     args = parser.parse_args(argv)
     command = args.command or "status"
+
+    if command in {"predictors", "anomaly"}:
+        return predictors_cli.dispatch(args) or 0
 
     if command == "status":
         return status(as_json=getattr(args, "json", False))
