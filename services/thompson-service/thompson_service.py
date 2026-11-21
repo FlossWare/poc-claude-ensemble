@@ -68,6 +68,9 @@ class ModelStats:
         self.total_tokens = 0
         self.calls = 0
         self.last_updated = datetime.now(timezone.utc).isoformat()
+        # External prior provenance when the arm was seeded (LMSYS ELO and
+        # similar); empty for arms built from real outcomes only.
+        self.prior: Dict[str, Any] = {}
 
     @property
     def success_rate(self) -> float:
@@ -94,7 +97,8 @@ class ModelStats:
             'total_cost': self.total_cost,
             'total_tokens': self.total_tokens,
             'calls': self.calls,
-            'last_updated': self.last_updated
+            'last_updated': self.last_updated,
+            'prior': self.prior,
         }
 
     @classmethod
@@ -111,6 +115,8 @@ class ModelStats:
         model.total_tokens = data.get('total_tokens', 0)
         model.calls = data.get('calls', 0)
         model.last_updated = data.get('last_updated', datetime.now(timezone.utc).isoformat())
+        prior = data.get('prior')
+        model.prior = prior if isinstance(prior, dict) else {}
         return model
 
 
@@ -363,6 +369,70 @@ class ThompsonState:
             logger.error(f"Error recording outcome: {e}")
             return False
 
+    def seed_prior(
+        self,
+        model_name: str,
+        alpha: float,
+        beta: float,
+        *,
+        prior_strength: float = 1.0,
+        source: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Seed an untested arm from an external prior (e.g. LMSYS ELO).
+
+        The stored counts are ``alpha - prior_strength`` and
+        ``beta - prior_strength`` because selection adds ``prior_strength``
+        (the Beta(1,1)-equivalent) to each count when drawing: the effective
+        posterior after seeding is exactly Beta(alpha, beta).
+
+        Refuses (returns False, no mutation) when the arm already has real
+        outcomes -- external evidence must never overwrite local evidence --
+        or when the arguments cannot represent a valid prior.
+        """
+        if not isinstance(model_name, str) or not model_name.strip():
+            return False
+        if isinstance(alpha, bool) or isinstance(beta, bool):
+            return False
+        if not isinstance(alpha, (int, float)) or not isinstance(beta, (int, float)):
+            return False
+        if not (alpha > 0 and beta > 0 and prior_strength > 0):
+            return False
+        successes = float(alpha) - float(prior_strength)
+        failures = float(beta) - float(prior_strength)
+        if successes < 0 or failures < 0:
+            return False
+        existing = self.models.get(model_name)
+        if existing is not None and existing.calls > 0:
+            logger.info(
+                f"seed_prior refused for {model_name}: "
+                f"{existing.calls} real outcome(s) already recorded")
+            return False
+
+        stats = self.get_or_create_model(model_name)
+        stats.successes = successes
+        stats.failures = failures
+        stats.calls = 0
+        stats.prior = {
+            'alpha': float(alpha),
+            'beta': float(beta),
+            'prior_strength': float(prior_strength),
+            'source': source or 'unspecified',
+            'detail': detail or {},
+            'seeded_at': datetime.now(timezone.utc).isoformat(),
+        }
+        stats.last_updated = datetime.now(timezone.utc).isoformat()
+        if not self.save():
+            # Roll back so the refusal/retry semantics stay clean.
+            if existing is None:
+                del self.models[model_name]
+            else:
+                self.models[model_name] = existing
+            logger.error(f"seed_prior for {model_name} NOT persisted; rolled back")
+            return False
+        logger.info(f"Seeded prior for {model_name}: Beta({alpha}, {beta}) from {source}")
+        return True
+
     def reset(self, model_name: str) -> bool:
         """Reset history for a model"""
         try:
@@ -486,6 +556,26 @@ class ThompsonService:
                 logger.info(f"{ctx} Registered arms (new: {len(created)})")
                 return json.dumps({'ok': True, 'created': created,
                                    'models': models, 'request_id': ctx.request_id})
+
+            elif action == 'seed_prior':
+                model = req_data.get('model')
+                alpha = req_data.get('alpha')
+                beta = req_data.get('beta')
+                prior_strength = req_data.get('prior_strength', 1.0)
+                source = req_data.get('source')
+                detail = req_data.get('detail')
+                logger.info(f"{ctx} Seeding prior for {model} from {source}")
+                seeded = self.state.seed_prior(
+                    model, alpha, beta,
+                    prior_strength=prior_strength, source=source, detail=detail)
+                if not seeded:
+                    return json.dumps({
+                        'ok': False,
+                        'error': 'seed_prior refused: invalid arguments or '
+                                 'existing evidence on the arm',
+                        'request_id': ctx.request_id})
+                return json.dumps({
+                    'ok': True, 'seeded': True, 'request_id': ctx.request_id})
 
             elif action == 'ping':
                 return json.dumps({'ok': True, 'message': 'pong', 'request_id': ctx.request_id})
