@@ -61,7 +61,7 @@ Usage
 -----
     crew_select.py [DESCRIPTION] [--task-type TYPE] [--workers N] [--learn-size]
                    [--arbiter MODEL] [--exclude ARM] [--register-ollama-arms]
-                   [--json] [--no-record]
+                   [--register-local-arms] [--json] [--no-record]
 
     crew_select.py "review the ingest retry path" --task-type code-review
 """
@@ -109,10 +109,11 @@ MAX_DRAWS_PER_SLOT = 25
 DEFAULT_PRIOR_STRENGTH = 1.0
 
 # Thompson arm name -> callable model ID.  The arm names are the keys in the
-# live thompson-sampling-state.json; the IDs are what the gateway (or, for
-# ``ollama/`` labels, the local Ollama provider) accepts.  Keep in sync with
-# MODEL_ALIASES in tools/ledger_to_thompson.py, which maps the worker ledger's
-# model IDs back to these same arm names.
+# live thompson-sampling-state.json; the IDs are what the gateway accepts.
+# ``ollama/`` labels go to the local Ollama provider and ``local/`` labels go
+# to the local OpenVINO serving-layer provider (services/providers/).  Keep in
+# sync with MODEL_ALIASES in tools/ledger_to_thompson.py, which maps the worker
+# ledger's model IDs back to these same arm names.
 ARM_MODEL_IDS: Dict[str, str] = {
     "deepseek-v4.1-flash": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
     "glm-5-3": "rits/zai-org/glm-5-3",
@@ -142,6 +143,21 @@ OLLAMA_ARMS: List[str] = [
 
 for _ollama_arm in OLLAMA_ARMS:
     ARM_MODEL_IDS.setdefault(_ollama_arm, _ollama_arm)
+
+# Local OpenVINO serving-layer models (Arc iGPU).  The arm name and callable
+# model ID are the same ``local/<served-model>`` label;
+# services/providers/registry.py strips the prefix and POSTs the Anthropic
+# Messages shim at the loopback port for that model (see
+# services/providers/local_serving.py DEFAULT_ENDPOINTS).  The serving layer
+# hosts ONE model per process, so one arm == one server process == one port.
+# Cost is $0.00 per call, like the Ollama arms.
+LOCAL_ARMS: List[str] = [
+    "local/qwen3-coder-30b-a3b",
+    "local/qwen3.6-35b-a3b",
+]
+
+for _local_arm in LOCAL_ARMS:
+    ARM_MODEL_IDS.setdefault(_local_arm, _local_arm)
 
 # Extra ledger spellings seen in the review ledger for the same arms.
 _MODEL_TO_ARM: Dict[str, str] = {model: arm for arm, model in ARM_MODEL_IDS.items()}
@@ -206,6 +222,29 @@ def register_ollama_arms(client: Optional[ThompsonClient] = None,
         return {"ok": False, "created": [], "models": names}
     created = list(response.get("created") or [])
     LOG.info("registered %d new Ollama arm(s); %d already present",
+             len(created), len(names) - len(created))
+    return {"ok": True, "created": created, "models": names}
+
+
+def register_local_arms(client: Optional[ThompsonClient] = None,
+                        arms: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Register the local OpenVINO MoE models as zero-call Thompson arms.
+
+    Same contract as :func:`register_ollama_arms`: idempotent, records no
+    outcome, and reports failure instead of fabricating a bootstrap posterior.
+    Registering an arm does not start the serving layer -- the caller is
+    responsible for ``server.py --device GPU`` on the arm's port.
+    """
+    active = client if client is not None else ThompsonClient()
+    names = list(arms if arms is not None else LOCAL_ARMS)
+    response = active.ensure_arms(names)
+    if not response:
+        LOG.warning("local serving arm registration failed (service unavailable "
+                    "or does not support ensure_arms); arms remain ineligible "
+                    "until registered")
+        return {"ok": False, "created": [], "models": names}
+    created = list(response.get("created") or [])
+    LOG.info("registered %d new local serving arm(s); %d already present",
              len(created), len(names) - len(created))
     return {"ok": True, "created": created, "models": names}
 
@@ -748,6 +787,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--register-ollama-arms", action="store_true",
                         help="register the local Ollama models as zero-call Thompson arms "
                              "before drawing (idempotent; records no outcomes)")
+    parser.add_argument("--register-local-arms", action="store_true",
+                        help="register the local OpenVINO serving-layer MoE models "
+                             "(local/*, Arc iGPU) as zero-call Thompson arms before "
+                             "drawing (idempotent; records no outcomes)")
     parser.add_argument("--json", action="store_true", help="print the full ledger row as JSON")
     parser.add_argument("--no-record", action="store_true",
                         help="do not write the exposure row to the crews ledger")
@@ -769,6 +812,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     registration = None
     if args.register_ollama_arms:
         registration = register_ollama_arms()
+    local_registration = None
+    if args.register_local_arms:
+        local_registration = register_local_arms()
     count = args.workers if args.workers is not None else DEFAULT_CREW_SIZE
     record = select_crew(
         task_type,
@@ -785,6 +831,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     if registration is not None:
         record["ollama_registration"] = registration
+    if local_registration is not None:
+        record["local_registration"] = local_registration
     print(json.dumps(record, indent=2) if args.json else _format_record(record))
     return 0
 

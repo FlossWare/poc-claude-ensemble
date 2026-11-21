@@ -33,6 +33,25 @@ BACKEND_GRAPHS = {
 }
 
 
+def _resolve_model_dir() -> Path:
+    """Locate the Nomic snapshot directory.
+
+    ``MODEL_DIR`` is pinned to a Hugging Face revision subdirectory.  On
+    2026-11-20 this host's model store was flattened: the revision directory
+    was removed and the files moved up one level.  Rather than fail every
+    embedding call on a store layout change, use the parent when it is the one
+    that actually holds ``onnx/``; otherwise return the configured path so the
+    error names what the operator asked for.
+    """
+    configured = Path(MODEL_DIR)
+    if (configured / "onnx").is_dir():
+        return configured
+    parent = configured.parent
+    if (parent / "onnx").is_dir():
+        return parent
+    return configured
+
+
 class Embedder:
     """Encode Nomic text with an explicitly selected local inference backend.
 
@@ -58,11 +77,12 @@ class Embedder:
                 f"({self.graph_precision}); received {self.model_file}"
             )
 
-        model_path = Path(MODEL_DIR) / "onnx" / self.model_file
+        model_dir = _resolve_model_dir()
+        model_path = model_dir / "onnx" / self.model_file
         if not model_path.is_file():
             raise FileNotFoundError(f"embedding model graph not found: {model_path}")
 
-        self.tokenizer = Tokenizer.from_file(str(Path(MODEL_DIR) / "tokenizer.json"))
+        self.tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         self.tokenizer.enable_truncation(MAX_TOKENS)
         self.input_names: set[str]
         self.runtime = ""

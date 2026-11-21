@@ -56,6 +56,12 @@ for _ollama_model in (
 ):
     MODEL_ALIASES.setdefault(_ollama_model, _ollama_model)
 
+# Local OpenVINO serving-layer arms use the same label as the Thompson arm
+# name.  Kept in sync with crew_select.LOCAL_ARMS; the crew-select test asserts
+# every crew arm maps back to itself here, so drift fails the suite.
+for _local_model in ("local/qwen3-coder-30b-a3b", "local/qwen3.6-35b-a3b"):
+    MODEL_ALIASES.setdefault(_local_model, _local_model)
+
 VERDICTS = ("approve with fixes", "approve", "reject")
 
 # Event-driven GA trigger: once this many *new* outcome rows are recorded, a
@@ -64,15 +70,30 @@ VERDICTS = ("approve with fixes", "approve", "reject")
 GA_TRIGGER_MIN_ROWS = 4
 # Auto-apply is env-gated (POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY=1) per the GA design;
 # the trigger passes --apply only when the env var is set, so report-only remains
-# the default everywhere the variable is unset.
-GA_ARGV = ["-m", "learning.ga", "run", "--target", "thompson_policy"] + (
-    ["--apply"] if os.environ.get("POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY") == "1" else ["--report-only"])
+# the default everywhere the variable is unset.  The argv is built per call so
+# env changes after import (tests, long-lived importers) take effect.
+
+
+def _ga_argv():
+    return ["-m", "learning.ga", "run", "--target", "thompson_policy"] + (
+        ["--apply"] if os.environ.get("POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY") == "1"
+        else ["--report-only"])
+
 
 # Quality predictor (learning.train): when an artifact exists, its probability
 # complements the binary arbiter-SELECTED bonus. The score is recorded as an
 # extra positive outcome for workers whose output the model rates highly, so
 # Thompson learns from graded quality, not only the winner-take-all selection.
-QUALITY_BONUS_THRESHOLD = float(os.environ.get("POC_CLAUDE_ENSEMBLE_QUALITY_BONUS_THRESHOLD", "0.5"))
+def _quality_bonus_threshold():
+    """Parse the env threshold per call; non-numeric values fall back to 0.5."""
+    raw = os.environ.get("POC_CLAUDE_ENSEMBLE_QUALITY_BONUS_THRESHOLD", "0.5")
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"invalid POC_CLAUDE_ENSEMBLE_QUALITY_BONUS_THRESHOLD {raw!r}; "
+              "using 0.5", file=sys.stderr)
+        return 0.5
+    return min(1.0, max(0.0, value))
 _QUALITY_MODEL = "unset"
 
 
@@ -117,15 +138,27 @@ def _quality_score(row):
         from learning.train.quality_predictor import worker_features
 
         return float(model.predict_quality(worker_features(row)))
-    except Exception:
+    except Exception as exc:
+        # A persistently broken predictor must not become invisible: report
+        # the first failure, then stay quiet (the bonus simply stops firing).
+        global _QUALITY_SCORE_FAILURES
+        _QUALITY_SCORE_FAILURES += 1
+        if _QUALITY_SCORE_FAILURES == 1:
+            print(f"quality predictor scoring failed ({exc}); "
+                  "quality bonus disabled until it recovers", file=sys.stderr)
         return None
 
 
-def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen=subprocess.Popen):
-    """Spawn a detached, report-only GA run when enough new rows were recorded.
+_QUALITY_SCORE_FAILURES = 0
 
-    Fixed argv, no shell, no caller data. Returns the Popen handle, or None
-    when the threshold is not met or the spawn fails. Never raises.
+
+def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen=subprocess.Popen):
+    """Spawn a detached GA run when enough new rows were recorded.
+
+    The run applies mutations only when POC_CLAUDE_ENSEMBLE_GA_AUTO_APPLY=1;
+    otherwise it is report-only. Fixed argv, no shell, no caller data.
+    Returns the Popen handle, or None when the threshold is not met or the
+    spawn fails. Never raises.
     """
     if recorded_rows < threshold:
         return None
@@ -133,7 +166,7 @@ def _maybe_trigger_tuning(recorded_rows, *, threshold=GA_TRIGGER_MIN_ROWS, popen
     env = dict(os.environ)
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = services + (os.pathsep + existing if existing else "")
-    argv = [sys.executable] + GA_ARGV
+    argv = [sys.executable] + _ga_argv()
     try:
         return popen(
             argv,
@@ -250,7 +283,7 @@ def sync(dry_run=False):
                 model_label = row.get("model", "")
                 arbiter_selected = bool(selected_model and _label_matches(selected_model, model_label))
                 quality = _quality_score(row) if success else None
-                quality_bonus = quality is not None and quality >= QUALITY_BONUS_THRESHOLD
+                quality_bonus = quality is not None and quality >= _quality_bonus_threshold()
                 if success and (arbiter_selected or quality_bonus):
                     if arbiter_selected:
                         reason = "arbiter-selected"
