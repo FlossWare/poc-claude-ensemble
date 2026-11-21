@@ -49,6 +49,12 @@ class DRTests(unittest.TestCase):
         model = lambda ctx, a: 0.8 if a == 1 else 0.3
         estimate = doubly_robust_value(rows, target, model)
         self.assertAlmostEqual(estimate.model_only_value, 0.8, delta=1e-9)
+        # The pure IPS estimate of always-arm-1 is also 0.8 (mean reward);
+        # it must be a non-negative reward-weighted average, never the
+        # (possibly negative) residual correction.  Delta covers the
+        # matched-count binomial noise (~0.03 at n=2000, p=0.3).
+        self.assertAlmostEqual(estimate.ips_value, 0.8, delta=0.06)
+        self.assertGreaterEqual(estimate.ips_value, 0.0)
         self.assertGreater(estimate.matched_rows, 0)
         self.assertEqual(estimate.zero_propensity_rows, 0)
 

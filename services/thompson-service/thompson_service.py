@@ -234,11 +234,12 @@ class ThompsonState:
         if created:
             if not self.save():
                 # Roll back so a retry of the failed request cannot
-                # double-register, and the caller's ok:false is truthful.
+                # double-register; None (not []) signals the failure so the
+                # handler can answer ok:false instead of "nothing new".
                 for model_name in created:
                     del self.models[model_name]
                 logger.error("New arms NOT persisted; registration rolled back")
-                return []
+                return None
             logger.info(f"Registered {len(created)} new arm(s): {created}")
         return created
 
@@ -476,6 +477,12 @@ class ThompsonService:
             elif action == 'ensure_arms':
                 models = req_data.get('models') or []
                 created = self.state.ensure_arms(models)
+                if created is None:
+                    logger.error(f"{ctx} Arm registration NOT persisted")
+                    return json.dumps({
+                        'ok': False,
+                        'error': 'ensure_arms failed: state not persisted',
+                        'models': models, 'request_id': ctx.request_id})
                 logger.info(f"{ctx} Registered arms (new: {len(created)})")
                 return json.dumps({'ok': True, 'created': created,
                                    'models': models, 'request_id': ctx.request_id})

@@ -68,7 +68,7 @@ def doubly_robust_value(
                 residual = reward - reward_model(context, action)
                 ips_term = residual / propensity
                 contribution += ips_term
-                ips_total += ips_term
+                ips_total += reward / propensity  # true IPS value
             else:
                 zero_prop += 1
         total += contribution
@@ -117,7 +117,7 @@ def clipped_doubly_robust_value(
                 weight = min(1.0 / propensity, clip)
                 ips_term = weight * (reward - reward_model(context, action))
                 contribution += ips_term
-                ips_total += ips_term
+                ips_total += weight * reward  # clipped true IPS value
             else:
                 zero_prop += 1
         total += contribution

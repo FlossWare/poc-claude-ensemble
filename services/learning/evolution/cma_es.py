@@ -7,9 +7,10 @@ the implementation favours clarity over every last speedup.
 
 Interface: ``CMAES(bounds).optimize(objective)`` where ``objective(vector)``
 returns a scalar to MINIMISE (wrap maximisation with a minus sign).  Bounds
-are respected by rejection resampling (draws are clipped into the box for
-evaluation, and the mean stays inside by construction).  Deterministic for a
-seeded ``numpy.random.RandomState``.
+are respected by clipping every drawn candidate into the box before
+evaluation (boundary points therefore carry some clipping bias; the mean
+stays inside by construction).  Deterministic for a seeded
+``numpy.random.RandomState``.
 """
 
 from __future__ import annotations
@@ -98,26 +99,29 @@ class CMAES:
         new_mean = self.weights @ elite
         y = (new_mean - old_mean) / max(self.sigma, 1e-12)
 
-        # Conjugate evolution path (step size).
+        # Conjugate evolution path (step size).  With C = L L^T the
+        # whitened step is L^-1 y (NOT L^-T y).
+        chol = np.linalg.cholesky(self.c)
         self.ps = (1 - self.cs) * self.ps + math.sqrt(
-            self.cs * (2 - self.cs) * self.mu_eff) * np.linalg.solve(
-            np.linalg.cholesky(self.c).T, y)
+            self.cs * (2 - self.cs) * self.mu_eff) * np.linalg.solve(chol, y)
         self.sigma *= math.exp(
             (self.cs / self.damps) * (np.linalg.norm(self.ps) / self.chi_n - 1))
         self.sigma = min(max(self.sigma, 1e-9), float(
             np.mean(self.upper - self.lower)))
 
-        # Covariance evolution path with the stalled-path correction h.
+        # Covariance evolution path.  Hansen's stalled-path test divides
+        # the normalised path length by chi_n before the threshold.
         path_norm = np.linalg.norm(self.ps) / math.sqrt(
             1 - (1 - self.cs) ** (2 * (self._t + 1)))
-        h = 1.0 if path_norm < (1.4 + 2 / (self.dim + 1)) else 0.0
+        h = 1.0 if path_norm / self.chi_n < (1.4 + 2 / (self.dim + 1)) else 0.0
         self.pc = (1 - self.cc) * self.pc + h * math.sqrt(
             self.cc * (2 - self.cc) * self.mu_eff) * y
 
-        # Rank-one + rank-mu updates (Hansen: the h correction multiplies C).
+        # Rank-one + rank-mu updates.  When the path stalls (h=0) the
+        # variance-loss compensation ADDS cc(2-cc) C (Hansen eq. 47).
         pc_pc = np.outer(self.pc, self.pc)
         rank_one = self.c1 * (
-            pc_pc - (1 - h) * self.cc * (2 - self.cc) * self.c)
+            pc_pc + (1 - h) * self.cc * (2 - self.cc) * self.c)
         yi = (elite - old_mean) / max(self.sigma, 1e-12)
         rank_mu = self.cmu * (
             sum(self.weights[i] * np.outer(yi[i], yi[i])

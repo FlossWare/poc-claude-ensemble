@@ -67,6 +67,14 @@ def select_slate(
         raise ValueError("lambda_diversity must be >= 0")
     rng = rng or random.Random()
 
+    # An arm with no family label is its own family: it earns the diversity
+    # bonus at most once (like any labelled family), instead of a spurious
+    # repeatable bonus for being "never in chosen_families".
+    family_of = {
+        arm: families.get(arm) if families.get(arm) is not None else f"__unlabeled__:{arm}"
+        for arm in arms
+    }
+
     remaining = sorted(arms)
     draws = {
         arm: _beta_draw(rng, *stats.get(arm, (1.0, 1.0))) for arm in arms
@@ -81,7 +89,7 @@ def select_slate(
         for arm in remaining:
             gain = draws[arm]
             reason = "draw"
-            if families.get(arm) not in chosen_families and chosen_families:
+            if family_of[arm] not in chosen_families and chosen_families:
                 # First arm admits on draw alone; later arms can earn the
                 # diversity bonus for bringing a NEW family.
                 gain += lambda_diversity
@@ -92,16 +100,14 @@ def select_slate(
         slate.append(best_arm)
         remaining.remove(best_arm)
         admitted_by[best_arm] = best_reason
-        family = families.get(best_arm)
-        if family is not None:
-            chosen_families.add(family)
+        chosen_families.add(family_of[best_arm])
         score += draws[best_arm] + (
             lambda_diversity if best_reason == "diversity" else 0.0)
 
     return SlateSelection(
         slate=slate,
         draws=draws,
-        families={arm: families.get(arm, "?") for arm in slate},
+        families={arm: family_of[arm] for arm in slate},
         admitted_by=admitted_by,
         score=score,
     )
