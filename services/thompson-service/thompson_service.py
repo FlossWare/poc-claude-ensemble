@@ -59,6 +59,11 @@ class ModelStats:
         self.model_name = model_name
         self.successes = 0
         self.failures = 0
+        # Discounted (effective) counts: raw history is preserved above for
+        # reporting; the router draws from these so old evidence decays when
+        # POC_CLAUDE_ENSEMBLE_THOMPSON_DISCOUNT < 1.0 (1.0 = classic Thompson).
+        self.eff_successes = 0.0
+        self.eff_failures = 0.0
         self.total_cost = 0.0
         self.total_tokens = 0
         self.calls = 0
@@ -87,6 +92,8 @@ class ModelStats:
             'model_name': self.model_name,
             'successes': self.successes,
             'failures': self.failures,
+            'eff_successes': self.eff_successes,
+            'eff_failures': self.eff_failures,
             'total_cost': self.total_cost,
             'total_tokens': self.total_tokens,
             'calls': self.calls,
@@ -100,6 +107,10 @@ class ModelStats:
         model = cls(data['model_name'])
         model.successes = data.get('successes', 0)
         model.failures = data.get('failures', 0)
+        # Older state files predate the effective counts: seed them from the
+        # raw counts so the first discounted update starts from full history.
+        model.eff_successes = float(data.get('eff_successes', model.successes))
+        model.eff_failures = float(data.get('eff_failures', model.failures))
         model.total_cost = data.get('total_cost', 0.0)
         model.total_tokens = data.get('total_tokens', 0)
         model.calls = data.get('calls', 0)
@@ -120,7 +131,13 @@ class ThompsonState:
         self._load()
 
     def _load(self):
-        """Load state from file"""
+        """Load state from file.
+
+        A corrupt file is moved aside (``.corrupt-<timestamp>``) before the
+        service starts fresh, so the next save can never overwrite the only
+        copy of the learned history.  Individual malformed model records are
+        skipped -- one bad record must not discard every model.
+        """
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
@@ -128,20 +145,45 @@ class ThompsonState:
 
                 self.last_updated = data.get('last_updated', datetime.now(timezone.utc).isoformat())
 
-                # Load model stats
-                for model_data in data.get('models', {}).values():
-                    stats = ModelStats.from_dict(model_data)
-                    self.models[stats.model_name] = stats
+                # Load model stats, skipping (not failing on) bad records
+                models = data.get('models', {})
+                if not isinstance(models, dict):
+                    raise ValueError(f"'models' is not an object: {type(models).__name__}")
+                skipped = 0
+                for model_data in models.values():
+                    try:
+                        stats = ModelStats.from_dict(model_data)
+                        self.models[stats.model_name] = stats
+                    except (KeyError, TypeError, ValueError) as record_exc:
+                        skipped += 1
+                        logger.warning(
+                            f"Skipping malformed model record ({record_exc})")
+                if skipped:
+                    logger.warning(f"{skipped} model record(s) skipped during load")
 
                 logger.info(f"Loaded state for {len(self.models)} models")
             except Exception as e:
                 logger.error(f"Error loading state: {e}")
+                # Preserve the corrupt file for diagnosis/recovery before
+                # starting fresh; the next save would otherwise destroy it.
+                backup = self.state_file.with_name(
+                    f"{self.state_file.name}.corrupt-{int(time.time())}")
+                try:
+                    os.replace(self.state_file, backup)
+                    logger.warning(f"Corrupt state file moved aside: {backup}")
+                except OSError as move_exc:
+                    logger.error(f"Could not move corrupt state aside: {move_exc}")
                 self.models = {}
         else:
             logger.info(f"State file not found, starting fresh: {self.state_file}")
 
     def save(self) -> bool:
-        """Save state to file with atomic write"""
+        """Save state to file with atomic write.
+
+        Returns True on success.  A failed save is returned as False (and
+        logged) so callers like ``record_outcome`` can report the outcome as
+        NOT persisted instead of acknowledging lost data.
+        """
         try:
             self.last_updated = datetime.now(timezone.utc).isoformat()
 
@@ -153,12 +195,23 @@ class ThompsonState:
                 }
             }
 
-            # Atomic write: temp file + rename
-            with tempfile.NamedTemporaryFile(mode='w', dir=self.state_file.parent, delete=False) as tmp:
-                json.dump(data, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())  # Force to disk
-                os.replace(tmp.name, self.state_file)  # Atomic rename
+            # Atomic write: temp file + rename.  The temp file is unlinked
+            # on failure so a full disk does not litter the state directory.
+            tmp_name = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', dir=self.state_file.parent, delete=False) as tmp:
+                    tmp_name = tmp.name
+                    json.dump(data, tmp, indent=2)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())  # Force to disk
+                    os.replace(tmp.name, self.state_file)  # Atomic rename
+                    tmp_name = None  # replace succeeded; nothing to clean up
+            finally:
+                if tmp_name is not None:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
 
             logger.info(f"Saved state for {len(self.models)} models")
             return True
@@ -185,7 +238,14 @@ class ThompsonState:
                 self.models[model_name] = ModelStats(model_name)
                 created.append(model_name)
         if created:
-            self.save()
+            if not self.save():
+                # Roll back so a retry of the failed request cannot
+                # double-register; None (not []) signals the failure so the
+                # handler can answer ok:false instead of "nothing new".
+                for model_name in created:
+                    del self.models[model_name]
+                logger.error("New arms NOT persisted; registration rolled back")
+                return None
             logger.info(f"Registered {len(created)} new arm(s): {created}")
         return created
 
@@ -210,7 +270,7 @@ class ThompsonState:
             return 'haiku'
 
         arms = [
-            Arm(name, stats.successes, stats.failures, stats.avg_cost, stats.calls)
+            Arm(name, stats.eff_successes, stats.eff_failures, stats.avg_cost, stats.calls)
             for name, stats in self.models.items()
         ]
 
@@ -230,6 +290,29 @@ class ThompsonState:
         logger.info(f"Selected model: {selected} (task={task_type})")
         return selected
 
+    _DISCOUNT_ENV = "POC_CLAUDE_ENSEMBLE_THOMPSON_DISCOUNT"
+
+    @staticmethod
+    def _discount() -> float:
+        """Posterior decay factor per outcome, from the environment.
+
+        1.0 (default) = classic cumulative Thompson.  Values in (0, 1) decay
+        old evidence exponentially; e.g. 0.99 gives recent outcomes ~63% of
+        the posterior after 100 updates.  Invalid values fail closed to 1.0
+        (never to something more aggressive than the operator asked for).
+        """
+        raw = os.environ.get(ThompsonState._DISCOUNT_ENV, "1.0").strip()
+        try:
+            gamma = float(raw)
+        except ValueError:
+            logger.warning(f"invalid {ThompsonState._DISCOUNT_ENV} {raw!r}; using 1.0")
+            return 1.0
+        if not 0.0 < gamma <= 1.0:
+            logger.warning(
+                f"{ThompsonState._DISCOUNT_ENV} must be in (0, 1]; got {gamma}; using 1.0")
+            return 1.0
+        return gamma
+
     def record_outcome(self, model_name: str, task_type: str, success: bool, cost: float, tokens: int) -> bool:
         """
         Record outcome of a model call.
@@ -245,19 +328,41 @@ class ThompsonState:
             True if recorded successfully
         """
         try:
+            existed = model_name in self.models
             stats = self.get_or_create_model(model_name)
+
+            # Snapshot for rollback: a failed save must leave in-memory state
+            # unmutated, or a client retry of the `ok: false` response would
+            # double-count the outcome when a later save succeeds.
+            snapshot = stats.to_dict()
 
             if success:
                 stats.successes += 1
             else:
                 stats.failures += 1
 
+            # Discounted update: eff = gamma * eff + outcome.  gamma = 1.0
+            # (default) reduces exactly to the classic cumulative update, so
+            # the stored effective counts equal the raw counts until the
+            # operator opts into decay.  gamma in (0, 1) makes the posterior
+            # an exponentially-weighted estimate of RECENT performance, so a
+            # model that regresses loses rank without a manual reset.
+            gamma = self._discount()
+            stats.eff_successes = gamma * stats.eff_successes + (1.0 if success else 0.0)
+            stats.eff_failures = gamma * stats.eff_failures + (0.0 if success else 1.0)
+
             stats.total_cost += cost
             stats.total_tokens += tokens
             stats.calls += 1
             stats.last_updated = datetime.now(timezone.utc).isoformat()
 
-            self.save()
+            if not self.save():
+                if existed:
+                    self.models[model_name] = ModelStats.from_dict(snapshot)
+                else:
+                    del self.models[model_name]  # arm creation rolled back too
+                logger.error(f"Outcome for {model_name} NOT persisted; state rolled back")
+                return False
             logger.info(f"Recorded outcome for {model_name}: success={success}, cost={cost:.4f}")
             return True
         except Exception as e:
@@ -332,8 +437,14 @@ class ThompsonState:
         """Reset history for a model"""
         try:
             if model_name in self.models:
+                snapshot = self.models[model_name].to_dict()
                 self.models[model_name] = ModelStats(model_name)
-                self.save()
+                if not self.save():
+                    # Undo: the reset did not persist, so memory must not
+                    # claim it happened.
+                    self.models[model_name] = ModelStats.from_dict(snapshot)
+                    logger.error(f"Reset of {model_name} NOT persisted; rolled back")
+                    return False
                 logger.info(f"Reset model: {model_name}")
                 return True
             return False
@@ -436,6 +547,12 @@ class ThompsonService:
             elif action == 'ensure_arms':
                 models = req_data.get('models') or []
                 created = self.state.ensure_arms(models)
+                if created is None:
+                    logger.error(f"{ctx} Arm registration NOT persisted")
+                    return json.dumps({
+                        'ok': False,
+                        'error': 'ensure_arms failed: state not persisted',
+                        'models': models, 'request_id': ctx.request_id})
                 logger.info(f"{ctx} Registered arms (new: {len(created)})")
                 return json.dumps({'ok': True, 'created': created,
                                    'models': models, 'request_id': ctx.request_id})
