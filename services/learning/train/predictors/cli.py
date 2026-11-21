@@ -560,6 +560,9 @@ def dispatch(args: argparse.Namespace) -> Optional[int]:
             return EXIT_ANOMALIES if result["findings"] else EXIT_OK
 
         return None
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
     except base.InsufficientDataError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_DATA
