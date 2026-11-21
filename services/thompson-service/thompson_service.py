@@ -59,6 +59,11 @@ class ModelStats:
         self.model_name = model_name
         self.successes = 0
         self.failures = 0
+        # Discounted (effective) counts: raw history is preserved above for
+        # reporting; the router draws from these so old evidence decays when
+        # POC_CLAUDE_ENSEMBLE_THOMPSON_DISCOUNT < 1.0 (1.0 = classic Thompson).
+        self.eff_successes = 0.0
+        self.eff_failures = 0.0
         self.total_cost = 0.0
         self.total_tokens = 0
         self.calls = 0
@@ -84,6 +89,8 @@ class ModelStats:
             'model_name': self.model_name,
             'successes': self.successes,
             'failures': self.failures,
+            'eff_successes': self.eff_successes,
+            'eff_failures': self.eff_failures,
             'total_cost': self.total_cost,
             'total_tokens': self.total_tokens,
             'calls': self.calls,
@@ -96,6 +103,10 @@ class ModelStats:
         model = cls(data['model_name'])
         model.successes = data.get('successes', 0)
         model.failures = data.get('failures', 0)
+        # Older state files predate the effective counts: seed them from the
+        # raw counts so the first discounted update starts from full history.
+        model.eff_successes = float(data.get('eff_successes', model.successes))
+        model.eff_failures = float(data.get('eff_failures', model.failures))
         model.total_cost = data.get('total_cost', 0.0)
         model.total_tokens = data.get('total_tokens', 0)
         model.calls = data.get('calls', 0)
@@ -202,7 +213,7 @@ class ThompsonState:
             return 'haiku'
 
         arms = [
-            Arm(name, stats.successes, stats.failures, stats.avg_cost, stats.calls)
+            Arm(name, stats.eff_successes, stats.eff_failures, stats.avg_cost, stats.calls)
             for name, stats in self.models.items()
         ]
 
@@ -221,6 +232,29 @@ class ThompsonState:
 
         logger.info(f"Selected model: {selected} (task={task_type})")
         return selected
+
+    _DISCOUNT_ENV = "POC_CLAUDE_ENSEMBLE_THOMPSON_DISCOUNT"
+
+    @staticmethod
+    def _discount() -> float:
+        """Posterior decay factor per outcome, from the environment.
+
+        1.0 (default) = classic cumulative Thompson.  Values in (0, 1) decay
+        old evidence exponentially; e.g. 0.99 gives recent outcomes ~63% of
+        the posterior after 100 updates.  Invalid values fail closed to 1.0
+        (never to something more aggressive than the operator asked for).
+        """
+        raw = os.environ.get(ThompsonState._DISCOUNT_ENV, "1.0").strip()
+        try:
+            gamma = float(raw)
+        except ValueError:
+            logger.warning(f"invalid {ThompsonState._DISCOUNT_ENV} {raw!r}; using 1.0")
+            return 1.0
+        if not 0.0 < gamma <= 1.0:
+            logger.warning(
+                f"{ThompsonState._DISCOUNT_ENV} must be in (0, 1]; got {gamma}; using 1.0")
+            return 1.0
+        return gamma
 
     def record_outcome(self, model_name: str, task_type: str, success: bool, cost: float, tokens: int) -> bool:
         """
@@ -243,6 +277,16 @@ class ThompsonState:
                 stats.successes += 1
             else:
                 stats.failures += 1
+
+            # Discounted update: eff = gamma * eff + outcome.  gamma = 1.0
+            # (default) reduces exactly to the classic cumulative update, so
+            # the stored effective counts equal the raw counts until the
+            # operator opts into decay.  gamma in (0, 1) makes the posterior
+            # an exponentially-weighted estimate of RECENT performance, so a
+            # model that regresses loses rank without a manual reset.
+            gamma = self._discount()
+            stats.eff_successes = gamma * stats.eff_successes + (1.0 if success else 0.0)
+            stats.eff_failures = gamma * stats.eff_failures + (0.0 if success else 1.0)
 
             stats.total_cost += cost
             stats.total_tokens += tokens
