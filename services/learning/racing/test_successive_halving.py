@@ -6,13 +6,20 @@ from learning.racing.successive_halving import race, _plan
 
 
 class PlanTests(unittest.TestCase):
-    def test_plan_is_geometric(self):
+    def test_plan_is_geometric_with_exact_values(self):
+        # 9 arms, budget 90, eta 3: two rounds (ceil(log_3(9))), weights
+        # 1:3 normalised to the budget.  Per-arm probes [5, 15] -- exactly
+        # the eta ratio -- and the third round never runs (one survivor
+        # after round 2).
         plan = _plan(9, 90, 3)
-        self.assertTrue(all(plan[i] <= plan[i + 1] for i in range(len(plan) - 1)))
+        self.assertEqual(plan, [5, 15])
+        self.assertEqual(plan[1] / plan[0], 3)  # geometric growth at eta
 
     def test_degenerate_fields(self):
         self.assertEqual(_plan(1, 10, 3), [10])
-        self.assertEqual(_plan(4, 2, 3), [1])  # budget below arms: one probe each
+        # budget below arms: one probe each.  race() rejects this case with
+        # ValueError; _plan alone has no budget to enforce against.
+        self.assertEqual(_plan(4, 5, 3), [1])
 
 
 class RaceTests(unittest.TestCase):
@@ -34,6 +41,7 @@ class RaceTests(unittest.TestCase):
         ranked, spent = race(sorted(true_means), evaluate, budget=27, eta=3)
         self.assertLessEqual(spent, 27)
         self.assertEqual(ranked[0][0], "best")
+        self.assertTrue(ranked[0][3])  # winner is a survivor
         # Full evaluation at the same probe depth would be 9 arms x many
         # probes; the race spent at most the budget.
         self.assertLess(spent, 9 * 6)
@@ -72,9 +80,9 @@ class RaceTests(unittest.TestCase):
 
         ranked1, _ = race(["b", "a", "c"], evaluate, budget=12)
         ranked2, _ = race(["c", "b", "a"], evaluate, budget=12)
-        self.assertEqual([arm for arm, _, _ in ranked1], [arm for arm, _, _ in ranked2])
+        self.assertEqual([arm for arm, _, _, _ in ranked1], [arm for arm, _, _, _ in ranked2])
 
-    def test_ranked_output_shape(self):
+    def test_ranked_output_shape_and_survivor_flag(self):
         def evaluate(arm, round_index, probe_index):
             return {"x": 0.8, "y": 0.4}[arm]
 
@@ -82,6 +90,17 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(ranked[0][0], "x")
         self.assertEqual(ranked[1][0], "y")
         self.assertGreater(ranked[0][2], 0)  # probe counts recorded
+        self.assertTrue(ranked[0][3])  # x survived
+        self.assertFalse(ranked[1][3])  # y was eliminated
+
+    def test_single_arm_reports_unprobed_none(self):
+        """One arm = no race to run; mean is None, not a fabricated 0.0."""
+        def evaluate(arm, round_index, probe_index):  # pragma: no cover
+            raise AssertionError("single-arm race must not probe")
+
+        ranked, spent = race(["solo"], evaluate, budget=10)
+        self.assertEqual(spent, 0)
+        self.assertEqual(ranked[0], ("solo", None, 0, True))
 
 
 if __name__ == "__main__":

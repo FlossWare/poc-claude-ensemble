@@ -51,7 +51,6 @@ class PolicyTests(unittest.TestCase):
     def test_context_separation(self):
         """An arm that wins only for code-review must not dominate elsewhere."""
         lts = LinearTS("/nonexistent/state.json")
-        rng = np.random.RandomState(7)
         # haiku is perfect for code-review, terrible for documentation.
         # glm is mediocre (0.5) everywhere.
         for _ in range(60):
@@ -96,8 +95,14 @@ class PersistenceTests(unittest.TestCase):
             lts.save()
             reloaded = LinearTS(path)
             self.assertEqual(reloaded.arms["haiku"].updates, 1)
-            np.testing.assert_allclose(
-                reloaded.arms["haiku"].a, lts.arms["haiku"].a)
+            self.assertEqual(reloaded.arms["glm-5-3"].updates, 1)
+            for arm in ("haiku", "glm-5-3"):
+                np.testing.assert_allclose(reloaded.arms[arm].a, lts.arms[arm].a)
+                np.testing.assert_allclose(reloaded.arms[arm].b, lts.arms[arm].b)
+            self.assertEqual(
+                reloaded.mean_scores("code-review"), lts.mean_scores("code-review"))
+            self.assertEqual(
+                reloaded.mean_scores("documentation"), lts.mean_scores("documentation"))
 
     def test_corrupt_state_starts_fresh(self):
         with TemporaryDirectory() as tmp:
@@ -106,6 +111,43 @@ class PersistenceTests(unittest.TestCase):
             lts = LinearTS(path)
             self.assertEqual(lts.arms, {})
             self.assertIsNotNone(lts.load_error)
+
+    def test_wrong_shaped_json_state_starts_fresh(self):
+        """Valid JSON with the wrong shape must not crash the constructor."""
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lts.json"
+            for bad in ('[1, 2, 3]', 'null', '42', '{"schema_version": 1, "arms": []}',
+                        '{"schema_version": 1, "arms": null}'):
+                with self.subTest(body=bad):
+                    path.write_text(bad)
+                    lts = LinearTS(path)
+                    self.assertEqual(lts.arms, {})
+                    self.assertIsNotNone(lts.load_error)
+
+    def test_non_finite_state_values_rejected(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lts.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "feature_names": list(FEATURE_NAMES),
+                "arms": {"haiku": {
+                    "arm": "haiku",
+                    "a": [[float("nan")] * DIM],
+                    "b": [0.0] * DIM,
+                }},
+            }))
+            lts = LinearTS(path)
+            self.assertEqual(lts.arms, {})
+            self.assertIsNotNone(lts.load_error)
+
+    def test_select_survives_all_nan_scores(self):
+        """Every draw NaN must still return a requested arm (no None)."""
+        lts = LinearTS("/nonexistent/state.json")
+        arm = lts.arm("haiku")
+        arm.a = np.zeros((DIM, DIM))  # singular -> NaN draws
+        arm.b = np.zeros(DIM)
+        picked = lts.select(["haiku", "glm-5-3"], "code-review")
+        self.assertIn(picked, ["haiku", "glm-5-3"])
 
     def test_stale_feature_vocabulary_starts_fresh(self):
         with TemporaryDirectory() as tmp:

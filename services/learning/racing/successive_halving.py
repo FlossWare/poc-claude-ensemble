@@ -22,13 +22,20 @@ behaviour, which is what makes it testable with synthetic evaluators.
 from __future__ import annotations
 
 import math
-from typing import Callable, List, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 Evaluate = Callable[[str, int, int], float]
 
 
-class RaceResult(Tuple[List[Tuple[str, float, int]], int]):
-    """Ranked survivors (arm, mean_reward, probes) and total probes spent."""
+class RaceResult(Tuple[List[Tuple[str, Optional[float], int, bool]], int]):
+    """Ranked arms and total probes spent.
+
+    Each entry is ``(arm, mean_reward, probes, survived)``: survivors first
+    (by mean reward), then eliminated arms with the partial means they earned
+    before elimination.  ``mean_reward`` is ``None`` for an arm that was never
+    probed (possible only for a single-arm race, where no decision is needed);
+    it is never a fabricated 0.0.
+    """
 
 
 def _plan(num_arms: int, budget: int, eta: int) -> List[int]:
@@ -110,9 +117,17 @@ def race(
         keep = max(1, len(survivors) // eta)
         survivors = [arm for _, arm in round_means[:keep]]
 
+    # Survivors rank first (they carry the most-probed, most reliable
+    # means); eliminated arms follow with the partial means they earned.
+    # An unprobed arm (only possible for a single-arm race, which exits
+    # before probing) reports None, never a fabricated 0.0.
+    def _entry(arm: str) -> Tuple[str, Optional[float], int, bool]:
+        reward_sum, probes = totals[arm]
+        mean: Optional[float] = reward_sum / probes if probes else None
+        return (arm, mean, probes, arm in survivors)
+
     ranked = sorted(
-        ((arm, totals[arm][0] / totals[arm][1] if totals[arm][1] else 0.0,
-          totals[arm][1]) for arm in arms),
-        key=lambda item: (-item[1], item[0]),
+        (_entry(arm) for arm in arms),
+        key=lambda item: (not item[3], -(item[1] if item[1] is not None else 0.0), item[0]),
     )
     return RaceResult((ranked, spent))

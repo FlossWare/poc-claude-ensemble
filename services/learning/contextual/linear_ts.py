@@ -85,14 +85,20 @@ class ArmState:
         self.updates = 0
 
     def draw(self, rng: np.random.RandomState, v: float = EXPLORATION_V) -> np.ndarray:
-        """One theta sample from the posterior."""
-        mean = np.linalg.solve(self.a, self.b)
-        # Posterior covariance v^2 A^-1; sample via Cholesky of the inverse.
-        cov = np.linalg.inv(self.a)
+        """One theta sample from the posterior.
+
+        A singular or otherwise unusable A degrades to a prior draw
+        (zero mean, small noise) instead of raising: selection must never
+        crash on pathological state.
+        """
         try:
+            mean = np.linalg.solve(self.a, self.b)
+            cov = np.linalg.inv(self.a)
             chol = np.linalg.cholesky(cov * v * v + 1e-12 * np.eye(DIM))
-        except np.linalg.LinAlgError:  # numerically indefinite; fall back
-            chol = np.eye(DIM) * 1e-6
+        except np.linalg.LinAlgError:
+            return rng.standard_normal(DIM) * 1e-3
+        if not np.isfinite(mean).all():
+            return rng.standard_normal(DIM) * 1e-3
         return mean + chol @ rng.standard_normal(DIM)
 
     def update(self, x: np.ndarray, reward: float) -> None:
@@ -120,6 +126,8 @@ class ArmState:
                 f"arm {data['arm']!r} has wrong feature dimension "
                 f"(state file from a different FEATURE_NAMES?)"
             )
+        if not (np.isfinite(a).all() and np.isfinite(b).all()):
+            raise ValueError(f"arm {data['arm']!r} contains non-finite values")
         state.a = a
         state.b = b
         state.updates = int(data.get("updates", 0))
@@ -144,19 +152,24 @@ class LinearTS:
         try:
             with open(self.state_path, "r", encoding="utf-8") as handle:
                 document = json.load(handle)
+            if not isinstance(document, dict):
+                raise ValueError(f"state file is not a JSON object ({type(document).__name__})")
             if document.get("schema_version") != SCHEMA_VERSION:
                 raise ValueError(
                     f"unsupported schema_version {document.get('schema_version')!r}"
                 )
             if tuple(document.get("feature_names", ())) != FEATURE_NAMES:
                 raise ValueError("feature vocabulary changed; state is stale")
+            arms = document.get("arms")
+            if not isinstance(arms, dict):
+                raise ValueError(f"state 'arms' is not an object ({type(arms).__name__})")
             self.arms = {
                 arm: ArmState.from_dict(payload)
-                for arm, payload in document.get("arms", {}).items()
+                for arm, payload in arms.items()
             }
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             # Corrupt or stale state must not take routing down: start fresh
-            # and let the ledger refills the posteriors.  The bad file is
+            # and let the ledger refill the posteriors.  The bad file is
             # preserved for diagnosis by the caller's next atomic write.
             self.arms = {}
             self.load_error = str(exc)
@@ -195,13 +208,21 @@ class LinearTS:
             raise ValueError("no arms to select from")
         rng = rng or np.random.RandomState()
         x = features(task_type, prompt_chars)
-        best_arm, best_score = None, -math.inf
+        best_arm: Optional[str] = None
+        best_score = -math.inf
         for name in arms:
             theta = self.arm(name).draw(rng)
             score = float(theta @ x)
+            # NaN scores (degenerate posterior) must never win a comparison
+            # and must never leave best_arm unset under `python -O`.
+            if math.isnan(score):
+                continue
             if score > best_score:
                 best_arm, best_score = name, score
-        assert best_arm is not None
+        if best_arm is None:
+            # Every draw was NaN (pathological state): fall back to a
+            # deterministic choice rather than returning None.
+            best_arm = arms[0]
         return best_arm
 
     def update(
@@ -215,10 +236,16 @@ class LinearTS:
     ) -> Dict[str, float]:
         """Posterior-mean score per arm (no exploration noise) for dashboards."""
         x = features(task_type, prompt_chars)
-        return {
-            name: float(np.linalg.solve(state.a, state.b) @ x)
-            for name, state in self.arms.items()
-        }
+        scores: Dict[str, float] = {}
+        for name, state in self.arms.items():
+            try:
+                mean = np.linalg.solve(state.a, state.b)
+                value = float(mean @ x)
+            except np.linalg.LinAlgError:
+                # Singular A (pathological state): report the prior mean.
+                value = 0.0
+            scores[name] = value if math.isfinite(value) else 0.0
+        return scores
 
 
 def rewards_from_outcomes(success: bool, quality: Optional[float] = None) -> float:

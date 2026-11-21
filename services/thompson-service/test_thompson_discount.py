@@ -61,26 +61,48 @@ class DiscountTests(unittest.TestCase):
             self.assertEqual(stats.failures, 2)
 
     def test_discounted_posterior_drops_regressed_model(self):
-        """A model that was great then broke loses to a steady mediocre one."""
+        """A model that was great then broke loses to a steady mediocre one.
+
+        Verified against an inline reference implementation of the discount
+        recurrence, so the assertion holds for the MATH, not for a lucky
+        outcome ordering.
+        """
+        gamma = 0.5
+        # regressed: 50 successes, then 6 failures.
+        regressed_seq = [True] * 50 + [False] * 6
+        # steady: alternating failure/success (recency-neutral order, true
+        # rate 0.5, ends on a success).
+        steady_seq = [i % 2 == 1 for i in range(40)]
+
+        def reference(sequence):
+            s = f = 0.0
+            for outcome in sequence:
+                s = gamma * s + (1.0 if outcome else 0.0)
+                f = gamma * f + (0.0 if outcome else 1.0)
+            return s, f
+
         with TemporaryDirectory() as tmp:
             state = ts.ThompsonState(Path(tmp) / "state.json")
-            # regressed: 50 successes in the past, 6 recent failures.
-            _record_many(state, "regressed", 50, 0, gamma_env="1.0")
-            _record_many(state, "regressed", 0, 6, gamma_env="0.5")
-            # steady: 60% success overall; each cycle's failures come first
-            # so they are the STALEST evidence for the steady model too.
-            for i in range(40):
-                _record_many(
-                    state, "steady",
-                    successes=0 if i % 5 < 2 else 1,
-                    failures=1 if i % 5 < 2 else 0,
-                    gamma_env="0.5",
-                )
-            r = state.models["regressed"]
-            s = state.models["steady"]
-            # Classic view: regressed (50/6) still looks better than steady (24/16).
+            import os
+            os.environ[ts.ThompsonState._DISCOUNT_ENV] = str(gamma)
+            try:
+                for outcome in regressed_seq:
+                    state.record_outcome("regressed", "t", outcome, 0.0, 0)
+                for outcome in steady_seq:
+                    state.record_outcome("steady", "t", outcome, 0.0, 0)
+            finally:
+                os.environ.pop(ts.ThompsonState._DISCOUNT_ENV, None)
+            r, s = state.models["regressed"], state.models["steady"]
+            # Exact match with the closed recurrence.
+            ref_r, ref_s = reference(regressed_seq), reference(steady_seq)
+            self.assertAlmostEqual(r.eff_successes, ref_r[0])
+            self.assertAlmostEqual(r.eff_failures, ref_r[1])
+            self.assertAlmostEqual(s.eff_successes, ref_s[0])
+            self.assertAlmostEqual(s.eff_failures, ref_s[1])
+            # Classic view: regressed (50/6) looks far better than steady (20/20).
             self.assertGreater(r.success_rate, s.success_rate)
-            # Discounted view: regressed's effective rate collapses.
+            # Discounted view: regressed's effective rate collapses below
+            # steady's -- the drift is detected.
             eff_r = r.eff_successes / (r.eff_successes + r.eff_failures)
             eff_s = s.eff_successes / (s.eff_successes + s.eff_failures)
             self.assertGreater(eff_s, eff_r)

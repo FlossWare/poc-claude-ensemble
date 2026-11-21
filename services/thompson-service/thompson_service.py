@@ -125,7 +125,13 @@ class ThompsonState:
         self._load()
 
     def _load(self):
-        """Load state from file"""
+        """Load state from file.
+
+        A corrupt file is moved aside (``.corrupt-<timestamp>``) before the
+        service starts fresh, so the next save can never overwrite the only
+        copy of the learned history.  Individual malformed model records are
+        skipped -- one bad record must not discard every model.
+        """
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
@@ -133,20 +139,45 @@ class ThompsonState:
 
                 self.last_updated = data.get('last_updated', datetime.now(timezone.utc).isoformat())
 
-                # Load model stats
-                for model_data in data.get('models', {}).values():
-                    stats = ModelStats.from_dict(model_data)
-                    self.models[stats.model_name] = stats
+                # Load model stats, skipping (not failing on) bad records
+                models = data.get('models', {})
+                if not isinstance(models, dict):
+                    raise ValueError(f"'models' is not an object: {type(models).__name__}")
+                skipped = 0
+                for model_data in models.values():
+                    try:
+                        stats = ModelStats.from_dict(model_data)
+                        self.models[stats.model_name] = stats
+                    except (KeyError, TypeError, ValueError) as record_exc:
+                        skipped += 1
+                        logger.warning(
+                            f"Skipping malformed model record ({record_exc})")
+                if skipped:
+                    logger.warning(f"{skipped} model record(s) skipped during load")
 
                 logger.info(f"Loaded state for {len(self.models)} models")
             except Exception as e:
                 logger.error(f"Error loading state: {e}")
+                # Preserve the corrupt file for diagnosis/recovery before
+                # starting fresh; the next save would otherwise destroy it.
+                backup = self.state_file.with_name(
+                    f"{self.state_file.name}.corrupt-{int(time.time())}")
+                try:
+                    os.replace(self.state_file, backup)
+                    logger.warning(f"Corrupt state file moved aside: {backup}")
+                except OSError as move_exc:
+                    logger.error(f"Could not move corrupt state aside: {move_exc}")
                 self.models = {}
         else:
             logger.info(f"State file not found, starting fresh: {self.state_file}")
 
-    def save(self):
-        """Save state to file with atomic write"""
+    def save(self) -> bool:
+        """Save state to file with atomic write.
+
+        Returns True on success.  A failed save is returned as False (and
+        logged) so callers like ``record_outcome`` can report the outcome as
+        NOT persisted instead of acknowledging lost data.
+        """
         try:
             self.last_updated = datetime.now(timezone.utc).isoformat()
 
@@ -166,8 +197,10 @@ class ThompsonState:
                 os.replace(tmp.name, self.state_file)  # Atomic rename
 
             logger.info(f"Saved state for {len(self.models)} models")
+            return True
         except Exception as e:
             logger.error(f"Error saving state: {e}")
+            return False
 
     def get_or_create_model(self, model_name: str) -> ModelStats:
         """Get or create stats for a model"""
@@ -188,8 +221,10 @@ class ThompsonState:
                 self.models[model_name] = ModelStats(model_name)
                 created.append(model_name)
         if created:
-            self.save()
-            logger.info(f"Registered {len(created)} new arm(s): {created}")
+            if not self.save():
+                logger.error("New arms registered in memory but NOT persisted")
+            else:
+                logger.info(f"Registered {len(created)} new arm(s): {created}")
         return created
 
     def select_model(self, task_type: str, required_capability: float = 0.5, max_cost: float = float('inf')) -> str:
@@ -293,7 +328,11 @@ class ThompsonState:
             stats.calls += 1
             stats.last_updated = datetime.now(timezone.utc).isoformat()
 
-            self.save()
+            persisted = self.save()
+            if not persisted:
+                logger.error(
+                    f"Outcome for {model_name} recorded in memory but NOT persisted")
+                return False
             logger.info(f"Recorded outcome for {model_name}: success={success}, cost={cost:.4f}")
             return True
         except Exception as e:
@@ -305,7 +344,9 @@ class ThompsonState:
         try:
             if model_name in self.models:
                 self.models[model_name] = ModelStats(model_name)
-                self.save()
+                if not self.save():
+                    logger.error(f"Reset of {model_name} NOT persisted")
+                    return False
                 logger.info(f"Reset model: {model_name}")
                 return True
             return False
