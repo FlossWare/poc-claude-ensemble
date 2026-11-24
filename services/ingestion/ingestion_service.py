@@ -503,6 +503,123 @@ def ingest(body: dict[str, Any]) -> dict[str, Any]:
         raise
 
 
+MAX_BATCH_ITEMS = 50
+
+
+def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
+    """Ingest many text items in one request with cross-item embedding.
+
+    Body: ``{"items": [{title, text, ...}, ...]}`` -- each item follows the
+    same ``resolve_source`` text contract as a single ingestion (exactly one
+    of uri/content_base64/text; batch use is text items).  Knowledge records
+    are submitted per item (SQLite serializes writes anyway); the expensive
+    embedding stage is batched across every item in the request, which is
+    what makes bulk ingestion GPU-bound instead of per-request-overhead-
+    bound.  Per-item results are returned in input order.
+    """
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise IngestionError("items must be a non-empty list", 400, "invalid_request")
+    if len(items) > MAX_BATCH_ITEMS:
+        raise IngestionError(f"items exceeds the batch limit of {MAX_BATCH_ITEMS}", 413, "batch_too_large")
+    # Keep the request inside the service's 12 MiB body cap: budget the
+    # total text across the batch to one single-item maximum.
+    total_chars = sum(len(item.get("text", "")) for item in items if isinstance(item, dict))
+    if total_chars > MAX_TEXT_CHARS:
+        raise IngestionError(
+            f"batch text total {total_chars} exceeds the {MAX_TEXT_CHARS} character budget",
+            413, "batch_too_large")
+    endpoints = indexing.Endpoints(
+        knowledge=KNOWLEDGE_URL,
+        chunking=CHUNKING_URL,
+        embedding=EMBEDDING_URL,
+        lexical=LEXICAL_URL,
+        vector=VECTOR_URL,
+        index=os.environ.get("POC_CLAUDE_ENSEMBLE_INDEX_URL", "http://127.0.0.1:8777"),
+    )
+    results: list[dict[str, Any]] = [None] * len(items)  # type: ignore[list-item]
+    # Phase 1: resolve every source (cheap, local), then submit ALL
+    # knowledge records in one batched request/transaction.
+    resolved: list[tuple[int, dict[str, Any], str]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise IngestionError(f"items[{index}] must be an object", 400, "invalid_request")
+        try:
+            source = resolve_source(item)
+        except IngestionError as exc:
+            results[index] = {"ok": False, "status": "invalid", "error": str(exc)}
+            continue
+        ingestion_id = str(uuid4())
+        _record_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
+        resolved.append((index, source, ingestion_id))
+
+    accepted: list[tuple[int, dict[str, Any], str]] = []
+    if resolved:
+        knowledge_results = indexing.submit_records_batch(
+            KNOWLEDGE_URL,
+            records=[
+                {
+                    "source_id": source["source_id"],
+                    "revision_sequence": time.time_ns() + position,
+                    "revision_id": source["content_sha256"],
+                    "title": source["title"],
+                    "content": source["text"],
+                    "provenance": {"origin": source["origin"], "locator": source["locator"]},
+                    "profiles": PROFILES,
+                }
+                for position, (_, source, _) in enumerate(resolved)
+            ],
+            post=_post_json,
+        )
+        for (index, source, ingestion_id), knowledge in zip(resolved, knowledge_results):
+            decision = knowledge.get("decision")
+            if decision not in {"accepted", "duplicate"}:
+                _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
+                results[index] = {"ok": True, "status": "rejected", "decision": decision, "chunks": 0}
+                continue
+            accepted.append((index, source, ingestion_id))
+
+    # Phase 2: one cross-item batched indexing pass over every accepted item.
+    indexed = []
+    if accepted:
+        try:
+            indexed = indexing.index_texts_batch(
+                endpoints=endpoints,
+                sources=[source for _, source, _ in accepted],
+                profiles=PROFILES,
+                chunk_profile=CHUNK_PROFILE,
+                media_type="text/plain",
+                post=_post_json,
+            )
+        except indexing.IndexingError as exc:
+            raise IngestionError(str(exc), exc.status, exc.code) from exc
+
+    # Phase 3: completion events and per-item results, input order.
+    completed = 0
+    for (index, source, ingestion_id), item_indexed in zip(accepted, indexed):
+        _record_ingestion_event(
+            source, ingestion_id, "ingestion.completed", status="completed",
+            chunks=item_indexed["chunks"], vectors=item_indexed["vectors"],
+            content_sha256=item_indexed["content_sha256"],
+        )
+        results[index] = {
+            "ok": True, "status": "completed", "ingestion_id": ingestion_id,
+            "source_id": source["source_id"],
+            "chunks": item_indexed["chunks"], "vectors": item_indexed["vectors"],
+            "content_sha256": item_indexed["content_sha256"],
+        }
+        completed += 1
+    return {
+        "ok": True,
+        "batch_size": len(items),
+        "completed": completed,
+        "invalid": sum(1 for r in results if r is not None and r.get("status") == "invalid"),
+        "rejected": sum(1 for r in results if r is not None and r.get("status") == "rejected"),
+        "profiles": PROFILES,
+        "results": results,
+    }
+
+
 def _ledger_locator(value: str) -> str:
     """Drop query strings and fragments: they can carry signed tokens or other secrets."""
     parsed = urllib.parse.urlsplit(value)
@@ -626,6 +743,8 @@ class IngestionHandler(BaseHTTPRequestHandler):
                 self._send(200, preview(body))
             elif self.path == "/ingest":
                 self._send(200, ingest(body))
+            elif self.path == "/ingest/batch":
+                self._send(200, ingest_batch(body))
             else:
                 self._send(404, {"ok": False, "error": "not found"})
         except IngestionError as exc:
