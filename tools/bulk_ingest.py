@@ -382,8 +382,11 @@ def push_text_item(
         count_skip(report, "text_too_large")
         return "skipped"
 
-    # Request size guard (JSON overhead estimate)
-    est_bytes = len(text.encode("utf-8")) + len(title.encode("utf-8")) + 1024
+    # Request size guard. json.dumps(ensure_ascii=True) expands non-ASCII
+    # to \uXXXX (6 bytes per BMP char, 12 for non-BMP), and quotes,
+    # backslashes and newlines also double. Use the actual serialized
+    # length, not a raw UTF-8 estimate.
+    est_bytes = len(json.dumps({"text": text, "title": title}).encode("utf-8")) + 512
     if est_bytes > MAX_REQUEST_BYTES:
         report["skipped_malformed"] += 1
         count_skip(report, "request_too_large")
@@ -478,6 +481,117 @@ def _pdf_candidates(input_path: Path) -> list[Path]:
     return sorted(p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf")
 
 
+def push_batch_items(
+    items: list[dict],
+    *,
+    source: str,
+    origin: str | None,
+    gateway: str,
+    dry_run: bool,
+    ledger_path: Path,
+    succeeded_hashes: set[str],
+    report: dict,
+    max_text_chars: int = MAX_TEXT_CHARS,
+) -> int:
+    """Validate, dedup and push many text items in ONE batch request.
+
+    Items are dicts with keys text, title, locator, retrieved_at,
+    source_file and optional extra (same shape push_text_item consumes).
+    Validation and ledger dedup are per item (identical skip reasons); the
+    accepted items are posted together to the ingestion service's batch
+    endpoint, which embeds them in cross-item batches.  Returns the number
+    of items pushed (0 when everything was skipped).
+    """
+    payload_items: list[dict] = []
+    accepted: list[tuple[dict, str]] = []  # (item, digest)
+    for item in items:
+        text = item["text"]
+        title = item["title"]
+
+        def _skip(reason: str) -> None:
+            report["skipped_malformed"] += 1
+            count_skip(report, reason)
+
+        if not text.strip():
+            _skip("empty_text")
+            continue
+        if len(text) > max_text_chars:
+            _skip("text_too_large")
+            continue
+        est_bytes = len(json.dumps({"text": text, "title": title}).encode("utf-8")) + 512
+        if est_bytes > MAX_REQUEST_BYTES:
+            _skip("request_too_large")
+            continue
+        h = content_hash(text)
+        if h in succeeded_hashes:
+            report["skipped_duplicate"] += 1
+            count_skip(report, "ledger_duplicate")
+            continue
+        if dry_run:
+            report["ingested"] += 1
+            append_ledger(ledger_path, _ledger_entry(
+                source=source, origin=origin, locator=item.get("locator"),
+                retrieved_at=item.get("retrieved_at"), source_file=item["source_file"],
+                title=title, digest=h, characters=len(text),
+                extra_fields=item.get("extra"),
+            ) | {"status": "dry_run", "response": None})
+            succeeded_hashes.add(h)
+            continue
+        payload_items.append({"text": text, "title": title[:300]})
+        accepted.append((item, h))
+
+    if not payload_items:
+        return 0
+
+    status, body = gateway_post(gateway, "/api/v1/ingestion/ingest/batch",
+                                {"items": payload_items})
+    chunk_profile = chunk_profile_of(body) if isinstance(body, dict) else None
+    results = body.get("results") if isinstance(body, dict) else None
+
+    if status != 200 or not isinstance(results, list) or len(results) != len(accepted):
+        # Whole-batch transport failure: no item outcome is known.
+        report["failed"] += len(accepted)
+        err_detail = body if isinstance(body, str) else json.dumps(body)[:500]
+        report["errors"].append({"stage": "batch", "status": status, "detail": err_detail})
+        for item, h in accepted:
+            append_ledger(ledger_path, _ledger_entry(
+                source=source, origin=origin, locator=item.get("locator"),
+                retrieved_at=item.get("retrieved_at"), source_file=item["source_file"],
+                title=item["title"], digest=h, characters=len(item["text"]),
+                extra_fields=item.get("extra"),
+            ) | {"status": "failed", "stage": "batch", "http_status": status,
+                 "response": body if isinstance(body, dict) else {"error": body}})
+        return len(accepted)
+
+    for (item, h), result in zip(accepted, results):
+        entry = _ledger_entry(
+            source=source, origin=origin, locator=item.get("locator"),
+            retrieved_at=item.get("retrieved_at"), source_file=item["source_file"],
+            title=item["title"], digest=h, characters=len(item["text"]),
+            extra_fields=item.get("extra"),
+        )
+        if isinstance(result, dict) and result.get("ok") and result.get("status") in ("completed", "rejected"):
+            report["ingested"] += 1
+            append_ledger(ledger_path, entry | {
+                "ingestion_id": result.get("ingestion_id"),
+                "ingest_status": result.get("status"),
+                "decision": result.get("decision"),
+                "chunks": result.get("chunks"),
+                "vectors": result.get("vectors"),
+                "chunk_profile": chunk_profile,
+                "status": "succeeded",
+                "response": result,
+            })
+            succeeded_hashes.add(h)
+        else:
+            report["failed"] += 1
+            append_ledger(ledger_path, entry | {
+                "status": "failed", "stage": "batch_item",
+                "response": result if isinstance(result, dict) else {"error": str(result)},
+            })
+    return len(accepted)
+
+
 def run(
     input_path: Path,
     source: str,
@@ -492,6 +606,7 @@ def run(
     max_text_chars: int = MAX_TEXT_CHARS,
     max_pdf_bytes: int = MAX_PDF_BYTES,
     max_pdf_pages: int = MAX_PDF_PAGES,
+    batch_size: int = 1,
 ) -> dict:
     if input_format not in INPUT_FORMATS:
         raise ValueError(f"unsupported input_format: {input_format}")
@@ -508,8 +623,15 @@ def run(
             print(f"error: --format pdf expects a .pdf file: {input_path}", file=sys.stderr)
             sys.exit(2)
     elif input_path.is_dir():
-        candidates = (_pdf_candidates(input_path) if input_format == "pdf"
-                      else sorted(input_path.rglob("*.json")))
+        if input_format == "pdf":
+            candidates = _pdf_candidates(input_path)
+        else:
+            # JSON items and JSONL batch files (one JSON object per line --
+            # the fleet scrapes' dominant format) are both JSON input.
+            candidates = sorted(
+                p for p in input_path.rglob("*")
+                if p.is_file() and p.suffix.lower() in {".json", ".jsonl"}
+            )
     else:
         print(f"error: PATH does not exist: {input_path}", file=sys.stderr)
         sys.exit(2)
@@ -538,6 +660,7 @@ def run(
         report["provenance_note"] = provenance_note
 
     processed = 0  # number of items we attempted to push (or would have)
+    pending: list[dict] = []  # buffered items awaiting a batch push
 
     for file_path in candidates:
         # Global caps
@@ -641,27 +764,49 @@ def run(
             continue
 
         try:
-            raw_item = json.loads(raw_text)
+            if file_path.suffix.lower() == ".jsonl":
+                # One JSON object per line; blank lines are skipped, bad
+                # lines are counted individually (a single corrupt line
+                # must not discard the rest of a batch file).
+                items_to_extract: list[dict] = []
+                for line in raw_text.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        elem = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        report["skipped_malformed"] += 1
+                        count_skip(report, "invalid_jsonl_line")
+                        continue
+                    if isinstance(elem, dict):
+                        items_to_extract.append(elem)
+                    else:
+                        report["skipped_malformed"] += 1
+                        count_skip(report, "jsonl_line_not_object")
+                raw_item = None
+            else:
+                raw_item = json.loads(raw_text)
         except (json.JSONDecodeError, ValueError):
             report["skipped_malformed"] += 1
             count_skip(report, "invalid_json")
             continue
 
-        # Handle both single-object and array-of-objects files
-        items_to_extract: list[dict] = []
-        if isinstance(raw_item, list):
-            for elem in raw_item:
-                if isinstance(elem, dict):
-                    items_to_extract.append(elem)
-                else:
-                    report["skipped_malformed"] += 1
-                    count_skip(report, "array_element_not_object")
-        elif isinstance(raw_item, dict):
-            items_to_extract.append(raw_item)
-        else:
-            report["skipped_malformed"] += 1
-            count_skip(report, "not_a_json_object")
-            continue
+        if raw_item is not None:
+            # Handle both single-object and array-of-objects files
+            items_to_extract = []
+            if isinstance(raw_item, list):
+                for elem in raw_item:
+                    if isinstance(elem, dict):
+                        items_to_extract.append(elem)
+                    else:
+                        report["skipped_malformed"] += 1
+                        count_skip(report, "array_element_not_object")
+            elif isinstance(raw_item, dict):
+                items_to_extract.append(raw_item)
+            else:
+                report["skipped_malformed"] += 1
+                count_skip(report, "not_a_json_object")
+                continue
 
         for raw_obj in items_to_extract:
             if limit is not None and processed >= limit:
@@ -673,6 +818,27 @@ def run(
             if normalized is None:
                 report["skipped_malformed"] += 1
                 count_skip(report, reason or "unknown")
+                continue
+
+            if batch_size > 1:
+                # Buffered batch mode: collect items and push them in one
+                # cross-item batch request (see push_batch_items).
+                pending.append({
+                    "text": normalized["text"],
+                    "title": normalized["title"],
+                    "locator": normalized.get("url"),
+                    "retrieved_at": normalized.get("timestamp"),
+                    "source_file": str(file_path),
+                })
+                processed += 1
+                if len(pending) >= batch_size:
+                    push_batch_items(
+                        pending, source=source, origin=origin, gateway=gateway,
+                        dry_run=dry_run, ledger_path=ledger_path,
+                        succeeded_hashes=succeeded_hashes, report=report,
+                        max_text_chars=max_text_chars,
+                    )
+                    pending.clear()
                 continue
 
             outcome = push_text_item(
@@ -693,6 +859,15 @@ def run(
             if outcome != "skipped":
                 processed += 1
 
+    if pending:
+        push_batch_items(
+            pending, source=source, origin=origin, gateway=gateway,
+            dry_run=dry_run, ledger_path=ledger_path,
+            succeeded_hashes=succeeded_hashes, report=report,
+            max_text_chars=max_text_chars,
+        )
+        pending.clear()
+
     return report
 
 
@@ -712,6 +887,9 @@ def main() -> None:
     parser.add_argument("--gateway", default=os.environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", "http://127.0.0.1:8080"),
                         help="Gateway base URL (default: $POC_CLAUDE_ENSEMBLE_GATEWAY_URL or http://127.0.0.1:8080)")
     parser.add_argument("--limit", type=int, default=None, help="Max items to ingest this run")
+    parser.add_argument("--batch-size", type=int, default=1,
+                        help="Push N items per request through the ingestion batch "
+                             "endpoint (cross-item embedding; 1 = classic per-item)")
     parser.add_argument("--learn-batch", action="store_true",
                         help="draw this run's item budget from the meta-learning batch_size domain "
                              "(used when --limit is not given; the outcome is recorded afterwards)")
@@ -794,6 +972,7 @@ def main() -> None:
         max_text_chars=args.max_text_chars,
         max_pdf_bytes=args.max_pdf_bytes,
         max_pdf_pages=args.max_pdf_pages,
+        batch_size=max(1, args.batch_size),
     )
     elapsed = time.perf_counter() - started
 

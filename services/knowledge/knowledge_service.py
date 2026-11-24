@@ -118,6 +118,80 @@ def store_record(body):
     return {"decision": decision, "source_id": source_id, "stored": True, "content_sha256": digest}
 
 
+MAX_BATCH_RECORDS = 100
+
+
+def _validate_record(body):
+    """Shared validation for single and batch record storage."""
+    source_id = _id(body.get("source_id"), "source_id")
+    revision_id = _id(body.get("revision_id"), "revision_id")
+    sequence = body.get("revision_sequence")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise KnowledgeError("invalid_request", "revision_sequence must be a positive integer")
+    title, content = body.get("title"), body.get("content")
+    if not isinstance(title, str) or not title:
+        raise KnowledgeError("invalid_request", "title must be a non-empty string")
+    if not isinstance(content, str) or not content:
+        raise KnowledgeError("invalid_request", "content must be a non-empty string")
+    if len(content) > MAX_CONTENT_CHARS:
+        raise KnowledgeError("payload_too_large", f"content is limited to {MAX_CONTENT_CHARS} characters", status=413)
+    provenance = body.get("provenance")
+    if not isinstance(provenance, dict) or not isinstance(provenance.get("origin"), str) \
+            or not isinstance(provenance.get("locator"), str):
+        raise KnowledgeError("invalid_request", "provenance must include string origin and locator")
+    profiles = body.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        raise KnowledgeError("invalid_request", "profiles must be a non-empty object")
+    return source_id, revision_id, sequence, title, content, provenance, profiles
+
+
+def store_records_batch(body):
+    """Store many revisions in one request, one SQLite transaction.
+
+    Per-record semantics are identical to ``store_record`` (the index
+    service still decides accepted/duplicate per revision); the win is one
+    connection and one commit for the whole batch instead of a connection
+    open + fsync + close per record.
+    """
+    records = body.get("records")
+    if not isinstance(records, list) or not records:
+        raise KnowledgeError("invalid_request", "records must be a non-empty list")
+    if len(records) > MAX_BATCH_RECORDS:
+        raise KnowledgeError("payload_too_large",
+                             f"records exceeds the batch limit of {MAX_BATCH_RECORDS}", status=413)
+    prepared = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise KnowledgeError("invalid_request", f"records[{index}] must be an object")
+        prepared.append(_validate_record(record))
+    results = []
+    to_store = []
+    for (source_id, revision_id, sequence, title, content, provenance, profiles) in prepared:
+        decision = _index_call("/revisions", {"source_id": source_id, "revision_sequence": sequence,
+                                              "revision_id": revision_id, "profiles": profiles})
+        if decision not in ("accepted", "duplicate"):
+            results.append({"decision": decision, "source_id": source_id, "stored": False})
+            continue
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        to_store.append((source_id, sequence, revision_id, title, content, digest,
+                         provenance["origin"], provenance["locator"],
+                         json.dumps(profiles, sort_keys=True)))
+        results.append({"decision": decision, "source_id": source_id, "stored": True,
+                        "content_sha256": digest})
+    if to_store:
+        with _LOCK:
+            conn = _connect()
+            try:
+                with conn:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO records (source_id, revision_sequence, revision_id, title, content,"
+                        " content_sha256, origin, locator, profiles, tombstoned) VALUES (?,?,?,?,?,?,?,?,?,0)",
+                        to_store)
+            finally:
+                conn.close()
+    return {"ok": True, "batch_size": len(records), "results": results}
+
+
 def get_record(source_id):
     conn = _connect()
     try:
@@ -190,6 +264,8 @@ class KnowledgeHandler(BaseHTTPRequestHandler):
                 raise KnowledgeError("invalid_request", "body must be a JSON object")
             if url.path == "/records":
                 result = store_record(body)
+            elif url.path == "/records/batch":
+                result = store_records_batch(body)
             elif len(parts) == 3 and parts[0] == "records" and parts[2] == "tombstone":
                 result = tombstone_record(unquote(parts[1]), body.get("revision_sequence"))
             else:

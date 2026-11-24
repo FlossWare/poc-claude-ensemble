@@ -325,6 +325,173 @@ def delete_superseded(
     )
 
 
+def submit_records_batch(
+    knowledge_base: str,
+    *,
+    records: list[dict[str, Any]],
+    timeout: float = 120,
+    post=None,
+) -> list[dict[str, Any]]:
+    """Store many revisions in Knowledge in one request/transaction.
+
+    Each record follows the :func:`submit_record` payload shape.  Returns
+    the per-record decisions in input order.
+    """
+    post = post or post_json
+    body = post(knowledge_base, "/records/batch", {"records": records}, timeout=timeout)
+    results = body.get("results")
+    if not isinstance(results, list) or len(results) != len(records):
+        raise IndexingError(
+            "knowledge batch returned an invalid result count", 502, "invalid_downstream_response"
+        )
+    return results
+
+
+def index_texts_batch(
+    *,
+    endpoints: Endpoints,
+    sources: list[dict[str, Any]],
+    profiles: dict[str, str] | None = None,
+    chunk_profile: str = CHUNK_PROFILE,
+    media_type: str = "text/plain",
+    timeout: float = 300,
+    post=None,
+) -> list[dict[str, Any]]:
+    """Chunk, embed, and index MANY texts with cross-item embedding batches.
+
+    Same per-item semantics as :func:`index_text` (identical chunk metadata,
+    vector ids, lexical rows, and superseded-revision cleanup), but the
+    embedding calls span items: all chunks from the whole batch are embedded
+    in ``EMBED_BATCH``-sized requests instead of one tiny request per item.
+    Small scraped items average ~2 chunks, so per-item embedding calls spend
+    most of their time on request overhead while the GPU idles; batching
+    across items is what makes bulk ingestion GPU-bound instead of
+    HTTP-bound.
+
+    Returns one ``{"chunks", "vectors", "content_sha256"}`` dict per source,
+    aligned with the input order.  A failure indexing one source raises
+    ``IndexingError`` naming it; sources before it are already stored (the
+    pipeline is idempotent, so a retry re-ingests cleanly).
+    """
+    post = post or post_json
+
+    # Phase 1: chunk every text (per-item REST; chunking is cheap and the
+    # service is stateless per call).
+    chunked_all: list[list[dict[str, Any]]] = []
+    for source in sources:
+        chunked = post(
+            endpoints.chunking,
+            "/chunk",
+            {
+                "profile": chunk_profile,
+                "source_id": source["source_id"],
+                "media_type": media_type,
+                "text": source["text"],
+            },
+            timeout=timeout,
+        )
+        chunks = chunked.get("chunks")
+        if not isinstance(chunks, list):
+            raise IndexingError(
+                f"chunking service returned an invalid result for {source['source_id']!r}",
+                502,
+                "invalid_downstream_response",
+            )
+        chunked_all.append(chunks)
+
+    # Phase 2: embed every chunk of every source in cross-item batches.
+    flat: list[tuple[int, dict[str, Any]]] = []
+    for source_idx, chunks in enumerate(chunked_all):
+        for chunk in chunks:
+            flat.append((source_idx, chunk))
+    vectors_flat: list[list[float] | None] = [None] * len(flat)
+    for start in range(0, len(flat), EMBED_BATCH):
+        batch = flat[start : start + EMBED_BATCH]
+        embedded = post(
+            endpoints.embedding,
+            "/embeddings",
+            {"texts": [chunk["text"] for _, chunk in batch], "mode": "document"},
+            timeout=timeout,
+        )
+        vectors = embedded.get("embeddings")
+        if not isinstance(vectors, list) or len(vectors) != len(batch):
+            raise IndexingError(
+                "embedding service returned an invalid vector count",
+                502,
+                "invalid_downstream_response",
+            )
+        for offset, vector in enumerate(vectors):
+            vectors_flat[start + offset] = vector
+
+    # Phase 3: aggregate the lexical and vector writes across the WHOLE
+    # batch (both APIs accept lists), then per-source superseded cleanup.
+    results: list[dict[str, Any]] = []
+    all_rows: list[dict[str, Any]] = []
+    all_ids: list[str] = []
+    all_texts: list[str] = []
+    all_metadatas: list[dict[str, Any]] = []
+    all_vectors: list[list[float]] = []
+    cursor = 0
+    for source_idx, source in enumerate(sources):
+        chunks = chunked_all[source_idx]
+        count = len(chunks)
+        batch_vectors = vectors_flat[cursor : cursor + count]
+        cursor += count
+        content_sha = sha256_text(source["text"])
+        for item, vector in zip(chunks, batch_vectors):
+            chunk_id = item["chunk_id"]
+            vector_id = hashlib.sha256(f"{chunk_id}|{content_sha}".encode("utf-8")).hexdigest()
+            meta = {
+                "kind": "knowledge_chunk",
+                "source": source["origin"],
+                "url": source["source_id"],
+                "title": source["title"],
+                "chunk": item.get("index"),
+                "chunks": count,
+                "chunk_id": chunk_id,
+                "content_sha256": content_sha,
+            }
+            all_ids.append(vector_id)
+            all_metadatas.append(meta)
+            all_texts.append(item["text"])
+            all_vectors.append(vector)
+            all_rows.append(
+                {
+                    "chunk_id": chunk_id,
+                    "vector_id": vector_id,
+                    "url": source["source_id"],
+                    "source": source["origin"],
+                    "title": source["title"],
+                    "text": item["text"],
+                    "chunk_index": item.get("index"),
+                    "chunk_count": count,
+                    "content_sha256": content_sha,
+                }
+            )
+        results.append({"chunks": count, "vectors": count, "content_sha256": content_sha})
+    if all_rows:
+        post(endpoints.lexical, "/knowledge/documents", {"chunks": all_rows}, timeout=timeout)
+        post(
+            endpoints.vector,
+            "/collections/knowledge_chunks/upsert",
+            {
+                "ids": all_ids,
+                "embeddings": all_vectors,
+                "documents": all_texts,
+                "metadatas": all_metadatas,
+            },
+            timeout=timeout,
+        )
+    for source_idx, source in enumerate(sources):
+        post(
+            endpoints.vector,
+            "/collections/knowledge_chunks/delete-superseded",
+            {"url": source["source_id"], "keep_sha256": results[source_idx]["content_sha256"]},
+            timeout=timeout,
+        )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Completion journal
 # ---------------------------------------------------------------------------
