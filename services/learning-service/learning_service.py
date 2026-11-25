@@ -63,7 +63,8 @@ class AutonomousLearningSystem:
         self._checkpoint_lock = threading.Lock()
 
     def record_outcome(self, task_id: str, task_type: str, model: str,
-                      rating: int, tokens: int, cost: float) -> bool:
+                      rating: int, tokens: int, cost: float,
+                      context: Optional[str] = None) -> bool:
         """Record a task outcome to disk with atomic write"""
         try:
             outcome = {
@@ -75,6 +76,11 @@ class AutonomousLearningSystem:
                 'cost': cost,
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
+            if context is not None:
+                # Optional notes (e.g. feedback_capture --context). Rides
+                # OUTSIDE payload_sha256: the digest key list is frozen so
+                # already-persisted records still verify on read.
+                outcome['context'] = context
             outcome['payload_sha256'] = self._payload_digest(outcome)
 
             # Write to outcomes directory (one file per task identity)
@@ -465,6 +471,7 @@ class LearningService:
                 rating = req_data.get('rating')
                 tokens = req_data.get('tokens')
                 cost = req_data.get('cost')
+                context = req_data.get('context')
 
                 logger.info(f"{ctx} Processing outcome: {task_id} ({model}, rating={rating}, cost=${cost:.4f})")
                 with self._task_ingestion_lock(task_id):
@@ -483,7 +490,8 @@ class LearningService:
                                 'request_id': ctx.request_id
                             })
                         success = self.system.record_outcome(
-                            task_id, task_type, model, rating, tokens, cost
+                            task_id, task_type, model, rating, tokens, cost,
+                            context
                         )
                         if not success:
                             return json.dumps({

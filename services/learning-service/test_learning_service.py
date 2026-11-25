@@ -104,10 +104,41 @@ service.start()
             })
             assert replay.get("ok") is True and replay.get("duplicate") is True, replay
 
+            noted = client._send_request({
+                "op": "process_outcome",
+                "task_id": "rest-smoke-context-001",
+                "task_type": "integration-test",
+                "model": "haiku",
+                "rating": 5,
+                "tokens": 0,
+                "cost": 0.0,
+                "context": "fast and accurate",
+            })
+            assert noted.get("ok") is True, noted
+            import hashlib
+            sha = hashlib.sha256(b"rest-smoke-context-001").hexdigest()
+            outcome_file = temp_path / "learning" / "autonomous_outcomes" / f"{sha}.json"
+            record = json.loads(outcome_file.read_text())
+            assert record.get("context") == "fast and accurate", record
+            assert "payload_sha256" in record, record
+
+            bad = client._send_request({
+                "op": "process_outcome",
+                "task_id": "rest-smoke-bad-context",
+                "task_type": "integration-test",
+                "model": "haiku",
+                "rating": 3,
+                "tokens": 0,
+                "cost": 0.0,
+                "context": 42,
+            })
+            assert bad.get("ok") is False and "context" in bad.get("error", ""), bad
+
             report = client.get_report()
             assert report.get("ok") is True, report
             assert report.get("total_outcomes", 0) >= 1, report
-            print("PASS: Learning REST health, ping, outcome, idempotent replay, and report")
+            print("PASS: Learning REST health, ping, outcome, idempotent replay, "
+                  "context persistence + validation, and report")
             return 0
         finally:
             process.terminate()
