@@ -205,6 +205,12 @@ class Validators:
             if req_data['cost'] < 0:
                 return False, "field 'cost': must be >= 0"
 
+            # Optional free-form notes (e.g. feedback_capture --context)
+            if 'context' in req_data and req_data['context'] is not None:
+                if not isinstance(req_data['context'], str):
+                    return False, "field 'context': expected string, got {}".format(
+                        type(req_data['context']).__name__)
+
         elif operation == 'get_recent_outcomes':
             # Days is optional but must be integer if provided
             if 'days' in req_data:
