@@ -283,9 +283,43 @@ def create_server(host, port):
     return ThreadingHTTPServer((host, port), LexicalHandler)
 
 
+def ensure_schema():
+    """Create the transcripts schema if the DB is missing it.
+
+    The pre-restructure pipeline used to build this database; nothing in
+    this repo did, so a fresh deployment came up with a 0-byte
+    transcripts.db and every read failed with 'no such table: messages'
+    (which the ingestion batch path surfaced as a downstream 500).
+    Idempotent: IF NOT EXISTS everywhere, safe against a populated DB.
+    Same layout as the migrated transcript database: messages.analyzed
+    feeds an external-content FTS5 table (see test_lexical_service.py).
+    """
+    fts_literal = FTS_TOKENIZE.replace("'", "''")
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = _connect_write()
+    try:
+        with conn:
+            conn.executescript(f"""
+CREATE TABLE IF NOT EXISTS sessions(
+    session_id TEXT, source TEXT, project TEXT, title TEXT,
+    first_ts TEXT, last_ts TEXT, file TEXT PRIMARY KEY,
+    is_subagent INTEGER, bytes INTEGER);
+CREATE TABLE IF NOT EXISTS messages(
+    id INTEGER PRIMARY KEY, session_id TEXT, uuid TEXT, role TEXT,
+    kind TEXT, ts TEXT, text TEXT, file TEXT, analyzed TEXT);
+CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id);
+CREATE INDEX IF NOT EXISTS messages_file ON messages(file);
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    analyzed, content='messages', content_rowid='id', tokenize='{fts_literal}');
+""")
+    finally:
+        conn.close()
+
+
 def main():
     host = os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_HOST", DEFAULT_HOST)
     port = int(os.environ.get("POC_CLAUDE_ENSEMBLE_LEXICAL_PORT", str(DEFAULT_PORT)))
+    ensure_schema()
     server = create_server(host, port)
     try:
         server.serve_forever()

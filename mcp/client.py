@@ -185,6 +185,14 @@ class GatewayClient:
         auth_token: str | None = None,
         user_agent: str = "claude-ensemble-mcp/1.0",
     ) -> None:
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            """Redirects are refused: the bearer token must never be
+            re-sent to a target the loopback check has not validated."""
+
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None  # makes urllib raise HTTPError for the 3xx
+
+        self._opener = urllib.request.build_opener(_NoRedirect)
         self.base_url = _validate_loopback(
             base_url or os.environ.get("POC_CLAUDE_ENSEMBLE_GATEWAY_URL", DEFAULT_GATEWAY_URL)
         )
@@ -248,7 +256,11 @@ class GatewayClient:
         self.rate_limiter.acquire()
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            # NEVER follow redirects: urlopen re-sends headers (including
+            # Authorization) to the redirect target, and the loopback
+            # validation only covers this URL. A 3xx surfaces as an
+            # HTTPError below instead of silently leaking the token.
+            with self._opener.open(request, timeout=self.timeout) as response:
                 status = int(response.status)
                 raw = response.read()
         except urllib.error.HTTPError as exc:
@@ -260,6 +272,15 @@ class GatewayClient:
                 f"cannot reach the Claude Ensemble gateway at {self.base_url}: {exc}",
             ) from exc
 
+        if 300 <= status < 400:
+            # redirects are refused (token safety); a 3xx reaching here is
+            # an error, never a success with an empty payload
+            raise GatewayError(
+                "gateway_redirect",
+                "gateway returned a redirect; refusing to follow "
+                "(Authorization must not be re-sent to an unvalidated target)",
+                status=status,
+            )
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -396,11 +417,21 @@ class GatewayClient:
             raise ValueError("source_id must be a non-empty string")
         if len(source_id) > MAX_SOURCE_ID_CHARS:
             raise ValueError(f"source_id is limited to {MAX_SOURCE_ID_CHARS} characters")
-        payload = self.get(
-            "/api/v1/corpus/records",
-            {"source_id": source_id, "limit": 1000},
-        )
-        records = payload.get("records") or []
+        # paginate to the TRUE newest revision: the first page alone can
+        # miss it when the gateway's page order excludes newer entries
+        records: list[dict[str, Any]] = []
+        cursor: str | None = None
+        pages = 0
+        while pages < 50:  # bounded: 50k records is beyond any real source
+            params: dict[str, Any] = {"source_id": source_id, "limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self.get("/api/v1/corpus/records", params)
+            records.extend(payload.get("records") or [])
+            cursor = payload.get("next_cursor")
+            pages += 1
+            if not cursor:
+                break
         if not records:
             raise GatewayError(
                 "not_found",

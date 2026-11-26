@@ -161,10 +161,73 @@ class BatchEndpointTests(unittest.TestCase):
         self.assertEqual(body["completed"], 0)
 
     def test_text_budget(self):
-        status, body = self._post("/ingest/batch", {
-            "items": [{"text": "a" * 100, "title": "t"}] * 50})
-        # 50 * 100 = 5000 chars, inside budget; fails downstream instead.
+        # Point downstreams at an unreachable port: the assertion is only
+        # "inside the text budget" (not 413), and with within-batch
+        # dedupe these 50 identical items would otherwise do REAL
+        # indexing work against live services (slow, environment-
+        # dependent, and contends with whatever else is ingesting).
+        url_keys = ("KNOWLEDGE_URL", "CHUNKING_URL", "EMBEDDING_URL",
+                    "LEXICAL_URL", "VECTOR_URL")
+        saved = {k: getattr(svc, k) for k in url_keys}
+        for k in url_keys:
+            setattr(svc, k, "http://127.0.0.1:9")
+        try:
+            status, body = self._post("/ingest/batch", {
+                "items": [{"text": "a" * 100, "title": "t"}] * 50})
+        finally:
+            for k, v in saved.items():
+                setattr(svc, k, v)
+        # Inside the character budget; downstreams unreachable -> 503, not 413.
         self.assertNotEqual(status, 413)
+
+    def test_duplicate_texts_index_each_unique_source_once(self):
+        """Two identical texts in one batch share a source_id and vector
+        ids; the vector store rejects duplicate ids in a single upsert
+        (previously an opaque downstream 500 for the whole batch). The
+        service must index each unique source once and complete both
+        items."""
+        calls = []
+
+        class StubIndexing:
+            Endpoints = indexing.Endpoints
+            IndexingError = indexing.IndexingError
+            # the service's _post_json adapter routes ledger/event writes
+            # through these; keep the test fully offline
+            post_json = staticmethod(lambda base, path, payload, timeout=60: {"ok": True})
+
+            @staticmethod
+            def submit_records_batch(knowledge_base, *, records, timeout=120, post=None):
+                calls.append(("knowledge", len(records)))
+                return [{"decision": "accepted", "source_id": r["source_id"],
+                         "stored": True, "content_sha256": "x"} for r in records]
+
+            @staticmethod
+            def index_texts_batch(*, endpoints, sources, profiles, chunk_profile,
+                                  media_type="text/plain", post=None, timeout=300):
+                calls.append(("index", [s["source_id"] for s in sources]))
+                return [{"chunks": 1, "vectors": 1, "content_sha256": "x"}
+                        for _ in sources]
+
+        real_indexing = svc.indexing
+        svc.indexing = StubIndexing()
+        try:
+            body = svc.ingest_batch({"items": [
+                {"text": "identical duplicate text", "title": "a"},
+                {"text": "identical duplicate text", "title": "b"},
+                {"text": "a different text entirely", "title": "c"},
+            ]})
+        finally:
+            svc.indexing = real_indexing
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["completed"], 3)
+        # knowledge still gets one revision per item...
+        self.assertEqual(calls[0], ("knowledge", 3))
+        # ...but indexing runs once per UNIQUE source_id (2, not 3)
+        self.assertEqual(calls[1][0], "index")
+        self.assertEqual(len(calls[1][1]), 2)
+        # and no duplicate vector ids reach the aggregate write
+        for result in body["results"]:
+            self.assertEqual(result["status"], "completed")
 
 
 if __name__ == "__main__":

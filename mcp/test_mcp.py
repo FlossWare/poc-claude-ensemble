@@ -185,9 +185,23 @@ class MockGateway:
             source_id = (parameters.get("source_id") or [""])[0]
             if source_id == "missing":
                 return 200, {"ok": True, "records": [], "next_cursor": None}
+            if (parameters.get("cursor") or [""])[0]:
+                # page 2: the NEWEST revision lives here, not on page 1 —
+                # regression coverage for get_record pagination
+                return 200, {
+                    "ok": True,
+                    "next_cursor": None,
+                    "records": [
+                        {"source_id": source_id, "revision_sequence": 3,
+                         "title": "newest",
+                         "origin": "inline-text", "locator": "three",
+                         "content": "newest content",
+                         "content_length": 14, "content_truncated": False},
+                    ],
+                }
             return 200, {
                 "ok": True,
-                "next_cursor": None,
+                "next_cursor": "page2",
                 "records": [
                     {"source_id": source_id, "revision_sequence": 1, "title": "old",
                      "origin": "inline-text", "locator": "one", "content": "old content",
@@ -347,8 +361,9 @@ def test_search_hybrid_preserves_degraded_and_knowledge(gateway):
 def test_get_record_returns_newest_revision(gateway):
     result = call_tool(gateway, "get_record", {"source_id": "text://sha256/abc"})
     payload = structured(result)
-    assert payload["revision_count"] == 2
-    assert payload["record"]["revision_sequence"] == 2
+    # both pages are fetched now: 3 records, newest on page 2
+    assert payload["revision_count"] == 3
+    assert payload["record"]["revision_sequence"] == 3
     assert payload["record"]["content"] == "newest content"
     assert gateway.requests[-1]["query"]["source_id"] == ["text://sha256/abc"]
 
@@ -506,3 +521,55 @@ def test_gateway_error_round_trips_details():
         "status": 503,
         "details": {"ok": False},
     }
+
+
+def test_get_record_paginates_to_true_newest(gateway):
+    """Regression: the newest revision sat on page 2; the old single-page
+    max() returned the page-1 maximum instead."""
+    client = make_client(gateway)
+    result = client.get_record("text://sha256/abc")
+    assert result["record"]["revision_sequence"] == 3
+    assert result["record"]["locator"] == "three"
+
+
+def test_client_refuses_redirects():
+    """Regression: urlopen followed 3xx and re-sent the Authorization
+    header to the redirect target, which the loopback check never
+    validated. Redirects must surface as gateway errors instead."""
+    class Redirector(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server API
+            self.send_response(302)
+            self.send_header("Location", "http://example.com/api/v1/health")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = GatewayClient(
+            base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            timeout=5.0,
+            rate_limiter=RateLimiter(0),
+            auth_token="secret-token",
+        )
+        with pytest.raises(GatewayError):
+            client.get("/api/v1/health")
+    finally:
+        server.shutdown()
+
+
+def test_call_models_parallel_empty_roster_is_noop():
+    """Regression: ThreadPoolExecutor(max_workers=0) raised ValueError on
+    an empty model list; an empty roster is a valid no-op."""
+    import sys as _sys
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(_file_))) if False else _REPO_ROOT
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from services.arbitration.api_client import MultiModelClient
+
+    client = MultiModelClient()
+    assert client.call_models_parallel([], "hello") == {}

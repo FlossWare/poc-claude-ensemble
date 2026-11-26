@@ -579,13 +579,25 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
                 continue
             accepted.append((index, source, ingestion_id))
 
-    # Phase 2: one cross-item batched indexing pass over every accepted item.
+    # Phase 2: one cross-item batched indexing pass over every accepted
+    # item — but each UNIQUE source only once. Duplicate texts in one
+    # batch resolve to the same source_id and therefore the same vector
+    # ids; the vector store rejects duplicate ids in a single upsert
+    # (previously surfaced as an opaque downstream 500 for the whole
+    # batch). Knowledge records are still submitted per item above.
+    unique_accepted: list[tuple[int, dict[str, Any], str]] = []
+    seen_source_ids: set[str] = set()
+    for entry in accepted:
+        if entry[1]["source_id"] in seen_source_ids:
+            continue
+        seen_source_ids.add(entry[1]["source_id"])
+        unique_accepted.append(entry)
     indexed = []
-    if accepted:
+    if unique_accepted:
         try:
             indexed = indexing.index_texts_batch(
                 endpoints=endpoints,
-                sources=[source for _, source, _ in accepted],
+                sources=[source for _, source, _ in unique_accepted],
                 profiles=PROFILES,
                 chunk_profile=CHUNK_PROFILE,
                 media_type="text/plain",
@@ -593,10 +605,15 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
             )
         except indexing.IndexingError as exc:
             raise IngestionError(str(exc), exc.status, exc.code) from exc
+    indexed_by_source = {
+        source["source_id"]: item_indexed
+        for (_, source, _), item_indexed in zip(unique_accepted, indexed)
+    }
 
     # Phase 3: completion events and per-item results, input order.
     completed = 0
-    for (index, source, ingestion_id), item_indexed in zip(accepted, indexed):
+    for index, source, ingestion_id in accepted:
+        item_indexed = indexed_by_source[source["source_id"]]
         _record_ingestion_event(
             source, ingestion_id, "ingestion.completed", status="completed",
             chunks=item_indexed["chunks"], vectors=item_indexed["vectors"],

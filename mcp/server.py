@@ -111,9 +111,10 @@ def create_server(
         except GatewayError as exc:
             LOG.warning("%s failed: %s: %s", name, exc.code, exc.message)
             return _error_result(name, exc)
-        except ValueError as exc:
-            return _invalid_arguments(name, str(exc))
         except ValidationError as exc:
+            # MUST precede ValueError: ValidationError subclasses it, so
+            # the wider clause shadowed this branch and output-schema
+            # failures were mislabelled invalid_arguments
             LOG.error("%s returned a result that violates its output schema", name)
             return _error_result(
                 name,
@@ -123,6 +124,8 @@ def create_server(
                     "details": exc.errors(include_url=False),
                 },
             )
+        except ValueError as exc:
+            return _invalid_arguments(name, str(exc))
         except Exception as exc:  # noqa: BLE001 - never leak a traceback to the client
             LOG.exception("%s failed unexpectedly", name)
             return _error_result(

@@ -504,6 +504,7 @@ def push_batch_items(
     """
     payload_items: list[dict] = []
     accepted: list[tuple[dict, str]] = []  # (item, digest)
+    batch_hashes: set[str] = set()  # within-batch content dedupe
     for item in items:
         text = item["text"]
         title = item["title"]
@@ -537,11 +538,15 @@ def push_batch_items(
             ) | {"status": "dry_run", "response": None})
             succeeded_hashes.add(h)
             continue
+        if h in batch_hashes:
+            # within-batch duplicate: identical texts share a source_id
+            # (one index write); skip the redundant knowledge revision
+            report["skipped_duplicate"] += 1
+            count_skip(report, "duplicate_in_batch")
+            continue
+        batch_hashes.add(h)
         payload_items.append({"text": text, "title": title[:300]})
         accepted.append((item, h))
-
-    if not payload_items:
-        return 0
 
     status, body = gateway_post(gateway, "/api/v1/ingestion/ingest/batch",
                                 {"items": payload_items})

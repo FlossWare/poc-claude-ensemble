@@ -146,7 +146,14 @@ def post_json(base: str, path: str, payload: dict[str, Any], timeout: float = 60
         base.rstrip("/") + path, method="POST", payload=payload, timeout=timeout
     )
     if status >= 400:
-        raise IndexingError(f"downstream service returned HTTP {status}", 502, "downstream_failure")
+        # surface the downstream's own error message — the bare status
+        # made batch failures undiagnosable (which service, what reason)
+        detail = result.get("error") if isinstance(result.get("error"), str) else (
+            result.get("error", {}) or {}).get("message") if isinstance(result.get("error"), dict) else None
+        where = f"{urllib.parse.urlsplit(base).hostname}:{urllib.parse.urlsplit(base).port}{path}"
+        raise IndexingError(
+            f"downstream {where} returned HTTP {status}: {detail or result or 'no detail'}",
+            502, "downstream_failure")
     if result.get("ok") is not True:
         raise IndexingError(
             "a downstream ingestion capability rejected the request", 502, "downstream_failure"
@@ -471,17 +478,21 @@ def index_texts_batch(
         results.append({"chunks": count, "vectors": count, "content_sha256": content_sha})
     if all_rows:
         post(endpoints.lexical, "/knowledge/documents", {"chunks": all_rows}, timeout=timeout)
-        post(
-            endpoints.vector,
-            "/collections/knowledge_chunks/upsert",
-            {
-                "ids": all_ids,
-                "embeddings": all_vectors,
-                "documents": all_texts,
-                "metadatas": all_metadatas,
-            },
-            timeout=timeout,
-        )
+        # the vector store rejects more than 256 records per upsert —
+        # slice the aggregate write to stay under the cap
+        VECTOR_UPSERT_CAP = 256
+        for start in range(0, len(all_ids), VECTOR_UPSERT_CAP):
+            post(
+                endpoints.vector,
+                "/collections/knowledge_chunks/upsert",
+                {
+                    "ids": all_ids[start : start + VECTOR_UPSERT_CAP],
+                    "embeddings": all_vectors[start : start + VECTOR_UPSERT_CAP],
+                    "documents": all_texts[start : start + VECTOR_UPSERT_CAP],
+                    "metadatas": all_metadatas[start : start + VECTOR_UPSERT_CAP],
+                },
+                timeout=timeout,
+            )
     for source_idx, source in enumerate(sources):
         post(
             endpoints.vector,

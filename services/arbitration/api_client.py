@@ -191,6 +191,10 @@ class MultiModelClient:
         """Call multiple models in parallel (returns model -> response)."""
         import concurrent.futures
 
+        if not models:
+            # ThreadPoolExecutor(max_workers=0) raises ValueError; an empty
+            # roster is a valid no-op, not a caller error
+            return {}
         results: dict[str, str] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
             futures = {
