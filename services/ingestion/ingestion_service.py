@@ -522,9 +522,26 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
         raise IngestionError("items must be a non-empty list", 400, "invalid_request")
     if len(items) > MAX_BATCH_ITEMS:
         raise IngestionError(f"items exceeds the batch limit of {MAX_BATCH_ITEMS}", 413, "batch_too_large")
+    # Batch use is TEXT items only: uri/content_base64 items would each
+    # fetch/decode up to the single-item maximum AFTER this budget check,
+    # blowing the request far past one single-item budget. Non-string
+    # text must 400, not TypeError into a 502.
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise IngestionError(f"items[{index}] must be an object", 400, "invalid_request")
+        if "uri" in item or "content_base64" in item:
+            raise IngestionError(
+                f"items[{index}] must carry text only (uri/content_base64 are "
+                "single-item ingestion only)", 400, "invalid_request")
+        # a MISSING text key stays a per-item invalid (resolve_source's
+        # contract); only a present-but-non-string text must 400 here so
+        # the budget sum below cannot TypeError into a 502
+        if "text" in item and not isinstance(item["text"], str):
+            raise IngestionError(f"items[{index}].text must be a string", 400, "invalid_request")
     # Keep the request inside the service's 12 MiB body cap: budget the
-    # total text across the batch to one single-item maximum.
-    total_chars = sum(len(item.get("text", "")) for item in items if isinstance(item, dict))
+    # total text across the batch to one single-item maximum. Items with
+    # no text key are per-item invalid below; .get keeps this sum safe.
+    total_chars = sum(len(item.get("text", "")) for item in items)
     if total_chars > MAX_TEXT_CHARS:
         raise IngestionError(
             f"batch text total {total_chars} exceeds the {MAX_TEXT_CHARS} character budget",

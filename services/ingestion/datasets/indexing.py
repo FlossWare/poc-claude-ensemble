@@ -477,9 +477,13 @@ def index_texts_batch(
             )
         results.append({"chunks": count, "vectors": count, "content_sha256": content_sha})
     if all_rows:
-        post(endpoints.lexical, "/knowledge/documents", {"chunks": all_rows}, timeout=timeout)
-        # the vector store rejects more than 256 records per upsert —
-        # slice the aggregate write to stay under the cap
+        # slice BOTH aggregate writes: the lexical endpoint rejects
+        # bodies over 8 MiB (a deterministic failure that retries can
+        # never heal), and the vector store caps upserts at 256 records
+        LEXICAL_WRITE_ROWS = 128
+        for start in range(0, len(all_rows), LEXICAL_WRITE_ROWS):
+            post(endpoints.lexical, "/knowledge/documents",
+                 {"chunks": all_rows[start : start + LEXICAL_WRITE_ROWS]}, timeout=timeout)
         VECTOR_UPSERT_CAP = 256
         for start in range(0, len(all_ids), VECTOR_UPSERT_CAP):
             post(

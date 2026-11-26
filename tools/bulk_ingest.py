@@ -548,6 +548,11 @@ def push_batch_items(
         payload_items.append({"text": text, "title": title[:300]})
         accepted.append((item, h))
 
+    if not payload_items:
+        # nothing accepted (all skipped, or a dry run — which must never
+        # touch the gateway): do not POST an empty items list
+        return 0
+
     status, body = gateway_post(gateway, "/api/v1/ingestion/ingest/batch",
                                 {"items": payload_items})
     chunk_profile = chunk_profile_of(body) if isinstance(body, dict) else None
