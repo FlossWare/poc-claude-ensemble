@@ -295,7 +295,9 @@ def ensure_schema():
     feeds an external-content FTS5 table (see test_lexical_service.py).
     """
     fts_literal = FTS_TOKENIZE.replace("'", "''")
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:  # a bare filename has no dir component; makedirs("") raises
+        os.makedirs(db_dir, exist_ok=True)
     conn = _connect_write()
     try:
         with conn:
