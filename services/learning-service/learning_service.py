@@ -90,12 +90,17 @@ class AutonomousLearningSystem:
                 logger.info(f"Outcome already persisted: {task_id}")
                 return True
 
-            # Atomic write: temp file + rename
+            # Atomic write: temp file + rename, temp cleaned up on failure
             with tempfile.NamedTemporaryFile(mode='w', dir=self.outcomes_dir, delete=False) as tmp:
-                json.dump(outcome, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())  # Force to disk
-                os.replace(tmp.name, outcome_file)  # Atomic rename
+                try:
+                    json.dump(outcome, tmp, indent=2)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())  # Force to disk
+                    os.replace(tmp.name, outcome_file)  # Atomic rename
+                except BaseException:
+                    tmp.close()
+                    Path(tmp.name).unlink(missing_ok=True)
+                    raise
 
             logger.info(f"Recorded outcome: {task_id} ({model}, rating={rating})")
             return True
@@ -155,6 +160,40 @@ class AutonomousLearningSystem:
     def checkpoint_path(self) -> Path:
         return self.learning_dir / 'ingestion_checkpoint.json'
 
+    def _thompson_applied_dir(self) -> Path:
+        return self.learning_dir / 'thompson_applied'
+
+    def thompson_was_applied(self, task_id: str) -> bool:
+        """Durable 'Thompson already updated for this task' marker.
+
+        The checkpoint means 'fully processed'; this marker is the
+        intermediate state 'Thompson delivery succeeded' so a retry after
+        a later-step failure (state snapshot, checkpoint write, crash)
+        does not deliver the same outcome to Thompson twice."""
+        return (self._thompson_applied_dir()
+                / f"{hashlib.sha256(task_id.encode('utf-8')).hexdigest()}.json").exists()
+
+    def mark_thompson_applied(self, task_id: str) -> None:
+        """Atomically record that Thompson was updated for this task."""
+        d = self._thompson_applied_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        marker = d / f"{hashlib.sha256(task_id.encode('utf-8')).hexdigest()}.json"
+        if marker.exists():
+            return
+        with tempfile.NamedTemporaryFile(mode='w', dir=d, delete=False,
+                                         encoding='utf-8') as tmp:
+            try:
+                json.dump({'task_id': task_id,
+                           'applied_at': datetime.now(timezone.utc).isoformat()},
+                          tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                os.replace(tmp.name, marker)
+            except BaseException:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
+
     def is_processed(self, task_id: str) -> bool:
         if not self.checkpoint_path.exists():
             return False
@@ -173,10 +212,15 @@ class AutonomousLearningSystem:
             with tempfile.NamedTemporaryFile(
                 mode='w', dir=self.learning_dir, delete=False, encoding='utf-8'
             ) as tmp:
-                json.dump(checkpoint, tmp, indent=2, sort_keys=True)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-                os.replace(tmp.name, self.checkpoint_path)
+                try:
+                    json.dump(checkpoint, tmp, indent=2, sort_keys=True)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                    os.replace(tmp.name, self.checkpoint_path)
+                except BaseException:
+                    tmp.close()
+                    Path(tmp.name).unlink(missing_ok=True)
+                    raise
 
     def get_recent_outcomes(self, days: int = 7) -> List[Dict[str, Any]]:
         """Get outcomes from the last N days"""
@@ -265,15 +309,23 @@ class AutonomousLearningSystem:
             return {'ok': False, 'error': str(e)}
 
     def reset_learning(self) -> bool:
-        """Clear all outcomes and priors"""
+        """Clear all outcomes and priors.
+
+        Holds the checkpoint lock: without it a concurrent mark_processed
+        could read the old checkpoint, lose the race against the unlink,
+        and rewrite it — leaving a 'processed' entry whose outcome file
+        was deleted, which permanently fails integrity checks."""
         try:
-            # Remove all files in outcomes and priors directories
-            for f in self.outcomes_dir.glob('*.json'):
-                f.unlink()
-            for f in self.priors_dir.glob('*.json'):
-                f.unlink()
-            if self.checkpoint_path.exists():
-                self.checkpoint_path.unlink()
+            with self._checkpoint_lock:
+                # Remove all files in outcomes and priors directories
+                for f in self.outcomes_dir.glob('*.json'):
+                    f.unlink()
+                for f in self.priors_dir.glob('*.json'):
+                    f.unlink()
+                for f in self._thompson_applied_dir().glob('*.json'):
+                    f.unlink()
+                if self.checkpoint_path.exists():
+                    self.checkpoint_path.unlink()
             logger.info("Reset learning system (cleared all outcomes, priors, and checkpoint)")
             return True
         except Exception as e:
@@ -296,8 +348,8 @@ class LearningService:
         self.thompson_client = None
         self.operational_memory = operational_memory
         self.artifact_store = LearningArtifactStore(self.system.learning_dir / "portable_artifacts.jsonl")
-        self._task_locks: Dict[str, threading.Lock] = {}
-        self._task_locks_guard = threading.Lock()
+        self._task_lock_stripes = [threading.Lock()
+                                   for _ in range(self.TASK_LOCK_STRIPES)]
 
         # Try to import Thompson client for integration
         try:
@@ -331,19 +383,23 @@ class LearningService:
             server.server_close()
         logger.info("Learning service stopped")
 
+    # Striped per-task locks: a fixed array indexed by hash(task_id).
+    # Striping bounds memory by construction (no per-task entry to leak
+    # or evict — an evict-on-cap map can drop a lock between one
+    # caller's fetch and its acquire, silently breaking mutual
+    # exclusion). A hash collision only briefly serializes two
+    # different tasks, which is the same protection an exact map gave.
+    TASK_LOCK_STRIPES = 256
+
     def _task_ingestion_lock(self, task_id: str) -> threading.Lock:
         """Serialize one task's full ingestion transaction in this process.
 
-        The daemon is currently single-threaded, but this also protects direct
-        concurrent callers. Cross-process and crash-safe exactly-once Thompson
-        delivery still requires an external transaction/idempotency mechanism.
+        The daemon is currently single-threaded, but this also protects
+        direct concurrent callers. Cross-process and crash-safe
+        exactly-once Thompson delivery is provided by the durable
+        thompson_applied marker.
         """
-        with self._task_locks_guard:
-            lock = self._task_locks.get(task_id)
-            if lock is None:
-                lock = threading.Lock()
-                self._task_locks[task_id] = lock
-            return lock
+        return self._task_lock_stripes[hash(task_id) % self.TASK_LOCK_STRIPES]
 
     def _record_outcome_fallback(self, model: str, task_type: str, rating: int, cost: float, tokens: int) -> bool:
         """
@@ -588,21 +644,50 @@ class LearningService:
                             })
 
                         try:
-                            logger.info(f"{ctx} Updating Thompson router for {effective_model}")
-                            if not self.thompson_client.record_outcome(
-                                model=effective_model,
-                                task_type=effective_task_type,
-                                success=(effective_rating >= 3),
-                                cost=effective_cost,
-                                tokens=effective_tokens
-                            ):
-                                return json.dumps({
-                                    'ok': False,
-                                    'thompson': False,
-                                    'checkpoint_advanced': False,
-                                    'request_id': ctx.request_id
-                                })
-                            thompson_updated = True
+                            if self.system.thompson_was_applied(task_id):
+                                # A previous attempt delivered this outcome
+                                # to Thompson and failed at a later step —
+                                # redelivering would double-count it.
+                                logger.info(
+                                    f"{ctx} Thompson already updated for {task_id}; "
+                                    "skipping redelivery"
+                                )
+                                thompson_updated = True
+                            else:
+                                logger.info(f"{ctx} Updating Thompson router for {effective_model}")
+                                if not self.thompson_client.record_outcome(
+                                    model=effective_model,
+                                    task_type=effective_task_type,
+                                    success=(effective_rating >= 3),
+                                    cost=effective_cost,
+                                    tokens=effective_tokens
+                                ):
+                                    return json.dumps({
+                                        'ok': False,
+                                        'thompson': False,
+                                        'checkpoint_advanced': False,
+                                        'request_id': ctx.request_id
+                                    })
+                                # durable marker BEFORE any later step can
+                                # fail — the retry path checks it above.
+                                # Retried to narrow the (unavoidable without
+                                # a Thompson-side idempotency key) window
+                                # where a crash between delivery and marker
+                                # causes an at-least-once redelivery.
+                                marker_written = False
+                                for attempt in range(3):
+                                    try:
+                                        self.system.mark_thompson_applied(task_id)
+                                        marker_written = True
+                                        break
+                                    except Exception as marker_exc:
+                                        logger.warning(
+                                            f"{ctx} thompson_applied marker write "
+                                            f"failed (attempt {attempt + 1}): {marker_exc}")
+                                if not marker_written:
+                                    raise RuntimeError(
+                                        "thompson_applied marker unwritable after retries")
+                                thompson_updated = True
                         except Exception as e:
                             logger.warning(f"{ctx} Failed to update Thompson: {e}")
                             return json.dumps({
@@ -710,7 +795,18 @@ class LearningService:
 
             elif operation == 'reset_learning':
                 logger.info(f"{ctx} Resetting learning system")
-                success = self.system.reset_learning()
+                # Take ALL ingestion stripes BEFORE the checkpoint lock
+                # (the same order ingestion uses: stripe -> checkpoint),
+                # so no in-flight process_outcome can persist an outcome,
+                # marker, or checkpoint entry that outlives the reset.
+                stripes = self._task_lock_stripes
+                for lock in stripes:
+                    lock.acquire()
+                try:
+                    success = self.system.reset_learning()
+                finally:
+                    for lock in stripes:
+                        lock.release()
                 return json.dumps({'ok': success, 'request_id': ctx.request_id})
 
             elif operation == 'ping':
