@@ -110,11 +110,14 @@ def main() -> int:
         assert service.system.reset_learning() is True
         assert not service.system.thompson_was_applied("task-idem-1")
 
-        # 6. the per-task lock map stays bounded
-        cap = mod.LearningService.MAX_TASK_LOCKS
-        for i in range(cap + 500):
-            service._task_ingestion_lock(f"lock-probe-{i}")
-        assert len(service._task_locks) <= cap + 1, len(service._task_locks)
+        # 6. the per-task lock structure is bounded by construction
+        #    (fixed stripe array, no per-task entries to leak)
+        stripes = mod.LearningService.TASK_LOCK_STRIPES
+        assert len(service._task_lock_stripes) == stripes
+        for i in range(stripes + 500):
+            lock = service._task_ingestion_lock(f"lock-probe-{i}")
+            assert lock in service._task_lock_stripes
+        assert len(service._task_lock_stripes) == stripes
 
         print("PASS: Thompson idempotent redelivery, reset clears markers, "
               "lock map bounded")

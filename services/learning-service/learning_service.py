@@ -348,8 +348,8 @@ class LearningService:
         self.thompson_client = None
         self.operational_memory = operational_memory
         self.artifact_store = LearningArtifactStore(self.system.learning_dir / "portable_artifacts.jsonl")
-        self._task_locks: Dict[str, threading.Lock] = {}
-        self._task_locks_guard = threading.Lock()
+        self._task_lock_stripes = [threading.Lock()
+                                   for _ in range(self.TASK_LOCK_STRIPES)]
 
         # Try to import Thompson client for integration
         try:
@@ -383,33 +383,23 @@ class LearningService:
             server.server_close()
         logger.info("Learning service stopped")
 
-    # Cap on per-task lock map entries. Locks for idle tasks are evicted
-    # so a long-running daemon does not leak one Lock per task forever.
-    MAX_TASK_LOCKS = 4096
+    # Striped per-task locks: a fixed array indexed by hash(task_id).
+    # Striping bounds memory by construction (no per-task entry to leak
+    # or evict — an evict-on-cap map can drop a lock between one
+    # caller's fetch and its acquire, silently breaking mutual
+    # exclusion). A hash collision only briefly serializes two
+    # different tasks, which is the same protection an exact map gave.
+    TASK_LOCK_STRIPES = 256
 
     def _task_ingestion_lock(self, task_id: str) -> threading.Lock:
         """Serialize one task's full ingestion transaction in this process.
 
-        The daemon is currently single-threaded, but this also protects direct
-        concurrent callers. Cross-process and crash-safe exactly-once Thompson
-        delivery is provided by the durable thompson_applied marker.
+        The daemon is currently single-threaded, but this also protects
+        direct concurrent callers. Cross-process and crash-safe
+        exactly-once Thompson delivery is provided by the durable
+        thompson_applied marker.
         """
-        with self._task_locks_guard:
-            lock = self._task_locks.get(task_id)
-            if lock is None:
-                if len(self._task_locks) >= self.MAX_TASK_LOCKS:
-                    # evict locks that are not currently held — an
-                    # uncontended acquire proves no one is in the section
-                    for key in list(self._task_locks):
-                        if len(self._task_locks) < self.MAX_TASK_LOCKS:
-                            break
-                        candidate = self._task_locks[key]
-                        if candidate.acquire(blocking=False):
-                            candidate.release()
-                            del self._task_locks[key]
-                lock = threading.Lock()
-                self._task_locks[task_id] = lock
-            return lock
+        return self._task_lock_stripes[hash(task_id) % self.TASK_LOCK_STRIPES]
 
     def _record_outcome_fallback(self, model: str, task_type: str, rating: int, cost: float, tokens: int) -> bool:
         """
