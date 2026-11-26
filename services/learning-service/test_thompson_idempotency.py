@@ -119,6 +119,27 @@ def main() -> int:
             assert lock in service._task_lock_stripes
         assert len(service._task_lock_stripes) == stripes
 
+        # 7. reset waits for in-flight ingestion: it must block while an
+        #    ingestion stripe is held and complete only after release
+        import threading
+        stripe = service._task_ingestion_lock("task-idem-2")
+        stripe.acquire()
+        reset_done = threading.Event()
+
+        def _do_reset():
+            r = json.loads(service._process_request(
+                json.dumps({"op": "reset_learning"})))
+            reset_done.set()
+
+        worker = threading.Thread(target=_do_reset)
+        worker.start()
+        assert not reset_done.wait(timeout=1.0), \
+            "reset completed while an ingestion stripe was held"
+        stripe.release()
+        assert reset_done.wait(timeout=10.0), \
+            "reset did not complete after stripe release"
+        worker.join(timeout=10.0)
+
         print("PASS: Thompson idempotent redelivery, reset clears markers, "
               "lock map bounded")
         return 0

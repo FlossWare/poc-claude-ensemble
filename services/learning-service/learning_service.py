@@ -669,8 +669,24 @@ class LearningService:
                                         'request_id': ctx.request_id
                                     })
                                 # durable marker BEFORE any later step can
-                                # fail — the retry path checks it above
-                                self.system.mark_thompson_applied(task_id)
+                                # fail — the retry path checks it above.
+                                # Retried to narrow the (unavoidable without
+                                # a Thompson-side idempotency key) window
+                                # where a crash between delivery and marker
+                                # causes an at-least-once redelivery.
+                                marker_written = False
+                                for attempt in range(3):
+                                    try:
+                                        self.system.mark_thompson_applied(task_id)
+                                        marker_written = True
+                                        break
+                                    except Exception as marker_exc:
+                                        logger.warning(
+                                            f"{ctx} thompson_applied marker write "
+                                            f"failed (attempt {attempt + 1}): {marker_exc}")
+                                if not marker_written:
+                                    raise RuntimeError(
+                                        "thompson_applied marker unwritable after retries")
                                 thompson_updated = True
                         except Exception as e:
                             logger.warning(f"{ctx} Failed to update Thompson: {e}")
@@ -779,7 +795,18 @@ class LearningService:
 
             elif operation == 'reset_learning':
                 logger.info(f"{ctx} Resetting learning system")
-                success = self.system.reset_learning()
+                # Take ALL ingestion stripes BEFORE the checkpoint lock
+                # (the same order ingestion uses: stripe -> checkpoint),
+                # so no in-flight process_outcome can persist an outcome,
+                # marker, or checkpoint entry that outlives the reset.
+                stripes = self._task_lock_stripes
+                for lock in stripes:
+                    lock.acquire()
+                try:
+                    success = self.system.reset_learning()
+                finally:
+                    for lock in stripes:
+                        lock.release()
                 return json.dumps({'ok': success, 'request_id': ctx.request_id})
 
             elif operation == 'ping':
