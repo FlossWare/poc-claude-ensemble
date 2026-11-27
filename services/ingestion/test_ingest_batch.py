@@ -21,13 +21,16 @@ class RecordingPost:
 
     def __call__(self, base, path, payload, timeout=60):
         self.calls.append((base, path, payload))
-        if path == "/chunk":
-            source_id = payload["source_id"]
-            n = self._chunks_per_source.get(source_id, 2)
-            return {"chunks": [
-                {"chunk_id": f"{source_id}#c{i}", "index": i, "text": f"chunk {i} of {source_id}"}
-                for i in range(n)
-            ]}
+        if path == "/chunk/batch":
+            results = []
+            for item in payload["items"]:
+                source_id = item["source_id"]
+                n = self._chunks_per_source.get(source_id, 2)
+                results.append({"ok": True, "chunks": [
+                    {"chunk_id": f"{source_id}#c{i}", "index": i, "text": f"chunk {i} of {source_id}"}
+                    for i in range(n)
+                ]})
+            return {"ok": True, "results": results}
         if path == "/embeddings":
             texts = payload["texts"]
             return {"embeddings": [[0.1, 0.2] for _ in texts]}
@@ -82,15 +85,18 @@ class IndexTextsBatchTests(unittest.TestCase):
         # 3 sources x 2 chunks each = 6 rows in the single lexical call.
         self.assertEqual(len(lexical_calls[0][2]["chunks"]), 6)
         self.assertEqual(len(upsert_calls[0][2]["ids"]), 6)
-        # Superseded cleanup stays per source (per-locator semantics).
-        self.assertEqual(
-            len([c for c in post.calls if c[1].endswith("/delete-superseded")]), 3)
+        # Superseded cleanup is one batched call covering every source.
+        superseded_calls = [c for c in post.calls if c[1].endswith("/delete-superseded-batch")]
+        self.assertEqual(len(superseded_calls), 1)
+        self.assertEqual(len(superseded_calls[0][2]["deletions"]), 3)
 
     def test_invalid_chunk_response_names_source(self):
         class BadChunkPost:
             def __call__(self, base, path, payload, timeout=60):
-                if path == "/chunk":
-                    return {"chunks": "not-a-list"}
+                if path == "/chunk/batch":
+                    # per-item failure: the source must be named
+                    return {"ok": True, "results": [
+                        {"ok": False, "error": "chunk profile rejected"}]}
                 return {"ok": True}
         endpoints = indexing.Endpoints(
             knowledge="http://k", chunking="http://c", embedding="http://e",

@@ -382,29 +382,53 @@ def index_texts_batch(
     """
     post = post or post_json
 
-    # Phase 1: chunk every text (per-item REST; chunking is cheap and the
-    # service is stateless per call).
+    # Phase 1: chunk every text in BATCHED requests. Chunking is cheap,
+    # stateless pure Python — per-item HTTP round trips were a large
+    # share of bulk ingestion wall time (50 sequential /chunk calls per
+    # batch). The service caps /chunk/batch at 200 items.
+    CHUNK_BATCH_ITEMS = 200
     chunked_all: list[list[dict[str, Any]]] = []
-    for source in sources:
-        chunked = post(
+    for start in range(0, len(sources), CHUNK_BATCH_ITEMS):
+        batch_sources = sources[start : start + CHUNK_BATCH_ITEMS]
+        response = post(
             endpoints.chunking,
-            "/chunk",
+            "/chunk/batch",
             {
-                "profile": chunk_profile,
-                "source_id": source["source_id"],
-                "media_type": media_type,
-                "text": source["text"],
+                "items": [
+                    {
+                        "profile": chunk_profile,
+                        "source_id": source["source_id"],
+                        "media_type": media_type,
+                        "text": source["text"],
+                    }
+                    for source in batch_sources
+                ]
             },
             timeout=timeout,
         )
-        chunks = chunked.get("chunks")
-        if not isinstance(chunks, list):
+        results = response.get("results")
+        if not isinstance(results, list) or len(results) != len(batch_sources):
             raise IndexingError(
-                f"chunking service returned an invalid result for {source['source_id']!r}",
+                "chunking batch returned an invalid result count",
                 502,
                 "invalid_downstream_response",
             )
-        chunked_all.append(chunks)
+        for source, item in zip(batch_sources, results):
+            if not isinstance(item, dict) or item.get("ok") is not True:
+                detail = item.get("error") if isinstance(item, dict) else "invalid result"
+                raise IndexingError(
+                    f"chunking failed for {source['source_id']!r}: {detail}",
+                    502,
+                    "invalid_downstream_response",
+                )
+            chunks = item.get("chunks")
+            if not isinstance(chunks, list):
+                raise IndexingError(
+                    f"chunking service returned an invalid result for {source['source_id']!r}",
+                    502,
+                    "invalid_downstream_response",
+                )
+            chunked_all.append(chunks)
 
     # Phase 2: embed every chunk of every source in cross-item batches.
     flat: list[tuple[int, dict[str, Any]]] = []
@@ -497,11 +521,24 @@ def index_texts_batch(
                 },
                 timeout=timeout,
             )
-    for source_idx, source in enumerate(sources):
+    # Superseded cleanup for the whole batch in ONE request (was one
+    # HTTP round trip per source). The vector service caps the batch at
+    # 256 deletions.
+    SUPERSEDED_BATCH = 256
+    for start in range(0, len(sources), SUPERSEDED_BATCH):
+        batch = sources[start : start + SUPERSEDED_BATCH]
         post(
             endpoints.vector,
-            "/collections/knowledge_chunks/delete-superseded",
-            {"url": source["source_id"], "keep_sha256": results[source_idx]["content_sha256"]},
+            "/collections/knowledge_chunks/delete-superseded-batch",
+            {
+                "deletions": [
+                    {
+                        "url": source["source_id"],
+                        "keep_sha256": results[start + offset]["content_sha256"],
+                    }
+                    for offset, source in enumerate(batch)
+                ]
+            },
             timeout=timeout,
         )
     return results

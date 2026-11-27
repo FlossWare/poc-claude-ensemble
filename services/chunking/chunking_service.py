@@ -28,6 +28,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8775
 MAX_BODY_BYTES = 8 * 1_048_576
 MAX_TEXT_CHARS = 4_000_000
+MAX_BATCH_ITEMS = 200
 MAX_SOURCE_ID_CHARS = 512
 MEDIA_TYPES = ("text/plain", "text/markdown")
 
@@ -89,8 +90,10 @@ def _markdown_sections(text):
 
 def chunk(profile_name, source_id, text, media_type):
     """Pure function: profile, source, and text in; chunk records out."""
-    if profile_name not in PROFILES:
-        raise ChunkingError("unsupported_profile", f"unknown chunking profile: {profile_name}", status=422)
+    if not isinstance(profile_name, str) or profile_name not in PROFILES:
+        # non-string profiles must 422, not TypeError into a dropped
+        # connection (unhashable JSON lists/objects)
+        raise ChunkingError("unsupported_profile", f"unknown chunking profile: {profile_name!r}", status=422)
     if not isinstance(source_id, str) or not source_id or len(source_id) > MAX_SOURCE_ID_CHARS:
         raise ChunkingError("invalid_request", "source_id must be a non-empty string of at most 512 characters")
     if media_type not in MEDIA_TYPES:
@@ -154,7 +157,7 @@ class ChunkingHandler(BaseHTTPRequestHandler):
             self._error(404, "not_found", "unknown path")
 
     def do_POST(self):
-        if self.path != "/chunk":
+        if self.path not in ("/chunk", "/chunk/batch"):
             self._error(404, "not_found", "unknown path")
             return
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -169,6 +172,9 @@ class ChunkingHandler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._error(400, "invalid_request", "body must be a JSON object")
             return
+        if self.path == "/chunk/batch":
+            self._chunk_batch(body)
+            return
         try:
             records = chunk(body.get("profile"), body.get("source_id"), body.get("text"),
                             body.get("media_type", "text/plain"))
@@ -177,6 +183,32 @@ class ChunkingHandler(BaseHTTPRequestHandler):
             return
         self._send(200, {"ok": True, "profile": {"name": body["profile"], "version": PROFILES[body["profile"]]["version"]},
                          "chunks": records})
+
+    def _chunk_batch(self, body):
+        """Chunk many texts in one request. Chunking is stateless pure
+        Python — the win is removing per-item HTTP round trips from the
+        ingestion pipeline (50 sequential /chunk calls per batch was a
+        large share of its wall time). Per-item failures are reported in
+        the results list, not fatal to the batch."""
+        items = body.get("items")
+        if not isinstance(items, list) or not items:
+            self._error(400, "invalid_request", "items must be a non-empty list")
+            return
+        if len(items) > MAX_BATCH_ITEMS:
+            self._error(413, "batch_too_large", f"items exceeds the batch limit of {MAX_BATCH_ITEMS}")
+            return
+        results = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                results.append({"ok": False, "error": "item must be an object"})
+                continue
+            try:
+                records = chunk(item.get("profile"), item.get("source_id"), item.get("text"),
+                                item.get("media_type", "text/plain"))
+                results.append({"ok": True, "chunks": records})
+            except ChunkingError as exc:
+                results.append({"ok": False, "error": str(exc), "code": exc.code})
+        self._send(200, {"ok": True, "batch_size": len(items), "results": results})
 
     def log_message(self, fmt, *args):
         return

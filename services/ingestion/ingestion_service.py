@@ -567,34 +567,54 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
             results[index] = {"ok": False, "status": "invalid", "error": str(exc)}
             continue
         ingestion_id = str(uuid4())
-        _record_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
         resolved.append((index, source, ingestion_id))
+    if resolved:
+        # one batched observability post instead of one per item
+        _post_ingestion_events([
+            _build_ingestion_event(source, ingestion_id, "ingestion.started", status="running")
+            for _, source, ingestion_id in resolved
+        ])
 
     accepted: list[tuple[int, dict[str, Any], str]] = []
     if resolved:
-        knowledge_results = indexing.submit_records_batch(
-            KNOWLEDGE_URL,
-            records=[
-                {
-                    "source_id": source["source_id"],
-                    "revision_sequence": time.time_ns() + position,
-                    "revision_id": source["content_sha256"],
-                    "title": source["title"],
-                    "content": source["text"],
-                    "provenance": {"origin": source["origin"], "locator": source["locator"]},
-                    "profiles": PROFILES,
-                }
-                for position, (_, source, _) in enumerate(resolved)
-            ],
-            post=_post_json,
-        )
+        try:
+            knowledge_results = indexing.submit_records_batch(
+                KNOWLEDGE_URL,
+                records=[
+                    {
+                        "source_id": source["source_id"],
+                        "revision_sequence": time.time_ns() + position,
+                        "revision_id": source["content_sha256"],
+                        "title": source["title"],
+                        "content": source["text"],
+                        "provenance": {"origin": source["origin"], "locator": source["locator"]},
+                        "profiles": PROFILES,
+                    }
+                    for position, (_, source, _) in enumerate(resolved)
+                ],
+                post=_post_json,
+            )
+        except indexing.IndexingError as exc:
+            # map like the Phase 2 call does, and close out the already-
+            # posted ingestion.started events instead of dangling as
+            # "running" forever
+            _post_ingestion_events([
+                _build_ingestion_event(source, ingestion_id, "ingestion.failed",
+                                       status="failed", error_type=exc.code)
+                for _, source, ingestion_id in resolved
+            ])
+            raise IngestionError(str(exc), exc.status, exc.code) from exc
+        rejected_events = []
         for (index, source, ingestion_id), knowledge in zip(resolved, knowledge_results):
             decision = knowledge.get("decision")
             if decision not in {"accepted", "duplicate"}:
-                _record_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected")
+                rejected_events.append(
+                    _build_ingestion_event(source, ingestion_id, "ingestion.rejected", status="rejected"))
                 results[index] = {"ok": True, "status": "rejected", "decision": decision, "chunks": 0}
                 continue
             accepted.append((index, source, ingestion_id))
+        if rejected_events:
+            _post_ingestion_events(rejected_events)
 
     # Phase 2: one cross-item batched indexing pass over every accepted
     # item — but each UNIQUE source only once. Duplicate texts in one
@@ -627,15 +647,17 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
         for (_, source, _), item_indexed in zip(unique_accepted, indexed)
     }
 
-    # Phase 3: completion events and per-item results, input order.
+    # Phase 3: completion events (one batched observability post) and
+    # per-item results, input order.
     completed = 0
+    completion_events = []
     for index, source, ingestion_id in accepted:
         item_indexed = indexed_by_source[source["source_id"]]
-        _record_ingestion_event(
+        completion_events.append(_build_ingestion_event(
             source, ingestion_id, "ingestion.completed", status="completed",
             chunks=item_indexed["chunks"], vectors=item_indexed["vectors"],
             content_sha256=item_indexed["content_sha256"],
-        )
+        ))
         results[index] = {
             "ok": True, "status": "completed", "ingestion_id": ingestion_id,
             "source_id": source["source_id"],
@@ -643,6 +665,8 @@ def ingest_batch(body: dict[str, Any]) -> dict[str, Any]:
             "content_sha256": item_indexed["content_sha256"],
         }
         completed += 1
+    if completion_events:
+        _post_ingestion_events(completion_events)
     return {
         "ok": True,
         "batch_size": len(items),
@@ -662,7 +686,7 @@ def _ledger_locator(value: str) -> str:
     return value
 
 
-def _record_ingestion_event(
+def _build_ingestion_event(
     source: dict[str, Any],
     ingestion_id: str,
     event_name: str,
@@ -672,8 +696,8 @@ def _record_ingestion_event(
     vectors: int | None = None,
     content_sha256: str | None = None,
     error_type: str | None = None,
-) -> None:
-    """Best-effort metadata-only event in the existing append-only POC ledger."""
+) -> dict[str, Any]:
+    """Build one metadata-only event for the append-only POC ledger."""
     event_id = str(uuid4())
     entry = {
         "event_id": event_id,
@@ -698,13 +722,41 @@ def _record_ingestion_event(
         entry["content_sha256"] = content_sha256
     if error_type is not None:
         entry["error_type"] = error_type
+    return {"name": "session_events", "event_id": event_id, "entry": entry}
+
+
+def _post_ingestion_events(events: list[dict[str, Any]]) -> None:
+    """Best-effort batched append of ingestion events to the ledger.
+
+    One HTTP round trip for the whole batch (was one per event — two
+    per ingested item). Ingestion success/failure is not hidden or
+    rolled back because optional observability is down."""
+    if not events:
+        return
     try:
-        _post_json(MEMORY_URL, "/memory/append-once", {
-            "name": "session_events", "event_id": event_id, "entry": entry,
-        }, timeout=5)
+        _post_json(MEMORY_URL, "/memory/append-once-batch", {
+            "entries": events,
+        }, timeout=15)
     except IngestionError:
-        # Ingestion success/failure is not hidden or rolled back because optional observability is down.
         pass
+
+
+def _record_ingestion_event(
+    source: dict[str, Any],
+    ingestion_id: str,
+    event_name: str,
+    *,
+    status: str,
+    chunks: int | None = None,
+    vectors: int | None = None,
+    content_sha256: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    """Single-event convenience wrapper over the batched path."""
+    _post_ingestion_events([_build_ingestion_event(
+        source, ingestion_id, event_name, status=status, chunks=chunks,
+        vectors=vectors, content_sha256=content_sha256, error_type=error_type,
+    )])
 
 
 def _body(handler) -> dict[str, Any]:
