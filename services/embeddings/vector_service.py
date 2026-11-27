@@ -31,6 +31,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8771
 MAX_BODY_BYTES = 16 * 1_048_576
 MAX_UPSERT = 256
+MAX_BATCH_DELETIONS = 256
 MAX_TOP_K = 200
 MAX_RECORDS_PAGE = 1000
 
@@ -176,6 +177,9 @@ class VectorHandler(BaseHTTPRequestHandler):
                 if action == "delete-superseded":
                     self._delete_superseded(name, body)
                     return
+                if action == "delete-superseded-batch":
+                    self._delete_superseded_batch(name, body)
+                    return
                 if action == "query":
                     self._query(name, body)
                     return
@@ -247,6 +251,46 @@ class VectorHandler(BaseHTTPRequestHandler):
                 col.delete(ids=stale)
                 _cache.pop(name, None)   # the in-memory matrix is rebuilt from the store on next use
         self._send(200, {"ok": True, "deleted": len(stale)})
+
+    def _delete_superseded_batch(self, name, body):
+        """Remove superseded vectors for MANY sources in one request.
+
+        Same semantics as delete-superseded per entry; the win is one
+        HTTP round trip (and one lock acquisition + cache rebuild)
+        instead of one per source for batched ingestion."""
+        deletions = body.get("deletions")
+        if not isinstance(deletions, list) or not deletions:
+            raise ValueError("deletions must be a non-empty list")
+        if len(deletions) > MAX_BATCH_DELETIONS:
+            raise ValueError(f"at most {MAX_BATCH_DELETIONS} deletions per batch")
+        total_deleted = 0
+        with _lock:
+            col = collection(name)
+            cache_dirty = False
+            try:
+                # validate EVERY entry before deleting ANY: a validation
+                # error mid-loop must not leave earlier deletions applied
+                for index, entry in enumerate(deletions):
+                    if not isinstance(entry, dict):
+                        raise ValueError(f"deletions[{index}] must be an object")
+                    url, keep = entry.get("url"), entry.get("keep_sha256")
+                    if not isinstance(url, str) or not url or len(url) > 2048:
+                        raise ValueError(f"deletions[{index}].url must be a non-empty string of at most 2048 characters")
+                    if not isinstance(keep, str) or len(keep) != 64 or any(c not in "0123456789abcdef" for c in keep):
+                        raise ValueError(f"deletions[{index}].keep_sha256 must be a lowercase hex SHA-256")
+                for entry in deletions:
+                    url, keep = entry.get("url"), entry.get("keep_sha256")
+                    stale = col.get(where={"$and": [{"url": {"$eq": url}}, {"content_sha256": {"$ne": keep}}]},
+                                    include=[])["ids"]
+                    if stale:
+                        col.delete(ids=stale)
+                        total_deleted += len(stale)
+                        cache_dirty = True
+            finally:
+                # any raise mid-batch must still invalidate the cache
+                if cache_dirty:
+                    _cache.pop(name, None)
+        self._send(200, {"ok": True, "batch_size": len(deletions), "deleted": total_deleted})
 
     def _query(self, name, body):
         vector = body.get("embedding")

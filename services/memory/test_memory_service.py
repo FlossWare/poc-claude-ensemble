@@ -668,6 +668,38 @@ class MemoryServiceIdempotencyTest(unittest.TestCase):
 
 
 
+    def test_append_once_detects_external_ledger_write(self):
+        """A line written directly to the JSONL (the ledger-import path)
+        must still be detected by a later append_entry_once — the sidecar
+        index revalidates on file-size change."""
+        from memory_service import MemoryStore
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(Path(temp_dir))
+            store.append_entry_once("events", "event-1", {"a": 1})
+            path = Path(temp_dir) / "events.jsonl"
+            with path.open("a") as handle:
+                handle.write(json.dumps(
+                    {"event_id": "event-2", "payload_sha256": "x" * 64}) + "\n")
+            # digest mismatch against the externally-written row -> conflict
+            with self.assertRaises(ValueError):
+                store.append_entry_once("events", "event-2", {"b": 2})
+            # the original event is still a clean duplicate
+            result = store.append_entry_once("events", "event-1", {"a": 1})
+            self.assertEqual(result["status"], "duplicate")
+
+    def test_index_rebuilds_for_a_fresh_store(self):
+        """A new store instance over an existing ledger (service restart)
+        must build a correct index and keep idempotency."""
+        from memory_service import MemoryStore
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(Path(temp_dir))
+            store.append_entry_once("events", "event-1", {"a": 1})
+            restarted = MemoryStore(Path(temp_dir))
+            result = restarted.append_entry_once("events", "event-1", {"a": 1})
+            self.assertEqual(result["status"], "duplicate")
+            result = restarted.append_entry_once("events", "event-2", {"a": 2})
+            self.assertEqual(result["status"], "stored")
+
 class MemoryServiceRestIdempotencyTest(unittest.TestCase):
     def test_append_once_rest_endpoint_maps_validation_conflict_and_corruption(self):
         from memory_service import MemoryService, create_http_server
@@ -1746,6 +1778,7 @@ class MemoryHistoryRestTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=3)
                 LEDGER_STORES["session_events"] = original_store
+
 
 
 if __name__ == "__main__":
