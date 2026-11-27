@@ -83,9 +83,9 @@ class EnqueueClaimTests(unittest.TestCase):
             claimed = q.claim(pass_=1)
             self.assertEqual(q.stats(pass_=1), {IN_FLIGHT: 1})
             # simulate a stale claim: backdate claimed_at beyond timeout
-            with q._conn:
-                q._conn.execute("UPDATE queue SET claimed_at=?",
-                                (time.time() - 7200,))
+            item = q._items[claimed[0]["id"]]
+            with q._lock:
+                item["claimed_at"] = time.time() - 7200
             reclaimed = q.claim(pass_=1)
             self.assertEqual(len(reclaimed), 1)
             self.assertEqual(reclaimed[0]["attempts"], 2)
@@ -102,7 +102,7 @@ class EnqueueClaimTests(unittest.TestCase):
 
     def test_durability_across_reopen(self):
         with TemporaryDirectory() as td:
-            path = Path(td) / "q.sqlite3"
+            path = Path(td) / "events.jsonl"
             q = IngestQueue(path)
             q.enqueue([{"p": 1}, {"p": 2}])
             claimed = q.claim(pass_=1, limit=1)
@@ -124,12 +124,54 @@ class EnqueueClaimTests(unittest.TestCase):
             claimed = q.claim(pass_=1)  # attempts -> 1 (at max)
             self.assertEqual(claimed[0]["attempts"], 1)
             # simulate a crashed worker: backdate the claim past timeout
-            with q._conn:
-                q._conn.execute("UPDATE queue SET claimed_at=?",
-                                (time.time() - 7200,))
+            item = q._items[claimed[0]["id"]]
+            with q._lock:
+                item["claimed_at"] = time.time() - 7200
             reclaimed = q.claim(pass_=1)
             self.assertEqual(reclaimed, [])  # NOT reclaimed
             self.assertEqual(q.stats(pass_=1), {FAILED: 1})
+
+
+
+    def test_torn_tail_line_is_recovered(self):
+        """A crash mid-write leaves a partial FINAL line; replay must
+        truncate it and start, not refuse (review finding)."""
+        with TemporaryDirectory() as td:
+            path = Path(td) / "events.jsonl"
+            q = IngestQueue(path)
+            q.enqueue([{"p": 1}])
+            claimed = q.claim(pass_=1)
+            # simulate a torn tail: append garbage without newline
+            with path.open("a") as fh:
+                fh.write('{"event": "claimed", "id":')
+            q2 = IngestQueue(path)  # must start, not crash
+            # the good claim survived; the torn event was dropped
+            self.assertEqual(q2.stats(pass_=1), {IN_FLIGHT: 1})
+
+    def test_corrupt_middle_line_fails_closed(self):
+        """Corruption in the middle of the ledger is unrecoverable."""
+        with TemporaryDirectory() as td:
+            path = Path(td) / "events.jsonl"
+            q = IngestQueue(path)
+            q.enqueue([{"p": 1}, {"p": 2}])
+            lines = path.read_text().splitlines()
+            lines[0] = "NOT JSON AT ALL"
+            path.write_text("\n".join(lines) + "\n")
+            with self.assertRaises(RuntimeError):
+                IngestQueue(path)
+
+    def test_claim_tokens_are_unique(self):
+        """Two consecutive claims must hold different tokens (review
+        finding: id(object()) is routinely reused)."""
+        with TemporaryDirectory() as td:
+            q = _queue(td)
+            q.enqueue([{"p": 1}, {"p": 2}])
+            c1 = q.claim(pass_=1, limit=1)[0]
+            c2 = q.claim(pass_=1, limit=1)[0]
+            self.assertNotEqual(c1["claim_token"], c2["claim_token"])
+            # and one token cannot complete the other's item
+            n = q.complete(ids=[c2["id"]], claim_token=c1["claim_token"])
+            self.assertEqual(n, 0)
 
 
 
