@@ -553,13 +553,59 @@ def push_batch_items(
         # touch the gateway): do not POST an empty items list
         return 0
 
+    # FIX (review): the per-item est check never bounded the SUMMED body;
+    # a batch of individually-small items could exceed MAX_REQUEST_BYTES.
+    # Split into sub-batches under the cap (envelope overhead budgeted).
+    sub_batches: list[tuple[list[dict], list[tuple[dict, str]]]] = []
+    cur_payload: list[dict] = []
+    cur_accepted: list[tuple[dict, str]] = []
+    cur_bytes = 512  # JSON envelope overhead budget
+    for (item, h), payload in zip(accepted, payload_items):
+        item_bytes = len(json.dumps(payload).encode("utf-8")) + 64
+        if cur_payload and cur_bytes + item_bytes > MAX_REQUEST_BYTES:
+            sub_batches.append((cur_payload, cur_accepted))
+            cur_payload, cur_accepted, cur_bytes = [], [], 512
+        cur_payload.append(payload)
+        cur_accepted.append((item, h))
+        cur_bytes += item_bytes
+    if cur_payload:
+        sub_batches.append((cur_payload, cur_accepted))
+
+    pushed = 0
+    for sub_payload, sub_accepted in sub_batches:
+        pushed += _post_batch(sub_payload, sub_accepted, source=source,
+                              origin=origin, gateway=gateway,
+                              chunk_profile_fn=chunk_profile_of,
+                              ledger_path=ledger_path,
+                              succeeded_hashes=succeeded_hashes,
+                              report=report)
+    return pushed
+
+
+def _post_batch(
+    payload_items: list[dict],
+    accepted: list[tuple[dict, str]],
+    *,
+    source: str,
+    origin: str | None,
+    gateway: str,
+    chunk_profile_fn,
+    ledger_path: Path,
+    succeeded_hashes: set[str],
+    report: dict,
+) -> int:
     status, body = gateway_post(gateway, "/api/v1/ingestion/ingest/batch",
                                 {"items": payload_items})
     chunk_profile = chunk_profile_of(body) if isinstance(body, dict) else None
     results = body.get("results") if isinstance(body, dict) else None
 
     if status != 200 or not isinstance(results, list) or len(results) != len(accepted):
-        # Whole-batch transport failure: no item outcome is known.
+        # Whole-batch transport failure OR a malformed 200 with a result
+        # count mismatch: the server may have persisted items despite the
+        # malformed response, so outcomes are UNKNOWN, not failed. The
+        # ledger records the indeterminacy; hashes are NOT added to
+        # succeeded_hashes (a retry is safe — the service dedupes by
+        # content hash).
         report["failed"] += len(accepted)
         err_detail = body if isinstance(body, str) else json.dumps(body)[:500]
         report["errors"].append({"stage": "batch", "status": status, "detail": err_detail})
@@ -570,10 +616,25 @@ def push_batch_items(
                 title=item["title"], digest=h, characters=len(item["text"]),
                 extra_fields=item.get("extra"),
             ) | {"status": "failed", "stage": "batch", "http_status": status,
+                 "outcomes_unknown": True,  # server may have persisted these
                  "response": body if isinstance(body, dict) else {"error": body}})
         return len(accepted)
 
-    for (item, h), result in zip(accepted, results):
+    # FIX (review): zip(accepted, results) trusted server ordering with
+    # no echoed key. When every result echoes the content digest, align
+    # by it; otherwise fall back to positional order.
+    result_by_digest: dict[str, dict] | None = None
+    if all(isinstance(r, dict) and r.get("digest") for r in results):
+        result_by_digest = {r["digest"]: r for r in results}
+
+    def _pair_results():
+        if result_by_digest is not None:
+            for item, h in accepted:
+                yield (item, h), result_by_digest.get(h, {"ok": False, "error": "digest_missing_in_results"})
+        else:
+            yield from zip(accepted, results)
+
+    for (item, h), result in _pair_results():
         entry = _ledger_entry(
             source=source, origin=origin, locator=item.get("locator"),
             retrieved_at=item.get("retrieved_at"), source_file=item["source_file"],
@@ -581,10 +642,30 @@ def push_batch_items(
             extra_fields=item.get("extra"),
         )
         if isinstance(result, dict) and result.get("ok") and result.get("status") in ("completed", "rejected"):
+            ingest_status = result.get("status")
+            if ingest_status == "rejected":
+                # FIX (review): a non-duplicate rejection was ledgered as
+                # succeeded and counted as ingested. Record the truth:
+                # a distinct status and counter. The hash stays in
+                # succeeded_hashes to prevent retry storms (the service
+                # rejects deterministically), but the ledger and report
+                # no longer claim ingestion.
+                report.setdefault("rejected", 0)
+                report["rejected"] += 1
+                append_ledger(ledger_path, entry | {
+                    "ingestion_id": result.get("ingestion_id"),
+                    "ingest_status": ingest_status,
+                    "decision": result.get("decision"),
+                    "chunk_profile": chunk_profile,
+                    "status": "rejected",
+                    "response": result,
+                })
+                succeeded_hashes.add(h)
+                continue
             report["ingested"] += 1
             append_ledger(ledger_path, entry | {
                 "ingestion_id": result.get("ingestion_id"),
-                "ingest_status": result.get("status"),
+                "ingest_status": ingest_status,
                 "decision": result.get("decision"),
                 "chunks": result.get("chunks"),
                 "vectors": result.get("vectors"),

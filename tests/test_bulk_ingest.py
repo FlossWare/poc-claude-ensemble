@@ -711,5 +711,132 @@ class CLITests(unittest.TestCase):
         self.assertIn("expects a .pdf file", result.stderr)
 
 
+class BatchFixRegressionTests(unittest.TestCase):
+    """Regression tests for the full-codebase review fixes (2026-11-26)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.input_dir = Path(self.tmp.name) / "in"
+        self.input_dir.mkdir(parents=True)
+        self.ledger = Path(self.tmp.name) / "ledger.jsonl"
+        # Real loopback fake gateway (same pattern as FakeGatewayHandler)
+        import http.server
+        self.responses: list[tuple[int, object]] = []
+        outer = self
+
+        self.post_count = 0
+        self.post_item_counts: list[int] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                outer.post_count += 1
+                n_items = len(body.get("items", []))
+                outer.post_item_counts.append(n_items)
+                if outer.responses:
+                    status, payload = outer.responses.pop(0)
+                else:
+                    # default: echo one completed result per item
+                    status, payload = 200, {"results": [
+                        {"ok": True, "status": "completed"}] * n_items,
+                        "chunking": {"profile": "t"}}
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.gateway = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.tmp.cleanup()
+
+    def _items(self, n):
+        items = []
+        for i in range(n):
+            p = self.input_dir / f"item{i}.json"
+            p.write_text(json.dumps({"title": f"T{i}", "text": f"unique text {i} " * 10}))
+            items.append(p)
+        return items
+
+    def _batch_run(self, n, batch_size, results):
+        self._items(n)
+        self.responses = [(200, {"results": results, "chunking": {"profile": "t"}})]
+        import bulk_ingest as bi
+        return bi.run(self.input_dir, source="test", origin=None,
+                      gateway=self.gateway, limit=None, dry_run=False,
+                      ledger_path=self.ledger, batch_size=batch_size)
+
+    def test_rejected_not_counted_as_ingested(self):
+        n = 2
+        results = [{"ok": True, "status": "rejected", "decision": "duplicate",
+                    "digest": None},
+                   {"ok": True, "status": "completed", "digest": None}]
+        report = self._batch_run(n, 2, results)
+        self.assertEqual(report["ingested"], 1)
+        self.assertEqual(report.get("rejected", 0), 1)
+        rows = [json.loads(l) for l in self.ledger.read_text().splitlines()]
+        statuses = sorted(r["status"] for r in rows)
+        self.assertEqual(statuses, ["rejected", "succeeded"])
+
+    def test_length_mismatch_marks_outcomes_unknown(self):
+        n = 2
+        # server returns ONE result for TWO items -> outcomes unknown
+        results = [{"ok": True, "status": "completed"}]
+        report = self._batch_run(n, 2, results)
+        self.assertEqual(report["failed"], 2)
+        rows = [json.loads(l) for l in self.ledger.read_text().splitlines()]
+        self.assertTrue(all(r.get("outcomes_unknown") for r in rows))
+
+    def test_digest_alignment_overrides_positional(self):
+        n = 2
+        # results echoed in REVERSE order with digests — alignment must
+        # pair by digest, not position
+        import bulk_ingest as bi
+        self._items(2)
+        # hash the NORMALIZED text (extract_item may transform it), the
+        # same way the pipeline does
+        hashes = []
+        for p in sorted(self.input_dir.glob("*.json")):
+            norm, _ = bi.extract_item(json.loads(p.read_text()), str(p))
+            hashes.append(bi.content_hash(norm["text"]))
+        results = [{"ok": True, "status": "completed", "digest": hashes[1]},
+                   {"ok": True, "status": "completed", "digest": hashes[0]}]
+        self.responses = [(200, {"results": results, "chunking": {"profile": "t"}})]
+        report = bi.run(self.input_dir, source="test", origin=None,
+                        gateway=self.gateway, limit=None, dry_run=False,
+                        ledger_path=self.ledger, batch_size=2)
+        self.assertEqual(report["ingested"], 2)
+        rows = {json.loads(l)["content_sha256"]: json.loads(l) for l in self.ledger.read_text().splitlines()}
+        self.assertEqual(len(rows), 2)
+
+    def test_batch_splits_on_summed_bytes(self):
+        # items whose SUMMED payload exceeds MAX_REQUEST_BYTES must split
+        # into multiple POSTs, not one rejected request. Items sized just
+        # under the per-file cap (1 MiB) so the batch sum crosses 12 MiB.
+        import bulk_ingest as bi
+        n = 14  # 14 x ~1MiB > 12 MiB request cap
+        self._items(n)
+        for i, p in enumerate(sorted(self.input_dir.glob("*.json"))):
+            d = json.loads(p.read_text())
+            d["text"] = f"text {i} " + "x" * (bi.MAX_FILE_BYTES - 2048)
+            p.write_text(json.dumps(d))
+        report = bi.run(self.input_dir, source="test", origin=None,
+                        gateway=self.gateway, limit=None, dry_run=False,
+                        ledger_path=self.ledger, batch_size=20)
+        self.assertEqual(report["ingested"], n)
+        self.assertGreaterEqual(self.post_count, 2,
+                                "summed-over-cap batch must split into 2+ POSTs")
+        self.assertEqual(sum(self.post_item_counts), n)
+
+
 if __name__ == "__main__":
     unittest.main()
