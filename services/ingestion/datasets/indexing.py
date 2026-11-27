@@ -42,7 +42,7 @@ MAX_DOWNSTREAM_BODY_BYTES = 8 * 1024 * 1024
 
 PROFILES = {
     "chunking": "window-v1@1",
-    "embedding": "nomic-embed-text-v1.5@fp32",
+    "embedding": "nomic-embed-text-v1.5@fp16",
     "vector": "knowledge_chunks@1",
 }
 CHUNK_PROFILE = "window-v1"

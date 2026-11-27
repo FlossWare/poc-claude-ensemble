@@ -678,7 +678,7 @@ def _index_decision(parsed, end_offset):
         "source_id": parsed["file"], "revision_sequence": max(1, end_offset),
         "revision_id": f"offset-{end_offset}",
         "profiles": {"chunking": "message-v1@1", "tokenization": "lexical-v1@1",
-                     "embedding": "nomic-embed-text-v1.5@fp32", "vector": "transcript_text@1"}})
+                     "embedding": "nomic-embed-text-v1.5@fp16", "vector": "transcript_text@1"}})
     return body["decision"]
 
 
