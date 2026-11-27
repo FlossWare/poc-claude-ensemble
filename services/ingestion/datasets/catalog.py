@@ -185,20 +185,30 @@ def _detect_license(text: str | None) -> str | None:
 
 def _license_files(root: Path, config: Config) -> tuple[str, str, list[str]]:
     warnings: list[str] = []
-    metadata_license = "GPL-3.0"
-    catalog_license = "MIT"
+    metadata_license: str | None = None
+    catalog_license: str | None = None
     metadata_text = _read_text_limited(root / "LICENSE", config.catalog_license_max_bytes)
     detected = _detect_license(metadata_text)
     if detected:
         metadata_license = detected
     elif metadata_text is None:
         warnings.append("metadata_repo_license_file_missing")
+    else:
+        # file present but unrecognized — do NOT present a default as
+        # established; downstream treats None as needs-review
+        warnings.append("metadata_repo_license_unrecognized")
 
     sibling = root.parent / "awesome-public-datasets" / "LICENSE"
     catalog_text = _read_text_limited(sibling, config.catalog_license_max_bytes)
     detected = _detect_license(catalog_text)
     if detected:
         catalog_license = detected
+    elif catalog_text is None:
+        warnings.append("catalog_license_file_missing")
+    else:
+        warnings.append("catalog_license_unrecognized")
+    # callers get None for undetected — assumed defaults must never be
+    # presented as established licenses
     return catalog_license, metadata_license, warnings
 
 
@@ -315,8 +325,9 @@ def snapshot_from_directory(
     files: list[CatalogFile] = []
 
     for dirpath, dirnames, filenames in os.walk(core, topdown=True, followlinks=False):
-        dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
-        # Refuse symlinked directories without following them.
+        # Refuse symlinked directories without following them. This runs
+        # BEFORE the dot-prefix filter so a `.name` symlink is recorded
+        # as unsafe rather than silently pruned.
         for name in list(dirnames):
             candidate = Path(dirpath) / name
             if candidate.is_symlink():
@@ -326,6 +337,7 @@ def snapshot_from_directory(
                     CatalogFile(relpath, category, filename, "", 0, unsafe_reason="symlink")
                 )
                 dirnames.remove(name)
+        dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
         for name in sorted(filenames):
             if name.startswith("."):
                 continue
@@ -560,11 +572,16 @@ def _fetch_remote_readme(
     from .netguard import NetguardError, Transport
 
     path = destination.parent / f"{destination.name}.README.rst"
+    stamp = destination.parent / f"{destination.name}.README.commit"
     try:
         info = path.lstat()
+        cached_commit = stamp.read_text(encoding="utf-8").strip()
     except OSError:
         info = None
-    if info is not None and stat.S_ISREG(info.st_mode) and info.st_size <= config.catalog_readme_max_bytes:
+        cached_commit = ""
+    if (info is not None and stat.S_ISREG(info.st_mode)
+            and info.st_size <= config.catalog_readme_max_bytes
+            and cached_commit == config.readme_ref):
         return path, []
     url = (
         f"https://raw.githubusercontent.com/{config.readme_repo}/"
@@ -588,6 +605,10 @@ def _fetch_remote_readme(
             descriptor = -1
             handle.write(body)
         os.replace(temporary, path)
+        try:
+            stamp.write_text(f"{config.readme_ref}\n", encoding="utf-8")
+        except OSError:
+            pass
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -617,6 +638,11 @@ def snapshot_from_remote(config: Config) -> CatalogSnapshot:
         ) from exc
 
     destination = config.data_root / "catalog" / f"{config.catalog_repo.replace('/', '_')}@{commit}"
+    marker = destination / ".verified"
+    if (destination / "core").is_dir() and not marker.is_file():
+        # a pre-existing core/ we never extracted is unverified — do not
+        # trust it as this commit; re-extract atomically
+        shutil.rmtree(destination, ignore_errors=True)
     expected_roots = {f"{repo_name}-{commit}", f"{repo_name}-{config.catalog_ref}"}
     if not (destination / "core").is_dir():
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -630,6 +656,11 @@ def snapshot_from_remote(config: Config) -> CatalogSnapshot:
             shutil.rmtree(temporary, ignore_errors=True)
         else:
             os.replace(temporary, destination)
+    # extraction (this run or a prior verified one) is complete
+    try:
+        marker.write_text(f"{commit}\n", encoding="utf-8")
+    except OSError:
+        pass
 
     readme_override, readme_warnings = _fetch_remote_readme(config, destination)
     snapshot = snapshot_from_directory(

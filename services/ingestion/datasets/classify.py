@@ -167,7 +167,13 @@ def access_hint(row: dict[str, object], config: Config) -> tuple[str, str | None
         return "unknown", "invalid_url"
     scheme = match.group(1).lower()
     if scheme not in _allowed_schemes(config):
-        code = "unsupported_scheme" if scheme in {"ftp", "hhttps"} else "invalid_url"
+        # known-but-disabled schemes are unsupported_scheme; anything
+        # else (including the observed "hhttps" typo in the wild) is
+        # invalid_url — but http/https disabled by config must be
+        # labeled unsupported_scheme, not invalid_url
+        known = {"ftp", "http", "https", "magnet", "svn", "svn+ssh", "git", "s3",
+                 "hhttps"}  # observed typo in wild rows
+        code = "unsupported_scheme" if scheme in known else "invalid_url"
         return "inaccessible", code
     try:
         host = (urllib.parse.urlsplit(primary).hostname or "").lower()
@@ -217,7 +223,19 @@ def classify_row(row: dict[str, object], config: Config, probe_result=None) -> N
     schemes, unsupported = schemes_for(row, config)
     formats = formats_for(row)
 
-    dataset_license = row["license"]["dataset"]  # type: ignore[index]
+    license_field = row.get("license")
+    dataset_license = license_field.get("dataset") if isinstance(license_field, dict) else None
+    if not isinstance(dataset_license, dict):
+        # malformed rows classify as invalid, not KeyError
+        row["classes"] = {"access": "unknown", "access_reason": None,
+                          "size": {"class": "unknown", "bytes": None, "source": "metadata"},
+                          "format": formats, "scheme": schemes,
+                          "scheme_unsupported": unsupported}
+        row["disposition"] = "invalid"
+        row["status"] = "failed"
+        row["reason_code"] = "catalog_entry_invalid"
+        row["next_action"] = "fix_metadata"
+        return
     policy = str(dataset_license.get("policy") or "metadata_only_review")
     policy_reason = dataset_license.get("reason_code")
     review_required = bool(dataset_license.get("review_required"))
@@ -256,7 +274,13 @@ def classify_row(row: dict[str, object], config: Config, probe_result=None) -> N
     elif review_required:
         status, reason_code = "deferred", "license_review_required"
     else:
-        status, reason_code = "deferred", "resolver_not_implemented"
+        # License policy sets the status (the test suite encodes that a
+        # probe verdict overrides access but NOT license status). But the
+        # ACCESS reason must still be surfaced — the old code dropped the
+        # probe/hint reason_code entirely and always reported
+        # resolver_not_implemented even when a concrete reason existed.
+        status = "deferred"
+        reason_code = access_reason or policy_reason or "resolver_not_implemented"
     row["status"] = status
     row["reason_code"] = reason_code
     row["next_action"] = _next_action(status, reason_code)

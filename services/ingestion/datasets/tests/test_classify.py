@@ -195,4 +195,7 @@ def test_probe_failure_overrides_access_but_not_license_status(tmp_path):
     assert row["classes"]["access"] == "inaccessible"
     assert row["classes"]["access_reason"] == "not_found"
     assert row["status"] == "deferred"
-    assert row["reason_code"] == "resolver_not_implemented"
+    # the probe's concrete verdict surfaces as reason_code; reporting
+    # resolver_not_implemented when a probe measured not_found is the
+    # defect the full-codebase review confirmed
+    assert row["reason_code"] == "not_found"
