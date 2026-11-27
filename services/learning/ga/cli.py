@@ -102,6 +102,23 @@ def run_lock() -> Iterator[bool]:
         os.close(handle)
 
 
+def run_dir_has(run_id: str, fingerprint: Mapping[str, Any],
+                code_hash: Optional[str] = None) -> bool:
+    """True when run_id's dir exists AND holds results for a DIFFERENT
+    (fingerprint, code_hash) pair — a same-day collision that would
+    overwrite completed evidence. Same fingerprint but different code
+    ALSO collides (review r1: the code-only rerun overwrote results)."""
+    try:
+        existing = _read_json(journal_mod.run_dir(run_id) / "results.json")
+    except OSError:
+        return False
+    if existing is None:
+        return False
+    if existing.get("corpus") != fingerprint:
+        return True
+    return code_hash is not None and existing.get("code_hash") != code_hash
+
+
 def derive_seed(corpus_fingerprint: Mapping[str, Any], target: str, date: str) -> int:
     """Deterministic seed: sha256(corpus hash || target || UTC date)."""
     payload = canonical_json({"corpus": corpus_fingerprint, "target": target, "date": date})
@@ -117,7 +134,10 @@ def _git_rev() -> Optional[str]:
 
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(Path(__file__).resolve().parents[3].parent),
+            # FIX (register 9): parents[3] is the repo root; the old
+            # .parent resolved to the org directory and recorded a
+            # foreign SHA (or null) as provenance
+            cwd=str(Path(__file__).resolve().parents[3]),
             capture_output=True,
             text=True,
             timeout=5,
@@ -221,8 +241,18 @@ def execute_run(
 
         fingerprint = _fingerprint(corpora)
         date = _utc_date()
-        run_id = f"ga-{target}-{date}"
         code_hash = adapter.code_hash()
+        # FIX (register 7): same-day runs used the same run_id and
+        # overwrote results/manifest/state — the evidence backing a
+        # journal apply entry could be destroyed. A short fingerprint
+        # suffix disambiguates; the FIRST run of a day keeps the
+        # unsuffixed id for backward compatibility.
+        base_run_id = f"ga-{target}-{date}"
+        fp_tag = hashlib.sha256(
+            canonical_json(dict(fingerprint)).encode("utf-8")
+        ).hexdigest()[:8]
+        run_id = base_run_id if not (run_dir_has(base_run_id, fingerprint, code_hash)) \
+            else f"{base_run_id}-{fp_tag}"
         deployed = adapter.deployed_status()
 
         run_path = journal_mod.run_dir(run_id)
@@ -232,6 +262,11 @@ def execute_run(
             previous_results is not None
             and previous_results.get("corpus") == fingerprint
             and previous_results.get("code_hash") == code_hash
+            # FIX (register 6): only a COMPLETED prior run short-circuits;
+            # a cached error (budget, infra) must not permanently mask
+            # re-runs of the same corpus
+            and previous_results.get("outcome") not in (
+                "error", "budget_exceeded", "config_error", "already_running")
         ):
             return RunResult(
                 "no_new_evidence",
@@ -732,6 +767,15 @@ def format_report(results: Mapping[str, Any]) -> str:
 
 
 def execute_rollback(change: Optional[str], *, last: bool, applied_by: str) -> RunResult:
+    # FIX (register 11): see execute_apply_from_results
+    with run_lock() as acquired:
+        if not acquired:
+            return RunResult("already_running", EXIT_OK,
+                             message="another GA operation holds the lock")
+        return _execute_rollback_locked(change, last=last, applied_by=applied_by)
+
+
+def _execute_rollback_locked(change: Optional[str], *, last: bool, applied_by: str) -> RunResult:
     target_change = change
     if last:
         entry = journal_mod.last_apply()
@@ -772,6 +816,16 @@ def execute_rollback(change: Optional[str], *, last: bool, applied_by: str) -> R
 
 
 def execute_apply_from_results(run_id: str, *, applied_by: str) -> RunResult:
+    # FIX (register 11): apply/rollback bypassed run_lock, so a concurrent
+    # promote + rollback could interleave journal writes
+    with run_lock() as acquired:
+        if not acquired:
+            return RunResult("already_running", EXIT_OK,
+                             message="another GA operation holds the lock")
+        return _execute_apply_from_results_locked(run_id, applied_by=applied_by)
+
+
+def _execute_apply_from_results_locked(run_id: str, *, applied_by: str) -> RunResult:
     results = load_results(run_id)
     if results is None:
         return RunResult("config_error", EXIT_CONFIG, message=f"no results for run {run_id}")
@@ -800,8 +854,12 @@ def execute_apply_from_results(run_id: str, *, applied_by: str) -> RunResult:
             target=results.get("target", TARGET_THOMPSON_POLICY),
             seed=results.get("seed", 0),
             corpus_summary={
-                "turn": {"rows": results.get("corpus", {}).get("turn", {}).get("accepted", 0)},
-                "review": {"rows": results.get("corpus", {}).get("review", {}).get("accepted", 0)},
+                # FIX (register 2): results["corpus"] is the FINGERPRINT —
+                # the old .get("accepted") always returned 0, so the guard's
+                # "no new evidence" check never held. Real counts live in
+                # results["summary"].
+                "turn": {"rows": results.get("summary", {}).get("turn", {}).get("rows", 0)},
+                "review": {"rows": results.get("summary", {}).get("review", {}).get("rows", 0)},
             },
             code_hash=results.get("code_hash", ""),
             baseline=_eval_from_dict(results["baseline"]["holdout"]["turn"]),
@@ -968,39 +1026,71 @@ def check_auto_revert() -> RunResult:
         return RunResult("config_error", EXIT_CONFIG,
                          message="journal entry lacks params; manual rollback available")
 
+    # FIX (register 4): never evaluate an already-rolled-back change
+    if journal_mod.rolled_back(entry.get("change_id")):
+        return RunResult("guard_passed", EXIT_OK,
+                         message=f"change {entry.get('change_id')} already rolled back")
     try:
         corpora = adapter.load_corpora()
-        promoted_rows = int((entry.get("corpus") or {}).get("turn", {}).get("accepted", 0) or 0)
+        # journaled corpus row counts (the apply path now records real
+        # counts; entries written before that fix stored 0, which makes
+        # the guard evaluate — the safe direction: it checks, never skips)
+        promoted_rows = int((entry.get("corpus") or {}).get("turn", {}).get("rows", 0) or 0)
         current_rows = len(corpora["turn"].rows)
         if current_rows <= promoted_rows:
             return RunResult(
                 "guard_passed", EXIT_OK,
                 message=(f"no new turn evidence since promotion ({current_rows} <= "
-                         f"{promoted_rows} accepted rows); guard holds"),
+                         f"{promoted_rows} rows); guard holds"),
             )
         corpora_fingerprint = _fingerprint(corpora)
-        seed = derive_seed(corpora_fingerprint, target, _utc_date())
+        # FIX (register 5): reuse the PROMOTION-TIME seed — deriving a
+        # today-seed compared against a different holdout window than the
+        # one that justified promotion
+        seed = int(entry.get("seed") or 0) or derive_seed(
+            corpora_fingerprint, target, _utc_date())
+        cfg = SearchConfig()
         default_task = getattr(adapter, "TASK_DEFAULT", "default")
         review_task = getattr(adapter, "TASK_CODE_REVIEW", "code-review")
         incumbent_policies = {default_task: incumbent, review_task: incumbent}
         candidate_policies = {default_task: candidate, review_task: candidate}
-        baseline = adapter.evaluate_policies(incumbent_policies, corpora, "holdout", seed)
-        promoted = adapter.evaluate_policies(candidate_policies, corpora, "holdout", seed)
+        baseline = adapter.evaluate_policies(incumbent_policies, corpora, "holdout", seed, cfg)
+        promoted = adapter.evaluate_policies(candidate_policies, corpora, "holdout", seed, cfg)
     except Exception as exc:  # noqa: BLE001 - the guard must never break a GA run
         return RunResult("error", EXIT_INFRA,
                          message=f"auto-revert evaluation failed: {type(exc).__name__}: {exc}")
 
     base_fit = float(baseline["turn"].fitness)
     cand_fit = float(promoted["turn"].fitness)
-    if cand_fit < base_fit:
+    # FIX (register 3): revert only beyond noise, not on any raw delta —
+    # the docstring promises "beyond noise"; require a margin greater
+    # than the promotion-time CI width (or 1% of base fitness as the
+    # fallback floor when no CI was stored). Review r1-3: hardened the
+    # ci95 parse — a corrupt journal entry must not crash the guard.
+    try:
+        ci_raw = entry.get("ci95") or (0.0, 0.0)
+        ci = (float(ci_raw[0]), float(ci_raw[1])) if len(ci_raw) == 2 else (0.0, 0.0)
+    except (TypeError, ValueError, IndexError):
+        ci = (0.0, 0.0)
+    noise = max(ci[1] - ci[0], abs(base_fit) * 0.01)
+    if cand_fit < base_fit - noise:
         revert = execute_rollback(entry.get("change_id"), last=False,
                                   applied_by="auto-revert-guard")
-        journal_mod.append({
-            "kind": "auto_reverted", "change_id": entry.get("change_id"),
-            "reason": f"post-promotion regression: {cand_fit:.4f} < {base_fit:.4f}",
-            "baseline_fitness": base_fit, "candidate_fitness": cand_fit,
-        })
-        return RunResult("auto_reverted", EXIT_OK, run_id=revert.run_id,
-                         message=f"reverted {entry.get('change_id')}: regression detected")
+        # FIX (register 4): only journal auto_reverted when the rollback
+        # actually happened — a config_error outcome must not be recorded
+        # as a revert (and would spam on every subsequent run)
+        if revert.outcome == "rolled_back":
+            journal_mod.append({
+                "kind": "auto_reverted", "change_id": entry.get("change_id"),
+                "reason": (f"post-promotion regression: {cand_fit:.4f} < "
+                           f"{base_fit:.4f} - {noise:.4f} (noise)"),
+                "baseline_fitness": base_fit, "candidate_fitness": cand_fit,
+                "noise_margin": noise,
+            })
+            return RunResult("auto_reverted", EXIT_OK, run_id=revert.run_id,
+                             message=f"reverted {entry.get('change_id')}: regression beyond noise")
+        return RunResult("error", EXIT_INFRA, run_id=revert.run_id,
+                         message=f"auto-revert rollback failed: {revert.message}")
     return RunResult("guard_passed", EXIT_OK,
-                     message=f"promoted policy holds: {cand_fit:.4f} >= {base_fit:.4f}")
+                     message=f"promoted policy holds: {cand_fit:.4f} >= "
+                             f"{base_fit:.4f} - {noise:.4f} (noise)")
