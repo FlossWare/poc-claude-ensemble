@@ -171,9 +171,24 @@ def store_prompt(session_id, prompt, timestamp, cwd):
     os.makedirs(os.path.dirname(PROMPT_LEDGER), exist_ok=True)
     with _LEDGER_LOCK:
         already = False
-        if os.path.exists(PROMPT_LEDGER):
-            with open(PROMPT_LEDGER, encoding="utf-8") as handle:
-                already = any(json.loads(line).get("event_id") == event_id for line in handle if line.strip())
+        try:
+            if os.path.exists(PROMPT_LEDGER):
+                with open(PROMPT_LEDGER, encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            # one malformed line must not turn /prompts into a
+                            # persistent failure — skip it, keep scanning
+                            continue
+                        if row.get("event_id") == event_id:
+                            already = True
+                            break
+        except OSError as exc:
+            raise DependencyError("ledger", f"cannot read prompt ledger: {exc}") from exc
         if not already:
             record = {"schema_version": 1, "producer": "claude-code", "kind": "prompt",
                   "event_id": event_id, "session_id": session_id, "timestamp": timestamp,
@@ -201,7 +216,10 @@ def _related_sessions(query):
                if any(n["properties"].get("path") == t or str(n["properties"].get("path", "")).endswith("/" + t)
                       for t in tokens)]
     sessions = {}
-    for node in matched:
+    # FIX (review): one traverse call per matched node (each up to the
+    # transport timeout) with no aggregate bound was a latency/DoS hole;
+    # cap the nodes walked per query
+    for node in matched[:MAX_RELATED_FILE_NODES]:
         walked = _call("graph", f"{GRAPH_URL}/graph/traverse",
                        {"start": node["id"], "direction": "in", "max_depth": 1, "edge_type": "touched"})
         for hit in walked["results"]:
@@ -215,7 +233,11 @@ def _related_sessions(query):
 def _intent_for(query):
     """Intent label and confidence for a query. Raises DependencyError when the intent service is unavailable."""
     body = _call("intent", f"{INTENT_URL}/classify", {"text": query})
-    return {"label": body["label"], "confidence": body["confidence"]}
+    # a 200-ok response with a missing/ill-typed shape degrades, never crashes
+    label, confidence = body.get("label"), body.get("confidence")
+    if not isinstance(label, str) or not label:
+        raise DependencyError("intent", "response missing label")
+    return {"label": label, "confidence": confidence if isinstance(confidence, (int, float)) else None}
 
 
 def _knowledge_result(record):
@@ -295,11 +317,22 @@ def knowledge_search(query, top_k, rerank=True):
     degraded = []
     # The exact-match leg does not need the query embedding, so it runs while the embedding call is in flight.
     exact_future = _POOL.submit(_knowledge_exact_leg, query)
-    embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
-                          timeout=EMBED_QUERY_TIMEOUT)
-    vector_records, label = _knowledge_vector_leg(embedded["embeddings"][0])
-    if label:
-        degraded.append(label)
+    # FIX (review): the embedding call was unwrapped, so an embedding outage
+    # 503'd the whole knowledge search even though the exact-match leg was
+    # already running and could answer. Degrade instead, per the module's
+    # own "503 only when no candidate source succeeded" rule.
+    try:
+        embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
+                         timeout=EMBED_QUERY_TIMEOUT)
+        embeddings = embedded.get("embeddings") or []
+        if not embeddings:
+            raise DependencyError("embedding", "empty embeddings response")
+        vector_records, label = _knowledge_vector_leg(embeddings[0])
+        if label:
+            degraded.append(label)
+    except DependencyError as exc:
+        degraded.append(exc.name)
+        vector_records = []
     exact_records, label = exact_future.result()
     if label:
         degraded.append(label)
@@ -334,7 +367,10 @@ def _hybrid_search_uncached(query, top_k, rerank=True):
     try:
         embedded = _call("embedding", f"{EMBEDDING_URL}/embeddings", {"texts": [query], "mode": "query"},
                           timeout=EMBED_QUERY_TIMEOUT)
-        embedding = embedded["embeddings"][0]
+        embeddings = embedded.get("embeddings") or []
+        if not embeddings:
+            raise DependencyError("embedding", "empty embeddings response")
+        embedding = embeddings[0]
     except DependencyError as exc:
         degraded.append(exc.name)
     knowledge_vector_future = None
@@ -523,6 +559,10 @@ def _ingest_graph(parsed):
         "source": session_node, "target": project_node, "type": "in_project",
         "id": _stable_id("edge", sid, "in_project")})
     edges = 0
+    # finding 8 (revised per review): a hard cap permanently dropped
+    # touches while the offset still advanced — data loss. All touches
+    # are written; stable IDs make retry re-adds idempotent server-side,
+    # so mid-run timeout amplification is safe (re-work, never loss).
     for touch in parsed["touches"]:
         file_node = _stable_id("file", touch["path"])
         _ingest_call("graph", f"{GRAPH_URL}/graph/add-node", {
@@ -596,6 +636,31 @@ def _log_ingest(record):
         handle.write(json.dumps(record) + "\n")
 
 
+_INGEST_STATE_LOCK = threading.Lock()   # read-modify-write of INGEST_STATE must be atomic
+_INGEST_IN_FLIGHT = set()               # per-transcript guard: no double-processing
+_INGEST_IN_FLIGHT_LOCK = threading.Lock()
+# bounded ingest pool: the old per-request Thread(...) with no cap was a
+# resource-exhaustion hole on loopback (register finding 3)
+_INGEST_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="session-ingest")
+MAX_RELATED_FILE_NODES = 20             # graph traversal cap per search (finding 7)
+
+
+def _submit_ingest(real, record_outcomes):
+    """Queue an ingest; a transcript already in flight is skipped (finding 2)."""
+    with _INGEST_IN_FLIGHT_LOCK:
+        if real in _INGEST_IN_FLIGHT:
+            return False
+        _INGEST_IN_FLIGHT.add(real)
+    def _wrapped():
+        try:
+            _run_ingest(real, record_outcomes)
+        finally:
+            with _INGEST_IN_FLIGHT_LOCK:
+                _INGEST_IN_FLIGHT.discard(real)
+    _INGEST_POOL.submit(_wrapped)
+    return True
+
+
 def _run_ingest(real, record_outcomes=True):
     """Background ingest. Resumes from the stored byte offset, so only new lines are processed."""
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -616,12 +681,25 @@ def _run_ingest(real, record_outcomes=True):
             # Index refused this revision, so its content is not published and the offset must not move.
             _log_ingest(dict(result, at=stamp, from_offset=offset))
             return
-        state[real] = {"offset": result["end_offset"], "first_ts": result["first_ts"]}
-        os.makedirs(os.path.dirname(INGEST_STATE), exist_ok=True)
-        tmp = INGEST_STATE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(state, handle)
-        os.replace(tmp, INGEST_STATE)
+        # the whole read-latest/mutate/replace is atomic: the ingest work
+        # above stays unlocked, but the state update re-reads LATEST inside
+        # the lock so concurrent workers never drop each other's offsets
+        # (review must-fix 1: the earlier fix locked only the initial read)
+        with _INGEST_STATE_LOCK:
+            state = _ingest_state()
+            # compare-and-set: never regress the offset if a run we did
+            # not see advanced it first (review round-2 hardening)
+            current = state.get(real) if isinstance(state.get(real), dict) else {}
+            if current.get("offset", 0) > offset:
+                _log_ingest({"ok": True, "skipped": "offset_superseded",
+                             "transcript": os.path.basename(real), "at": stamp})
+                return
+            state[real] = {"offset": result["end_offset"], "first_ts": result["first_ts"]}
+            os.makedirs(os.path.dirname(INGEST_STATE), exist_ok=True)
+            tmp = f"{INGEST_STATE}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
+            os.replace(tmp, INGEST_STATE)
         _log_ingest(dict(result, at=stamp, from_offset=offset))
     except Exception as exc:  # recorded, not raised: this runs in a background thread
         _log_ingest({"ok": False, "transcript": os.path.basename(real), "at": stamp,
@@ -801,7 +879,11 @@ class HybridHandler(BaseHTTPRequestHandler):
             self._error(404, "not_found", "unknown path")
             return
         limit = MAX_PROMPT_BODY_BYTES if self.path == "/prompts" else MAX_BODY_BYTES
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._error(400, "invalid_request", "Content-Length must be an integer")
+            return
         if length <= 0 or length > limit:
             self._error(400, "invalid_request", f"request body must be between 1 byte and {limit} bytes")
             return
@@ -830,8 +912,10 @@ class HybridHandler(BaseHTTPRequestHandler):
             if not isinstance(record_outcomes, bool):
                 self._error(400, "invalid_request", "record_outcomes must be true or false")
                 return
-            threading.Thread(target=_run_ingest, args=(real, record_outcomes), name="session-ingest", daemon=True).start()
-            self._send(202, {"ok": True, "status": "accepted", "transcript": os.path.basename(real)})
+            queued = _submit_ingest(real, record_outcomes)
+            self._send(202, {"ok": True,
+                             "status": "accepted" if queued else "already-in-flight",
+                             "transcript": os.path.basename(real)})
             return
         query, top_k = body.get("query"), body.get("top_k", 10)
         rerank = body.get("rerank", True)

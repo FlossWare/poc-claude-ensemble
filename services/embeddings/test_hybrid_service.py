@@ -701,6 +701,111 @@ class PartialSearchTests(unittest.TestCase):
         self.assertEqual(len(hs._SEARCH_CACHE), 0)
 
 
+class RegisterFixRegressionTests(unittest.TestCase):
+    """Regression tests for issue #94 (full-codebase review register, hybrid_service)."""
+
+    def setUp(self):
+        self._saved_ledger = hs.PROMPT_LEDGER
+        self._tmp = tempfile.mkdtemp()
+        hs.PROMPT_LEDGER = os.path.join(self._tmp, "prompts.jsonl")
+
+    def tearDown(self):
+        hs.PROMPT_LEDGER = self._saved_ledger
+
+    # finding 9: one malformed ledger line must not break /prompts
+    def test_store_prompt_survives_malformed_ledger_line(self):
+        with open(hs.PROMPT_LEDGER, "w", encoding="utf-8") as handle:
+            handle.write("{this is not json\n")
+            handle.write(json.dumps({"event_id": "other", "session_id": "s"}) + "\n")
+        result = hs.store_prompt("s1", "hello world", "2026-11-27T00:00:00Z", "/tmp")
+        self.assertEqual(result["status"], "stored")  # not a crash
+
+    # finding 9: retried capture is still a duplicate despite the bad line
+    def test_store_prompt_duplicate_detection_with_malformed_line(self):
+        hs.store_prompt("s1", "hello world", "2026-11-27T00:00:00Z", "/tmp")
+        with open(hs.PROMPT_LEDGER, encoding="utf-8") as handle:
+            lines = handle.readlines()
+        with open(hs.PROMPT_LEDGER, "w", encoding="utf-8") as handle:
+            handle.write("{broken\n")  # poison the ledger
+            handle.writelines(lines)
+        result = hs.store_prompt("s1", "hello world", "2026-11-27T00:00:00Z", "/tmp")
+        self.assertEqual(result["status"], "duplicate")
+
+    # finding 5a: intent service returning ok-but-shapeless degrades
+    def test_intent_for_missing_label_is_dependency_error(self):
+        class FakeTransport:
+            def call(self, name, url, payload, timeout=None):
+                return {"ok": True}  # ok but no label
+        with mock.patch.object(hs, "_call",
+                               side_effect=lambda n, u, p, timeout=None: {"ok": True}):
+            with self.assertRaises(hs.DependencyError) as ctx:
+                hs._intent_for("anything")
+        self.assertIn("missing label", str(ctx.exception))
+
+    # finding 6: knowledge search degrades (not 503) when embedding is down
+    # but the exact leg works
+    def test_knowledge_search_embedding_failure_degrades(self):
+        saved = (hs.EMBEDDING_URL,)
+        dead = f"http://127.0.0.1:{closed_port()}"
+        hs.EMBEDDING_URL = dead
+        try:
+            # exact leg mocked to return one record
+            def fake_exact(query):
+                return ([{"key": "k1", "text": "some text", "source": "knowledge",
+                          "source_type": "knowledge", "kind": "knowledge_chunk",
+                          "origin": None, "url": None, "title": None, "chunk_id": "c",
+                          "chunk_index": 0, "chunk_count": 1, "content_sha256": None,
+                          "score": None}], None)
+            with mock.patch.object(hs, "_knowledge_exact_leg", fake_exact):
+                result = hs.knowledge_search("anything", 5)
+            self.assertTrue(result["ok"])
+            self.assertIn("embedding", result["degraded"])  # degraded, not fatal
+            self.assertEqual(len(result["results"]), 1)
+        finally:
+            hs.EMBEDDING_URL = saved[0]
+
+    # finding 4: non-numeric Content-Length is a 400, not a dropped connection
+    def test_non_numeric_content_length_is_400(self):
+        server = hs.create_server("127.0.0.1", 0)
+        port = serve(server)
+        try:
+            conn = socket.create_connection(("127.0.0.1", port), timeout=5)
+            conn.sendall(b"POST /search HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n")
+            conn.settimeout(5)
+            data = b""
+            while True:
+                try:
+                    chunk = conn.recv(8192)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                data += chunk
+            conn.close()
+            text = data.decode("utf-8", "replace")
+            self.assertIn("400", text.split("\r\n")[0])
+            self.assertIn("Content-Length must be an integer", text)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    # findings 2+3: same transcript in flight is skipped, not double-processed
+    def test_submit_ingest_in_flight_guard(self):
+        real = "/tmp/nonexistent-but-guarded.jsonl"
+        submitted = []
+        with mock.patch.object(hs, "_run_ingest", side_effect=lambda *a: submitted.append(a)):
+            first = hs._submit_ingest(real, True)
+            second = hs._submit_ingest(real, True)  # same path while "running"
+        self.assertTrue(first)
+        self.assertFalse(second)  # in-flight guard refuses
+        # wait for the queued mock to run and clear the guard (never
+        # shutdown the module-global pool from a test)
+        deadline = time.monotonic() + 10
+        while real in hs._INGEST_IN_FLIGHT and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertNotIn(real, hs._INGEST_IN_FLIGHT)
+
+
 if __name__ == "__main__":
     unittest.main()
 
