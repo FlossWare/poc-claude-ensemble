@@ -71,6 +71,16 @@ class LedgerImportError(RuntimeError):
 
 
 
+def _same_instant(a, b) -> bool:
+    """Instant equality with a string-equality fallback: a malformed
+    stored timestamp (tampered file) must not crash the duplicate check
+    (review finding — parse_time raises on non-ISO strings)."""
+    try:
+        return parse_time(a) == parse_time(b)
+    except (ValueError, TypeError):
+        return a == b
+
+
 def parse_time(value: str | None):
     if value is None:
         return None
@@ -159,9 +169,15 @@ class JsonlAppendOnlyLedger:
                     raise RuntimeError(f"session ledger malformed JSON at line {line_number}") from exc
                 if not isinstance(record, dict):
                     raise RuntimeError(f"session ledger record at line {line_number} is not an object")
-                declared_sequence = record.get("sequence", sequence)
-                if isinstance(declared_sequence, bool) or not isinstance(declared_sequence, int) or declared_sequence < 1:
-                    declared_sequence = sequence
+                # FIX (register 4): only ENVELOPED records (entry_sha256
+                # present) may declare their sequence — a legacy record's
+                # "sequence" key is foreign data that created bogus heads
+                # and sequence_gap verification failures
+                declared_sequence = sequence
+                if record.get("entry_sha256"):
+                    declared_sequence = record.get("sequence", sequence)
+                    if isinstance(declared_sequence, bool) or not isinstance(declared_sequence, int) or declared_sequence < 1:
+                        declared_sequence = sequence
                 yield declared_sequence, record, raw
 
     def _head(self):
@@ -170,8 +186,15 @@ class JsonlAppendOnlyLedger:
             if record.get("entry_sha256"):
                 last_hash = record["entry_sha256"]
             else:
-                if "schema_version" in record or "sequence" in record or last_hash is not None:
+                # FIX (register 4): a legacy record carrying "sequence" or
+                # "schema_version" (without entry_sha256) is still legacy
+                # data — only legacy data FOLLOWING hashed data is the
+                # integrity violation. The old check made plain event logs
+                # with a sequence field permanently unreadable.
+                if last_hash is not None:
                     raise RuntimeError(f"ledger envelope is incomplete or legacy data follows hashed data at sequence {sequence}")
+                if record.get("entry_sha256") is None and "schema_version" in record and record.get("schema_version") == 1:
+                    raise RuntimeError(f"hashed ledger record missing entry_sha256 at sequence {sequence}")
                 legacy_count += 1
                 legacy_digest = hashlib.sha256(bytes.fromhex(legacy_digest) + raw.rstrip(b"\r\n")).hexdigest()
         return sequence, last_hash, legacy_digest, legacy_count
@@ -225,10 +248,13 @@ class JsonlAppendOnlyLedger:
             for existing_sequence, existing, existing_raw in self._scan():
                 existing_public = self._public_entry(existing_sequence, existing, existing_raw)
                 if existing_public.get("event_id") == event["event_id"]:
+                    # FIX (register 5): timestamps compare as instants, not
+                    # strings — "…Z" vs "…+00:00" for the same event is an
+                    # idempotent retry, not a content conflict
                     same = (digest(existing_public.get("payload")) == digest(event["payload"]) and
                             existing_public.get("event_type") == event["event_type"] and
                             existing_public.get("source") == event["source"] and
-                            existing_public.get("timestamp") == event["timestamp"] and
+                            _same_instant(existing_public.get("timestamp"), event["timestamp"]) and
                             existing_public.get("correlation_id") == event["correlation_id"])
                     if same:
                         return {"status": "duplicate", "entry": existing}
@@ -281,7 +307,6 @@ class JsonlAppendOnlyLedger:
             if sequence > upper:
                 break
             scanned = sequence
-            scanned_count += 1
             public = self._public_entry(sequence, record, _)
             matches = True
             if filters.get("event_id") and public.get("event_id") != filters["event_id"]: matches = False
@@ -294,8 +319,11 @@ class JsonlAppendOnlyLedger:
             if until and (event_time is None or event_time > until): matches = False
             if matches:
                 entries.append(public)
-            if scanned_count >= limit:
-                break
+                # FIX (register 7): limit counts MATCHES, not scanned rows
+                # — a filtered page must fill to the limit or exhaust the
+                # range, never return empty while claiming has_more
+                if len(entries) >= limit:
+                    break
         return {"entries": entries, "next_after_sequence": scanned, "head_sequence": head,
                 "has_more": scanned < upper}
 
@@ -359,6 +387,14 @@ class JsonlAppendOnlyLedger:
         expected, verified, legacy_seen = from_sequence, 0, legacy_checkpoint
         legacy_digest = hashlib.sha256(b"").hexdigest()
         seen_event_ids = set()
+        # FIX (register 8): when verifying from a checkpoint, seed the
+        # event-id set from the pre-checkpoint prefix so a duplicate
+        # event_id across the boundary is caught by incremental verification
+        if from_sequence > 1:
+            for sequence, record, raw in self._scan():
+                if sequence >= from_sequence:
+                    break
+                seen_event_ids.add(self._public_entry(sequence, record, raw)["event_id"])
         first_failure = None
         try:
             for sequence, record, raw in self._scan():
@@ -382,7 +418,10 @@ class JsonlAppendOnlyLedger:
                     break
                 seen_event_ids.add(public["event_id"])
                 if "entry_sha256" not in record:
-                    if "schema_version" in record or "sequence" in record:
+                    # register 4: a v1 envelope missing its hash is
+                    # invalid; a legacy record carrying "sequence" or
+                    # "schema_version" keys is still legacy data
+                    if record.get("schema_version") == 1:
                         first_failure = (sequence, "invalid_envelope")
                         break
                     legacy_seen = True
@@ -471,8 +510,12 @@ class JsonlAppendOnlyLedger:
                 seen[event_id] = event
                 existing = self._get_unlocked(event_id)
                 if existing:
-                    same = existing.get("payload") == event["payload"] and all(
-                        existing.get(k) == event[k] for k in ("event_type", "source", "timestamp", "correlation_id")
+                    # FIX (register 6): canonical-equal payloads (same
+                    # content, different key order) must be duplicates,
+                    # not conflicts — digest() like append() uses
+                    same = digest(existing.get("payload")) == digest(event["payload"]) and all(
+                        _same_instant(existing.get(k), event[k]) if k == "timestamp" else existing.get(k) == event[k]
+                        for k in ("event_type", "source", "timestamp", "correlation_id")
                     )
                     if same:
                         duplicates.append(event_id)
@@ -516,12 +559,27 @@ class JsonlAppendOnlyLedger:
                         previous = record["entry_sha256"]
                         imported.append(event["event_id"])
                         committed_prefix += 1
-                        retry_after_source_sequence = incoming.get("sequence", retry_after_source_sequence)
+                        seq_in = incoming.get("sequence")
+                        if seq_in is not None:
+                            retry_after_source_sequence = seq_in
             except OSError as exc:
                 raise LedgerImportError(
                     f"JSONL import stopped after committed prefix {committed_prefix}: {exc}",
                     committed_prefix, retry_after_source_sequence,
                 ) from exc
+        # FIX (register 3): retry_after_source_sequence points at the
+        # first NOT-YET-COMMITTED entry's source sequence (or the last
+        # committed one when everything landed). The old len(imported)
+        # indexing mis-pointed after in-batch dedupe; the in-loop
+        # .get("sequence", stale) carried legacy entries' stale value.
+        retry_seq = None
+        if len(imported) == len(prepared):
+            retry_seq = last_source
+        elif len(imported) < len(prepared):
+            # fallback = the LAST COMMITTED source sequence (resume after
+            # it), never the batch's final sequence — review finding: the
+            # old last_source fallback skipped uncommitted entries
+            retry_seq = prepared[len(imported)][0].get("sequence", retry_after_source_sequence)
         return {"imported": imported, "duplicates": duplicates, "head_sequence": head,
-                "committed_prefix": len(imported),
-                "retry_after_source_sequence": last_source if len(imported) == len(prepared) else (prepared[len(imported)][0].get("sequence") if len(imported) < len(prepared) else None)}
+                "committed_prefix": committed_prefix,
+                "retry_after_source_sequence": retry_seq}

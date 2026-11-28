@@ -34,7 +34,12 @@ def test_append_duplicate_conflict_pull_and_verify(tmp_path):
     assert [item["event_id"] for item in page["entries"]] == ["b"]
     filtered = ledger.pull(event_type="absent", limit=1)
     assert filtered["entries"] == []
-    assert filtered["next_after_sequence"] == 1 and filtered["has_more"]
+    # CORRECTED semantics (register finding 7): a filtered pull with no
+    # matches scans the whole range — the cursor advances to head and
+    # has_more is honestly False. The old expectation (cursor frozen at
+    # 1 with has_more true) was the empty-page defect the register
+    # confirmed: a client paginating with filters got empty pages forever.
+    assert filtered["next_after_sequence"] == 2 and not filtered["has_more"]
     assert ledger.get("b")["sequence"] == 2
     assert ledger.verify()["ok"]
 
@@ -43,16 +48,18 @@ def test_filtered_cursor_is_bounded_and_advances(tmp_path):
     ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
     for index in range(9):
         ledger.append(event(str(index), event_type="match" if index == 8 else "skip"))
+    # CORRECTED semantics (register finding 7): limit counts MATCHES, not
+    # scanned rows — a filtered pull scans until it fills the limit or
+    # exhausts the range. The old behavior returned empty pages with
+    # has_more=True, which the register confirmed as a defect.
     page = ledger.pull(limit=3, event_type="match")
-    assert page["entries"] == []
-    assert page["next_after_sequence"] == 3
-    assert page["has_more"]
-    page = ledger.pull(after_sequence=page["next_after_sequence"], limit=3, event_type="match")
-    assert page["entries"] == []
-    assert page["next_after_sequence"] == 6
-    page = ledger.pull(after_sequence=page["next_after_sequence"], limit=3, event_type="match")
     assert [item["event_id"] for item in page["entries"]] == ["8"]
     assert page["next_after_sequence"] == 9
+    assert not page["has_more"]
+    # a filter matching nothing returns an empty FINAL page, not a false has_more
+    page = ledger.pull(limit=3, event_type="nothing")
+    assert page["entries"] == []
+    assert not page["has_more"]
 
 
 def test_legacy_prefix_remains_readable_and_assurance_is_explicit(tmp_path):
@@ -272,3 +279,93 @@ def test_import_rejects_unterminated_legacy_record_without_modifying_file(tmp_pa
     with pytest.raises(RuntimeError, match="unterminated final record"):
         destination.import_batch(source.ledger_id, [incoming])
     assert path.read_bytes() == original
+
+
+# ---------------------------------------------------------------------------
+# Issue #98 regression tests (full-codebase review register)
+# ---------------------------------------------------------------------------
+
+def test_legacy_record_with_sequence_field_is_readable(tmp_path):
+    """Register finding 4: a plain legacy event log carrying a 'sequence'
+    field must not make status()/append() fail permanently."""
+    path = tmp_path / "events.jsonl"
+    legacy = {"event_id": "legacy-1", "kind": "session_end", "producer": "claude-code",
+              "timestamp": "2026-11-06T12:00:00Z", "payload": {"s": 1},
+              "sequence": 42}
+    path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    ledger = JsonlAppendOnlyLedger(path)
+    status = ledger.status()  # must not raise
+    assert status["head_sequence"] >= 1
+    added = ledger.append(event("new"))
+    assert added["status"] == "stored"
+
+
+def test_same_instant_different_encoding_is_duplicate(tmp_path):
+    """Register finding 5: ...Z vs ...+00:00 for the same event is an
+    idempotent retry, not a content conflict."""
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    ledger.append(event("dup"))
+    # same event with +00:00 instead of Z
+    retry = event("dup")
+    retry["timestamp"] = "2026-11-07T12:00:00+00:00"
+    result = ledger.append(retry)
+    assert result["status"] == "duplicate"
+    # a genuinely different timestamp IS still a conflict
+    conflict = event("dup")
+    conflict["timestamp"] = "2026-11-07T13:00:00Z"
+    try:
+        ledger.append(conflict)
+        assert False, "expected conflict for different timestamp"
+    except ValueError:
+        pass
+
+
+def test_import_canonical_equal_payload_is_duplicate(tmp_path):
+    """Register finding 6: key-order-different but canonically equal
+    payloads are duplicates on import retry, not conflicts."""
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    original = event("imp-1", payload={"a": 1, "b": 2})
+    ledger.append(original)
+    # same content, different key order in the payload
+    reordered = event("imp-1", payload={"b": 2, "a": 1})
+    result = ledger.import_batch("source-ledger", [reordered])
+    assert result["duplicates"] == ["imp-1"]
+    assert result["imported"] == []
+
+
+def test_import_retry_after_inbatch_dedupe_points_correctly(tmp_path):
+    """Register finding 3: retry_after_source_sequence must point at the
+    first uncommitted entry even after in-batch duplicates shift indices."""
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    entries = [
+        {**event("s-1"), "sequence": 1, "ledger_id": "src"},
+        {**event("s-2"), "sequence": 2, "ledger_id": "src"},
+        {**event("s-1"), "sequence": 3, "ledger_id": "src"},  # in-batch dup
+        {**event("s-3"), "sequence": 4, "ledger_id": "src"},
+    ]
+    result = ledger.import_batch("src", entries)
+    # the FIRST s-1 is imported; its sequence-3 repeat is the in-batch
+    # duplicate. retry points at the last committed source sequence.
+    assert result["retry_after_source_sequence"] == 4
+    assert set(result["imported"]) == {"s-1", "s-2", "s-3"}
+    assert result["duplicates"] == ["s-1"]
+
+
+def test_verify_from_checkpoint_prefix_seeding(tmp_path):
+    """Register finding 8: incremental verification seeds the event-id set
+    from the pre-checkpoint prefix, so a duplicate event_id spanning the
+    boundary is catchable. Proving the catch itself requires forging an
+    envelope (direct file tampering); this test exercises the seeded
+    incremental path on a clean ledger and confirms the prefix scan runs
+    without breaking normal verification."""
+    ledger = JsonlAppendOnlyLedger(tmp_path / "events.jsonl")
+    ledger.append(event("dup-x"))
+    ledger.append(event("other"))
+    checkpoint = ledger.status()["checkpoint"]
+    assert checkpoint["sequence"] == 2
+    ledger.append(event("third"))
+    # verify ONLY the post-checkpoint entry: the prefix scan (seeding
+    # seen_event_ids with dup-x and other) must run and not break
+    verify = ledger.verify(from_sequence=3, checkpoint=checkpoint)
+    assert verify["ok"]
+    assert verify["verified_count"] == 1
