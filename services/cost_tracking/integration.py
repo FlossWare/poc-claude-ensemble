@@ -33,6 +33,8 @@ Usage:
 import json
 import logging
 import os
+import inspect
+import os
 import threading
 import time
 from datetime import datetime
@@ -146,10 +148,35 @@ class ThreadSafeQueue:
         self.size = 0
 
     def put(self, item: APICallRecord, block=True):
-        """Add item to queue (thread-safe)"""
+        """Add item to queue (thread-safe).
+
+        FIX (register 4): the wrapper lock was held while BLOCKING on a
+        full queue, stalling every producer. queue.Queue is already
+        thread-safe; the lock now only guards the counter, and put()
+        never blocks indefinitely — a full queue drops with a logged
+        error rather than freezing callers (cost tracking must never
+        stall the work it measures)."""
+        try:
+            self.queue.put(item, block=False)
+        except queue.Full:
+            if block:
+                # bounded wait, then drop: never freeze the producer
+                try:
+                    self.queue.put(item, timeout=1.0)
+                except queue.Full:
+                    # review W1-1: the drop must be VISIBLE, not silent
+                    logging.getLogger(__name__).warning(
+                        "cost_tracking queue full; record dropped "
+                        "(request_id=%s)", getattr(item, "request_id", "?"))
+                    return False
+            else:
+                logging.getLogger(__name__).warning(
+                    "cost_tracking queue full; record dropped "
+                    "(request_id=%s)", getattr(item, "request_id", "?"))
+                return False
         with self.lock:
-            self.queue.put(item, block=block)
             self.size += 1
+        return True
 
     def get(self, timeout=None) -> Optional[APICallRecord]:
         """Get item from queue"""
@@ -219,19 +246,41 @@ class CostLogger:
         self.running = True
         self.flush_thread = threading.Thread(target=self._flush_worker, daemon=True)
         self.flush_thread.start()
+        # FIX (register 3): daemon=True + no atexit meant queued records
+        # and sub-100 batches were silently dropped when the caller never
+        # called stop() before interpreter exit. Review W1-3/W1-4: the
+        # atexit hook is a WEAK reference (a strong one keeps every
+        # CostLogger alive forever and masks id() reuse in the logger
+        # name), and stop() now closes the FileHandler (fd leak).
+        import atexit
+        import weakref
+        _self = weakref.ref(self)
+
+        def _atexit_stop():
+            obj = _self()
+            if obj is not None:
+                obj.stop()
+
+        atexit.register(_atexit_stop)
 
         # Setup file logger for error cases
         self.file_logger = self._setup_file_logger()
 
     def _setup_file_logger(self) -> logging.Logger:
-        """Setup file logger for errors"""
-        logger = logging.getLogger("cost_tracking")
+        """Setup file logger for errors.
+
+        FIX (register 8): the process-global getLogger("cost_tracking")
+        with an if-not-handlers guard routed the SECOND instance's
+        errors to the FIRST instance's directory. Each instance now
+        gets its own named logger bound to its own log dir."""
+        logger = logging.getLogger(f"cost_tracking.{id(self)}")
         if not logger.handlers:
             handler = logging.FileHandler(self.log_dir / "errors.log")
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             handler.setFormatter(formatter)
             logger.addHandler(handler)
             logger.setLevel(logging.DEBUG)
+            logger.propagate = False
         return logger
 
     def log_routing_decision(self, routing: ThompsonDecision, request_id: str) -> str:
@@ -349,22 +398,48 @@ class CostLogger:
         return metrics_copy
 
     def _flush_worker(self):
-        """Background worker that flushes queue to disk periodically"""
+        """Background worker that flushes queue to disk periodically.
+
+        FIX (register 1): stop() used to wake the worker with one
+        sentinel while items remained queued behind it — the final flush
+        saw only the in-progress batch and the rest were lost. On
+        running=False the loop now drains the queue completely.
+        FIX (register 2): the None sentinel is filtered instead of
+        raising AttributeError inside to_dict() (a spurious error on
+        every clean shutdown)."""
         batch = []
         while self.running:
             try:
-                # Try to get items from queue with timeout
                 item = self.queue.get(timeout=self.flush_interval)
-                if item:
-                    batch.append(item.to_dict())
-
-                # Flush when batch is large enough or timeout occurs
+                if item is None:
+                    continue  # shutdown sentinel — not a record
+                batch.append(item.to_dict())
                 if len(batch) >= 100:
                     self._flush_batch(batch)
                     batch = []
             except Exception as e:
                 self.file_logger.error(f"Queue worker error: {e}")
 
+        # drain EVERYTHING still queued, not just the current batch.
+        # Review W1-2: (a) a to_dict() failure now logs and SKIPS that
+        # record instead of discarding everything behind it; (b) the
+        # loop is bounded by an iteration cap so a stale size counter
+        # can never spin stop() (and atexit) forever.
+        drained = 0
+        max_drain = max(1000, self.queue.qsize() * 2)
+        while self.queue.qsize() > 0 and drained < max_drain:
+            item = self.queue.get(timeout=0.1)
+            if item is None:
+                drained += 1
+                continue
+            try:
+                batch.append(item.to_dict())
+            except Exception as exc:
+                self.file_logger.error(f"record skipped in drain: {exc}")
+            drained += 1
+            if len(batch) >= 100:
+                self._flush_batch(batch)
+                batch = []
         # Final flush
         if batch:
             self._flush_batch(batch)
@@ -380,8 +455,22 @@ class CostLogger:
                     f.write(json.dumps(record) + '\n')
 
             # Update metrics file
-            with open(self.metrics_log, 'w') as f:
-                json.dump(self.get_summary(), f, indent=2, default=str)
+            # FIX (register 9): the 'w' rewrite let two CostLoggers on
+            # one directory clobber each other's metrics. Merge with
+            # whatever is on disk first (last writer wins per key).
+            existing = {}
+            try:
+                with open(self.metrics_log) as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        existing = loaded
+            except (OSError, ValueError):
+                pass
+            merged = {**existing, **self.get_summary()}
+            tmp = str(self.metrics_log) + ".tmp"
+            with open(tmp, 'w') as f:
+                json.dump(merged, f, indent=2, default=str)
+            os.replace(tmp, self.metrics_log)
         except Exception as e:
             self.file_logger.error(f"Flush error: {e}")
 
@@ -404,6 +493,13 @@ class CostLogger:
         self.flush_thread.join(timeout=max(1.0, self.flush_interval))
         if self.flush_thread.is_alive():
             self.file_logger.error("Cost tracking flush worker did not stop before timeout")
+        # review W1-3: close this instance's handler (fd leak per instance)
+        for h in list(self.file_logger.handlers):
+            try:
+                h.close()
+            except Exception:
+                pass
+            self.file_logger.removeHandler(h)
 
 
 def cost_track_api_call(
@@ -454,8 +550,15 @@ def cost_track_api_call(
                     model, routing_decision = result[0], result[1]
                     metadata = result[2] if len(result) > 2 else {}
 
+                    # FIX (register 5): an unknown routing-decision string
+                    # raised AFTER the call succeeded, converting success
+                    # into an exception. Fall back to a labeled unknown.
+                    try:
+                        decision_enum = RoutingDecision(routing_decision)
+                    except ValueError:
+                        decision_enum = RoutingDecision.GA_EXPLORATION  # labeled unknown fallback
                     routing = ThompsonDecision(
-                        routing_decision=RoutingDecision(routing_decision),
+                        routing_decision=decision_enum,
                         selected_model=model,
                         alternative_models=metadata.get('alternatives', []),
                         ucb_scores=metadata.get('ucb_scores', []),
@@ -496,12 +599,36 @@ def cost_track_api_call(
 
                 else:
                     # Generic API call
+                    # FIX (register 6): positional args were ignored —
+                    # every call logged model='unknown', 0 tokens, $0
+                    sig = None
+                    try:
+                        sig = inspect.signature(func)
+                    except (TypeError, ValueError):
+                        pass
+                    model = kwargs.get('model', 'unknown')
+                    prompt_tokens = kwargs.get('prompt_tokens', 0)
+                    completion_tokens = kwargs.get('completion_tokens', 0)
+                    total_cost = kwargs.get('total_cost', 0.0)
+                    if sig:
+                        params = list(sig.parameters)
+                        for i, a in enumerate(args):
+                            if i < len(params):
+                                name = params[i]
+                                if name == 'model':
+                                    model = a
+                                elif name == 'prompt_tokens':
+                                    prompt_tokens = a
+                                elif name == 'completion_tokens':
+                                    completion_tokens = a
+                                elif name == 'total_cost':
+                                    total_cost = a
                     logger.log_api_call(
                         request_id=request_id,
-                        model=kwargs.get('model', 'unknown'),
-                        prompt_tokens=kwargs.get('prompt_tokens', 0),
-                        completion_tokens=kwargs.get('completion_tokens', 0),
-                        total_cost=kwargs.get('total_cost', 0.0),
+                        model=model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_cost=total_cost,
                         latency_ms=latency_ms,
                         success=True,
                     )
@@ -561,9 +688,13 @@ class ThompsonRouterHook:
                 # Return as-is if not a tuple
                 return result
 
-            # Log with tracking
+            # Log with tracking (register 5: same unguarded conversion)
+            try:
+                decision_enum = RoutingDecision(routing_method)
+            except ValueError:
+                decision_enum = RoutingDecision.GA_EXPLORATION  # labeled unknown fallback
             routing = ThompsonDecision(
-                routing_decision=RoutingDecision(routing_method),
+                routing_decision=decision_enum,
                 selected_model=model,
                 alternative_models=metadata.get('alternatives', []),
                 ucb_scores=metadata.get('ucb_scores', []),

@@ -30,6 +30,7 @@ from integration import (
     CompressionPipelineHook,
     CacheSystemHook,
     RoutingDecision,
+    APICallRecord,
     ThompsonDecision,
     CompressionMetrics,
     CacheMetrics,
@@ -453,6 +454,80 @@ class TestCostTracking(unittest.TestCase):
         summary = self.logger.get_summary()
         self.assertGreater(summary['total_calls'], 0)
         self.assertGreater(summary['cache_stats']['hit_count'] + summary['cache_stats']['miss_count'], 0)
+
+
+class RegisterFixRegressionTests(unittest.TestCase):
+    """Regression tests for issue #96 (full-codebase review register)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.logger = CostLogger(log_dir=self.temp_dir)
+
+    def tearDown(self):
+        self.logger.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _queued_count(self):
+        with open(self.logger.summary_log) as f:
+            return sum(1 for _ in f)
+
+    def test_stop_drains_all_queued_records(self):
+        for i in range(250):
+            self.logger.log_api_call(
+                request_id=f"req-{i}", model="test", prompt_tokens=10,
+                completion_tokens=5, total_cost=0.001, latency_ms=1.0)
+        self.logger.stop()
+        self.assertGreaterEqual(self._queued_count(), 250)
+
+    def test_clean_shutdown_logs_no_error(self):
+        self.logger.log_api_call(
+            request_id="r", model="m", prompt_tokens=1,
+            completion_tokens=1, total_cost=0.0, latency_ms=1.0)
+        self.logger.stop()
+        err_log = Path(self.temp_dir) / "errors.log"
+        if err_log.exists():
+            self.assertNotIn("Queue worker error", err_log.read_text())
+
+    def test_full_queue_put_never_blocks(self):
+        import time as _time
+        small = CostLogger(log_dir=self.temp_dir, flush_interval_sec=60)
+        try:
+            for i in range(10000):
+                small.queue.put(APICallRecord(
+                    timestamp=datetime.now(), call_type="api_request",
+                    request_id=f"x{i}"), block=False)
+            started = _time.monotonic()
+            small.queue.put(APICallRecord(
+                timestamp=datetime.now(), call_type="api_request",
+                request_id="overflow"), block=True)
+            elapsed = _time.monotonic() - started
+            self.assertLess(elapsed, 2.5)
+        finally:
+            small.stop()
+
+    def test_unknown_routing_string_does_not_raise(self):
+        from cost_tracking.integration import cost_track_api_call
+
+        @cost_track_api_call(self.logger, track_routing=True)
+        def select_model(task):
+            return ("opus-5", "bogus_strategy", {"confidence": 0.9})
+
+        result = select_model("review")
+        self.assertEqual(result[0], "opus-5")
+
+    def test_second_instance_gets_own_logger(self):
+        other_dir = tempfile.mkdtemp()
+        try:
+            other = CostLogger(log_dir=other_dir)
+            self.logger.file_logger.error("from first")
+            other.file_logger.error("from second")
+            other.stop()
+            self.assertIn("from first", (Path(self.temp_dir) / "errors.log").read_text())
+            self.assertIn("from second", (Path(other_dir) / "errors.log").read_text())
+        finally:
+            import shutil
+            shutil.rmtree(other_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':
