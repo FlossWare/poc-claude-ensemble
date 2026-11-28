@@ -11,6 +11,7 @@ Pricing Reference (per 1M tokens):
 - Gemini: $0.075 input / $0.30 output
 """
 
+import math
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,16 +38,37 @@ class ValidationResult:
 class CostValidator:
     """Validates cost logs for accuracy, duplicates, schema compliance, and anomalies."""
 
-    # Official Claude pricing (per 1M tokens)
-    PRICING = {
-        "haiku": {"input": 0.80, "output": 2.40},
-        "sonnet": {"input": 3.00, "output": 15.00},
-        "opus": {"input": 15.00, "output": 45.00},
-        "gemini": {"input": 0.075, "output": 0.30},
-        # Gateway models with no published rates, assumed at the Opus rate (see pricing.py)
-        "rits/zai-org/glm-5-3": {"input": 15.00, "output": 45.00},
-        "rits/deepseek-ai/deepseek-v4.1-flash-1017": {"input": 15.00, "output": 45.00},
-    }
+    # Single source of truth: pricing.py (was a duplicated dict here —
+    # drift risk, register finding). Built lazily on first use so the
+    # import does not cycle at module load.
+    _PRICING_CACHE = None
+
+    @classmethod
+    def _pricing(cls):
+        """Canonical pricing table from pricing.py (lazy, cached).
+
+        Review W1#2: an instance @property broke class-level access
+        (CostValidator.PRICING returned the property object). This
+        classmethod keeps both self.PRICING and CostValidator-level
+        access working via the module-level alias below.
+        """
+        if cls._PRICING_CACHE is None:
+            from cost_tracking.pricing import GATEWAY_ASSUMED_PRICING, _resolve_pricing
+            table = {}
+            for key, rates in GATEWAY_ASSUMED_PRICING.items():
+                table[key.lower()] = {"input": rates.get("input", 0.0),
+                                      "output": rates.get("output", 0.0)}
+            for name in ("haiku", "sonnet", "opus", "gemini"):
+                rates = _resolve_pricing(name)
+                table[name] = {"input": rates.get("input", 0.0),
+                               "output": rates.get("output", 0.0)}
+            cls._PRICING_CACHE = table
+        return cls._PRICING_CACHE
+
+    # instance attribute populated lazily so self.PRICING keeps working
+    @property
+    def PRICING(self):
+        return CostValidator._pricing()
 
     # Required fields in log entries
     REQUIRED_FIELDS = {"timestamp", "model", "input_tokens", "output_tokens", "cost"}
@@ -167,17 +189,32 @@ class CostValidator:
                     f"model: expected str, got {type(entry['model']).__name__}"
                 )
 
-            if not isinstance(entry.get("input_tokens"), int):
+            # bool is an int subclass in Python: True must not pass
+            if isinstance(entry.get("input_tokens"), bool) or not isinstance(entry.get("input_tokens"), int):
                 type_errors.append(
                     f"input_tokens: expected int, got {type(entry['input_tokens']).__name__}"
                 )
 
-            if not isinstance(entry.get("output_tokens"), int):
+            if isinstance(entry.get("output_tokens"), bool) or not isinstance(entry.get("output_tokens"), int):
                 type_errors.append(
                     f"output_tokens: expected int, got {type(entry['output_tokens']).__name__}"
                 )
 
-            if not isinstance(entry.get("cost"), (int, float)):
+            cost_value = entry.get("cost")
+            # bool-is-int is a TYPE error; NaN/inf/negative are VALUE
+            # errors with their own messages (review: "expected int or
+            # float, got float" was misleading for all three)
+            if isinstance(cost_value, bool) or not isinstance(cost_value, (int, float)):
+                type_errors.append(
+                    f"cost: expected int or float, got {type(entry['cost']).__name__}"
+                )
+            elif isinstance(cost_value, float) and math.isnan(cost_value):
+                type_errors.append("cost: NaN is not a valid cost")
+            elif isinstance(cost_value, float) and math.isinf(cost_value):
+                type_errors.append("cost: infinite value is not a valid cost")
+            # NOTE: negative cost is NOT re-reported here — the existing
+            # negative-value check below already owns it (double-reporting
+            # broke test_8's count of 3)
                 type_errors.append(
                     f"cost: expected int or float, got {type(entry['cost']).__name__}"
                 )

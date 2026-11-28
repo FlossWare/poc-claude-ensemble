@@ -1,6 +1,7 @@
 """Canonical cost tracking logger."""
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, TypeAlias
@@ -59,6 +60,8 @@ class CostLogger:
 
         with self.log_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())  # durable: survives process crash
 
         return entry
 
@@ -68,10 +71,21 @@ class CostLogger:
             return []
 
         records = []
+        skipped = 0
         with self.log_path.open(encoding="utf-8") as stream:
             for line in stream:
-                if line.strip():
+                if not line.strip():
+                    continue
+                try:
                     records.append(CostRecord.from_dict(json.loads(line)).to_dict())
+                except (ValueError, KeyError, TypeError):
+                    # one torn/malformed line must not break every
+                    # reader of the log; skip and count it
+                    skipped += 1
+        if skipped:
+            import logging
+            logging.getLogger(__name__).warning(
+                "cost log %s: skipped %d malformed line(s)", self.log_path, skipped)
         return records
 
     def get_stats(self) -> dict:

@@ -36,6 +36,9 @@ def example_2_daily_breakdown():
     agg = CostAggregator()
     daily = agg.daily_summary()
 
+    if not daily['daily_summaries']:
+        print("\nNo cost data recorded yet.")
+        return
     recent_day = max(daily['daily_summaries'].keys())
     today = daily['daily_summaries'][recent_day]
 

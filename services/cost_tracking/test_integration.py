@@ -530,5 +530,58 @@ class RegisterFixRegressionTests(unittest.TestCase):
             shutil.rmtree(other_dir, ignore_errors=True)
 
 
+class Issue97RegressionTests(unittest.TestCase):
+    """Regression tests for issue #97 (cost_tracking mixed cluster)."""
+
+    def _tmp_log(self, entries):
+        import tempfile
+        from pathlib import Path
+        d = tempfile.mkdtemp()
+        p = Path(d) / "costs.jsonl"
+        p.write_text(json.dumps(entries))
+        return p
+
+    def test_validator_rejects_bool_tokens(self):
+        from cost_tracking.validator import CostValidator
+        v = CostValidator()
+        p = self._tmp_log([{
+            "timestamp": "2026-11-27T00:00:00Z", "model": "haiku",
+            "input_tokens": True, "output_tokens": 5, "cost": 0.001}])
+        results, valid = v.validate_log_file(str(p))
+        self.assertFalse(valid)
+        self.assertTrue(any("input_tokens" in str(r.message) for r in results))
+
+    def test_validator_rejects_nan_and_negative_cost(self):
+        from cost_tracking.validator import CostValidator
+        v = CostValidator()
+        p = self._tmp_log([{
+            "timestamp": "2026-11-27T00:00:00Z", "model": "haiku",
+            "input_tokens": 10, "output_tokens": 5, "cost": float("nan")}])
+        results, valid = v.validate_log_file(str(p))
+        self.assertFalse(valid)
+        p = self._tmp_log([{
+            "timestamp": "2026-11-27T00:00:00Z", "model": "haiku",
+            "input_tokens": 10, "output_tokens": 5, "cost": -0.5}])
+        results, valid = v.validate_log_file(str(p))
+        self.assertFalse(valid)
+
+    def test_read_logs_survives_torn_line(self):
+        import tempfile
+        from pathlib import Path
+        from cost_tracking.logger import CostLogger
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "costs.jsonl"
+            good = {
+                "timestamp": "2026-11-27T00:00:00Z", "model": "haiku",
+                "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.001,
+                "total_tokens": 15, "task_name": "t", "source": "api",
+                "provider": "unknown", "metadata": None}
+            log.write_text(
+                json.dumps(good) + "\n{torn line\n" + json.dumps(good) + "\n")
+            reader = CostLogger(log_path=log)
+            records = reader.read_logs()
+            self.assertEqual(len(records), 2)  # torn line skipped, not fatal
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
